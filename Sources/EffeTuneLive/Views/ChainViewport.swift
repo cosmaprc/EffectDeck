@@ -140,9 +140,15 @@ final class ETRowGeometry {
 /// 描き直され、上の2枚が71ptずつ伸びて、読んでいたカードが142pt下へずれたまま戻らなかった。
 /// AUの画面が遅れて大きさを決めるのも、上の帯（No audio yetなど）が出入りするのも同じ形。
 ///
-/// 読んでいるカードの「中身の中での位置」を覚える。画面の中の位置に送った量を足したもので、
-/// 送るだけなら変わらない。送っていないのに変わったら上で何かの高さが変わったので、
-/// 同じ量だけ送り直して、画面の中の位置を元に戻す（PipelineView.keepReading）。
+/// 行ごとに「中身の中での上端」を覚える（PipelineView.contentSpaceで測る）。送るだけなら変わらず、
+/// 上で何かの高さが変わったときだけ変わる。読んでいるカードのそれが変わったら、
+/// 同じ量だけ送り直して、画面の中の位置を元に戻す（PipelineView.contentMoved）。
+///
+/// **画面の中の位置（右の鎖の座標）と送った量を足して作らない。**覚えてある矩形は前の回に
+/// 測ったもので、送った量はいまの値。慣性で流れている最中に左の一覧で押すと、止めてから
+/// 飛ぶまでの間に「止まった」が届き、読むカードを選び直す（followReading）。そこで飛んだ後の
+/// 送った量と飛ぶ前の矩形を足すと、飛んだ距離ぶんずれた位置を覚え、次に測れたときに
+/// 飛ぶ前へ送り戻してしまう。中身の中での上端なら、送った量を混ぜないので起きない。
 ///
 /// 送り直さないとき（覚え直すだけ）:
 ///   - 人が触っている、または慣性で流れている。送りを取り合わない
@@ -150,42 +156,44 @@ final class ETRowGeometry {
 ///   - 鎖の並びが変わった。足す・消す・並べ替えには、それぞれの見せ方がある（revealNewなど）
 ///   - 並べ方の切り替えや幅の変化で、覚えたカードを上端へ戻している最中（restoreAnchor）
 ///
-/// **観測しない。**送るたびに書くので、@Stateに置くとbodyが走り直す。
+/// **観測しない。**測れるたびに書くので、@Stateに置くとbodyが走り直す。
 @MainActor
 final class ETReadingKeeper {
     /// 読んでいるカード。
     private(set) var id: UUID?
-    /// そのカードの中身の中での位置。nilならまだ測っていない。
-    private var position: CGFloat?
-    /// 覚えたときの鎖の並び。
+    /// 行ごとの中身の中での上端。
+    private var tops: [UUID: CGFloat] = [:]
+    /// 読むカードを決めたとき、またはそのカードが最後に動いたときの鎖の並び。
     private var order: [UUID] = []
 
-    /// 読むカードを決め直す。
-    ///   - top: そのカードのいまの上端（右の鎖の座標）。測れていなければnil
-    ///   - offset: いまの送った量（UIScrollViewのcontentOffset.y）
+    /// 読むカードを決め直す。位置は覚えてある上端をそのまま使う。
     ///
-    /// **位置はここで取る。**次に測れたときに取ると、止まったまま上が伸びた回の
+    /// **位置を後で取り直さない。**次に動いたときに取ると、止まったまま上が伸びた回の
     /// 位置を覚えることになり、最初のずれを直せない（電源を押したときがまさにそれ）。
-    func follow(_ id: UUID?, top: CGFloat?, offset: CGFloat, order: [UUID]) {
+    func follow(_ id: UUID?, order: [UUID]) {
         self.id = id
-        position = top.map { $0 + offset }
         self.order = order
     }
 
-    /// 読んでいるカードが測れた。送り直す量を返す（0なら送らない）。
-    ///   - top: 画面の中での上端（右の鎖の座標）
-    ///   - offset: その回の送った量
-    ///   - order: いまの鎖の並び
-    ///   - keeps: 送り直してよいか
-    func measured(top: CGFloat, offset: CGFloat, order now: [UUID], keeps: Bool) -> CGFloat {
-        let current = top + offset
-        defer {
-            position = current
-            order = now
-        }
-        guard let position, keeps, now == order else { return 0 }
-        let moved = current - position
+    /// 行の中身の中での上端が変わった。読んでいるカードなら、送り直す量を返す（0なら送らない）。
+    ///   - order: いまの鎖の並び。読んでいるカードのときだけ読む
+    ///   - keeps: 送り直してよいか。読んでいるカードのときだけ読む
+    func moved(_ row: UUID, to top: CGFloat,
+               order now: @autoclosure () -> [UUID], keeps: @autoclosure () -> Bool) -> CGFloat {
+        let old = tops.updateValue(top, forKey: row)
+        guard row == id else { return 0 }
+        let current = now()
+        defer { order = current }
+        guard let old, current == order, keeps() else { return 0 }
+        let moved = top - old
         return abs(moved) < 0.5 ? 0 : moved
+    }
+
+    /// 並べ方を切り替えた。前の並べ方の位置は捨てる。
+    func reset() {
+        id = nil
+        tops = [:]
+        order = []
     }
 }
 

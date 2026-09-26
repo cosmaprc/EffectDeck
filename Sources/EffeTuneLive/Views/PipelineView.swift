@@ -190,6 +190,8 @@ struct PipelineView: View {
 
     /// 鎖の中での座標。行の位置も指の位置もこれで測る。
     private static let chainSpace = "chain"
+    /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
+    private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
     private static let swipeWidth: CGFloat = 78
     /// 行と赤い面のあいだ。カードどうしの間と同じだけ空ける。
@@ -514,7 +516,7 @@ struct PipelineView: View {
         viewport.arm(split: showing)
         viewport.forget(split: showing)
         // 覚えた位置は前の並べ方のもの。新しい並べ方では選び直す。
-        keeper.follow(nil, top: nil, offset: 0, order: [])
+        keeper.reset()
         geometry.reset()
         rowsHeight = 0
         layoutSplit = split
@@ -541,8 +543,7 @@ struct PipelineView: View {
         }
     }
 
-    /// 行が測れた。並べ替えの判定と最後の帯の高さ、足したカードの確かめ、
-    /// 2列で読んでいる位置を保つのに使う。
+    /// 行が測れた。並べ替えの判定と最後の帯の高さ、足したカードの確かめに使う。
     private func measured(_ id: UUID, _ rect: CGRect) {
         geometry.record(id, rect)
         let height = geometry.contentHeight
@@ -551,23 +552,27 @@ struct PipelineView: View {
             geometry.pendingReveal = nil
             reveal(id, rect)
         }
-        if id == keeper.id { keepReading(rect) }
     }
 
-    /// 読んでいるカードが、送っていないのに動いた。動いたぶん送り直す（ETReadingKeeper）。
+    /// 行の中身の中での上端が変わった（送っただけでは来ない）。**2列のときだけ。**
+    /// 読んでいるカードなら、動いたぶん送り直す（ETReadingKeeper）。
     ///
     /// **測れたその場で直す。**次の回へ回すと、その間はずれた位置のまま描かれうる。
-    private func keepReading(_ rect: CGRect) {
-        guard usesSplit, let scroll = brake.scrollView else { return }
-        let top = -scroll.adjustedContentInset.top
-        let offset = scroll.contentOffset.y
-        let touched = scroll.isTracking || scroll.isDragging || scroll.isDecelerating
-        let keeps = !touched && viewport.anchor == nil && offset > top + 0.5
-        let moved = keeper.measured(top: rect.minY, offset: offset,
-                                    order: dsp.chain.map(\.id), keeps: keeps)
-        guard moved != 0 else { return }
+    private func contentMoved(_ id: UUID, _ top: CGFloat) {
+        guard usesSplit else { return }
+        let scroll = brake.scrollView
+        let least = -(scroll?.adjustedContentInset.top ?? 0)
+        let offset = scroll?.contentOffset.y ?? 0
+        /// 送り直してよいか。読んでいるカードのときだけ聞かれる。
+        func keeps() -> Bool {
+            guard let scroll else { return false }
+            let touched = scroll.isTracking || scroll.isDragging || scroll.isDecelerating
+            return !touched && viewport.anchor == nil && offset > least + 0.5
+        }
+        let moved = keeper.moved(id, to: top, order: dsp.chain.map(\.id), keeps: keeps())
+        guard moved != 0, let scroll else { return }
         // 上が縮んだときは一番上より上へは送らない。
-        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(top, offset + moved)),
+        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(least, offset + moved)),
                                 animated: false)
     }
 
@@ -577,11 +582,14 @@ struct PipelineView: View {
     /// （無ければ、画面の上端にかかっているカード）。
     /// 上端にかかっているだけのカードは、見えていない上の部分が伸びても読む位置は動かないので、
     /// 上端が見えているカードのほうを選ぶ。
+    ///
+    /// 選ぶのに使う矩形は前の回のものでよい。位置は中身の中での上端（ETReadingKeeper）で持つので、
+    /// 選び違えても送りを取り違えることはない。
     private func followReading(_ id: UUID? = nil) {
-        guard usesSplit, let scroll = brake.scrollView else { return }
+        guard usesSplit else { return }
         let order = dsp.chain.map(\.id)
         var chosen = id
-        if chosen == nil {
+        if chosen == nil, let scroll = brake.scrollView {
             let visibleTop = scroll.adjustedContentInset.top
             let present = Set(order)
             var below: (id: UUID, y: CGFloat)?
@@ -597,8 +605,7 @@ struct PipelineView: View {
             }
             chosen = below?.id ?? above?.id
         }
-        keeper.follow(chosen, top: chosen.flatMap { geometry[$0]?.minY },
-                      offset: scroll.contentOffset.y, order: order)
+        keeper.follow(chosen, order: order)
     }
 
     /// 足したカードが画面の外なら、そこへ飛ぶ。
@@ -789,6 +796,11 @@ struct PipelineView: View {
                         .onGeometryChange(for: CGRect.self) {
                             $0.frame(in: .named(Self.chainSpace))
                         } action: { measured(row.node.id, $0) }
+                        // 中身の中での上端。送っても変わらず、上の行の高さが変わったときだけ来る。
+                        // 使うのは2列の右だけ。
+                        .onGeometryChange(for: CGFloat.self) {
+                            $0.frame(in: .named(Self.contentSpace)).minY
+                        } action: { if split { contentMoved(row.node.id, $0) } }
                                 .opacity(dragging == row.node.id ? 0 : 1)
                         // 掴みは UIKit の長押しで受ける（DragHandle.swift の頭）。
                         // 面は素通しなので、カードのタップも下へ届く。
@@ -840,6 +852,7 @@ struct PipelineView: View {
                     }
             }
             }
+            .coordinateSpace(name: Self.contentSpace)
             .modifier(ETDetailColumn(split: split, brake: brake))
         }
         // 触れたら戻す先の覚えを外す。そこから先は人が読む位置を決める。
