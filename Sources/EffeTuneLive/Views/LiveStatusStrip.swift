@@ -53,6 +53,11 @@
 //  上流が右下に出している 2 つ（遅れと CPU）がそれに当たる。
 //
 //  幅は 32+4+38=74pt で、直す前と同じ。枠に入ることは実機で確かめてある形。
+//
+//  **数字と丸めは Settings と同じもの（ETStripReading、StatusReadings.swift）。**
+//  以前はここで I/O と Fx を別々に丸め、CPU を %.0f で出していたので、
+//  Settings の Total delay・CPU と 1 ms / 1 % 食い違うことがあった。
+//  I/O＋Fx は Settings の Total delay と必ず同じになる。ここには見た目だけを置く。
 
 import SwiftUI
 
@@ -127,47 +132,55 @@ struct LiveStatusStrip: View {
 
     var body: some View {
         if io.running {
-            VStack(alignment: .leading, spacing: 1) {
-                diag
-                switch face {
-                case .delay:
-                    // リンク（2048 標本の固定）＋ iOS のブロック
-                    // ＋ オーバーサンプリングの FIR。設定で決まり、鎖では動かない。
-                    // **上に置く。** 設定で動かせるのはこちらなので先に読ませる。
-                    row("I/O", ioDelay, tint: AnyShapeStyle(.secondary))
-                    // **鎖が足す遅れ。** et_pipeline_latency の値で、
-                    // FIR を持つエフェクト（Phase Select EQ など）を入れると増える。
-                    // ここを出していなかったので、そういうものを入れても
-                    // 数字が動かなかった。
-                    row("Fx", fxDelay, tint: AnyShapeStyle(.secondary))
-                case .load:
-                    // 上流の CPU と同じ量（経過時間 ÷ 音の長さ、
-                    // audio-processor.js:4506）で、語も上流に合わせてある。
-                    row("CPU", loadText, tint: loadTint)
-                    // 効果を回しているレート（入口 × オーバーサンプリング倍率）。
-                    // 入口が 48 kHz から外れているときだけ色を付ける。
-                    row("Rate", dspRate, tint: rateTint)
-                }
-            }
-            // **押せる。** 帯そのものが切り替えの口。
-            // 44pt を確保するため上下に余白を足す（見た目は変わらない）。
-            .padding(.vertical, 9)
-            .contentShape(.rect)
-            .onTapGesture { faceRaw = face.next.rawValue }
-            .padding(.vertical, -9)
-            .font(.system(size: 10, design: .monospaced))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            // 桁が 1 つ増えたとき（通話でハードウェアのレートが落ちると
-            // 遅れが 3 桁になる）に、数字を「…」で落とさないための保険。
-            // 切るより縮めるほうがまだ読める。普段は等倍のまま。
-            .minimumScaleFactor(0.8)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(voice)
-            .accessibilityHint("Shows " + (face == .delay ? "CPU and sample rate" : "the delay"))
-            .accessibilityAddTraits(.isButton)
+            // **読むのは 1 回。**同じ瞬間の値から 4 つの数字と読み上げを作る。
+            strip(ETStripReading(ETAudioSnapshot(io: io, dsp: .shared)))
         }
+    }
+
+    private func strip(_ r: ETStripReading) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            diag
+            switch face {
+            case .delay:
+                // リンク（2048 標本の固定）＋ iOS のブロック
+                // ＋ オーバーサンプリングの FIR。設定で決まり、鎖では動かない。
+                // **上に置く。** 設定で動かせるのはこちらなので先に読ませる。
+                row("I/O", r.ioText, tint: AnyShapeStyle(.secondary))
+                // **鎖が足す遅れ。** et_pipeline_latency の値で、
+                // FIR を持つエフェクト（Phase Select EQ など）を入れると増える。
+                // ここを出していなかったので、そういうものを入れても
+                // 数字が動かなかった。I/O と足すと Settings の Total delay。
+                row("Fx", r.fxText, tint: AnyShapeStyle(.secondary))
+            case .load:
+                // 上流の CPU と同じ量（経過時間 ÷ 音の長さ、
+                // audio-processor.js:4506）で、語も上流に合わせてある。
+                row("CPU", r.loadText, tint: loadTint(r.loadLevel))
+                // 効果を回しているレート（入口 × オーバーサンプリング倍率）。
+                // 入口が 48 kHz から外れているときだけ色を付ける。
+                // 速さと音程がずれている状態なので、黙って出すと気づけない。
+                row("Rate", r.rate,
+                    tint: r.rateIsOff ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            }
+        }
+        // **押せる。** 帯そのものが切り替えの口。
+        // 44pt を確保するため上下に余白を足す（見た目は変わらない）。
+        .padding(.vertical, 9)
+        .contentShape(.rect)
+        .onTapGesture { faceRaw = face.next.rawValue }
+        .padding(.vertical, -9)
+        .font(.system(size: 10, design: .monospaced))
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        // 桁が 1 つ増えたとき（通話でハードウェアのレートが落ちると
+        // 遅れが 3 桁になる）に、数字を「…」で落とさないための保険。
+        // 切るより縮めるほうがまだ読める。普段は等倍のまま。
+        .minimumScaleFactor(0.8)
+        .accessibilityElement(children: .combine)
+        // 読み上げでは略さない。"%" や "ms" をそのまま読ませると意味が通らない。
+        .accessibilityLabel(face == .delay ? r.delayVoice : r.loadVoice)
+        .accessibilityHint("Shows " + (face == .delay ? "CPU and sample rate" : "the delay"))
+        .accessibilityAddTraits(.isButton)
     }
 
     /// 語を左、値を右。上下の行で列が揃うように、どちらも幅を固定する。
@@ -182,74 +195,16 @@ struct LiveStatusStrip: View {
         .frame(width: Cell.total, alignment: .leading)
     }
 
-    // MARK: - レート
+    // MARK: - CPU の色
 
-    /// 効果を回しているレート。入口 × 倍率。
-    private var dspRate: String {
-        String(format: "%.0f kHz", io.processingRate / 1000)
-    }
-
-    /// 端末が 48 kHz を握れていないときだけ色を付ける。
-    /// 速さと音程がずれている状態なので、黙って出すと気づけない。
-    private var rateTint: AnyShapeStyle {
-        io.sampleRate > 0 && abs(io.sampleRate - 48000) >= 1
-            ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)
-    }
-
-    // MARK: - 遅れ
-    /// 鎖が足す遅れ。処理レートの標本で数えられているので、
-    /// 秒に直すときは processingRate で割る（sampleRate ではない）。
-    private var fxDelayMs: Int {
-        let hz = io.processingRate > 0 ? io.processingRate : rate
-        return Int((Double(io.pipelineLatency) / hz * 1000).rounded())
-    }
-
-    private var fxDelay: String { "\(fxDelayMs) ms" }
-
-    /// 鎖の外。リンク・iOS のブロック・オーバーサンプリングの変換。
-    private var ioDelayMs: Int {
-        let frames = Double(ETLinkReceiver.targetFrames)
-            + Double(io.blockFrames)
-            + Double(io.resamplerLatency)
-        return Int((frames / rate * 1000).rounded())
-    }
-
-    private var ioDelay: String { "\(ioDelayMs) ms" }
-
-    /// sampleRate は start() で `session.sampleRate > 0 ? ... : 48000` としか
-    /// 書かれないので 0 にも nan にもならないが、ここでも 0 を避けておく。
-    /// frames 側は Int 由来なので、"nan" や "inf" が出る経路は無い。
-    private var rate: Double { io.sampleRate > 0 ? io.sampleRate : 48000 }
-
-    // MARK: - CPU
-
-    private var loadPercent: Double { io.load * 100 }
-
-    /// 休んでいるときは数字を出さない（0% と紛らわしいため）。
-    private var loadText: String {
-        io.resting ? "idle" : String(format: "%.0f%%", loadPercent)
-    }
-
-    /// 閾値は上流の data-level と同じ（ui-manager.js:419）。
-    /// 休んでいるあいだは、たまたま 75 を跨いだ古い値で色を付けない。
-    private var loadTint: AnyShapeStyle {
-        if io.resting { return AnyShapeStyle(.secondary) }
-        if loadPercent >= 100 { return AnyShapeStyle(.red) }
-        if loadPercent >= 75 { return AnyShapeStyle(.orange) }
-        return AnyShapeStyle(.secondary)
-    }
-
-    // MARK: - 読み上げ
-
-    /// 読み上げでは略さない。"%" や "ms" をそのまま読ませると意味が通らない。
-    private var voice: String {
-        switch face {
-        case .delay:
-            return "Effects add \(fxDelayMs) milliseconds, "
-                 + "audio path adds \(ioDelayMs) milliseconds"
-        case .load:
-            let cpu = io.resting ? "idle" : String(format: "%.0f percent", loadPercent)
-            return "CPU \(cpu), running at \(dspRate)"
+    /// 閾値は ETLoadReading（上流の data-level と同じ、ui-manager.js:419）。
+    /// 休んでいるあいだは nil で、たまたま 75 を跨いだ古い値で色を付けない。
+    /// Settings の CPU 行は normal を .primary にしている（あちらは List の中）。
+    private func loadTint(_ level: ETLoadReading.Level?) -> AnyShapeStyle {
+        switch level {
+        case .over?: return AnyShapeStyle(.red)
+        case .high?: return AnyShapeStyle(.orange)
+        case .normal?, nil: return AnyShapeStyle(.secondary)
         }
     }
 }
