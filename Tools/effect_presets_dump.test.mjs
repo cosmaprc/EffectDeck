@@ -10,13 +10,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
 import { dumpPlugins, groupsOf, readPluginList } from './effect_presets_dump.mjs';
 
+const made = [];
 function tempDir() {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'ettools-node-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ettools-node-'));
+    made.push(dir);
+    return dir;
 }
+after(() => {
+    for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 test('readPluginList reads only the [plugins] section', () => {
     const dir = tempDir();
@@ -65,12 +71,13 @@ class TubeSimulatorPlugin extends PluginBase {
     assert.equal(Object.getPrototypeOf(groups[0].presets[0].params), Object.prototype);
 });
 
-test('groupsOf returns [] when the class does not return an array', () => {
+test('groupsOf throws when the class does not return an array', () => {
+    // 黙って [] にすると、そのプラグインのプリセットが !! 無しで消える。
     const source = 'class P extends PluginBase { static getSystemPresetGroups() { return null; } }';
-    assert.deepEqual(groupsOf(source, 'P', 'p.js'), []);
+    assert.throws(() => groupsOf(source, 'P', 'p.js'), /配列でない/);
 });
 
-test('dumpPlugins reports a plugin that throws and keeps the others', () => {
+test('dumpPlugins reports a plugin that throws or is missing and keeps the others', () => {
     const dir = tempDir();
     fs.mkdirSync(path.join(dir, 'dynamics'));
     fs.writeFileSync(path.join(dir, 'plugins.txt'),
@@ -89,6 +96,18 @@ test('dumpPlugins reports a plugin that throws and keeps the others', () => {
         name: 'Power Amp Sag',
         groups: [{ label: '', presets: [{ id: 'soft', label: 'Soft', params: { sg: 1 } }] }],
     }]);
-    assert.equal(errors.length, 1);
+    assert.equal(errors.length, 2, errors.join('\n'));
     assert.match(errors[0], /^!! dynamics\/bad .*boom/);
+    assert.match(errors[1], /^!! dynamics\/missing\.js が無い/);
+});
+
+test('dumpPlugins reports a method that returns something other than an array', () => {
+    const dir = tempDir();
+    fs.writeFileSync(path.join(dir, 'plugins.txt'), '[plugins]\nnull: Null | X | NullPlugin\n');
+    fs.writeFileSync(path.join(dir, 'null.js'),
+        'class NullPlugin extends PluginBase { static getSystemPresetGroups() { return undefined; } }');
+    const errors = [];
+    assert.deepEqual(dumpPlugins(dir, message => errors.push(message)), []);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /^!! null .*配列でない/);
 });

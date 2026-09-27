@@ -12,7 +12,7 @@
               分類ごとの .md と index.md が揃う・index.md のリンクが生きている）
   versions    UpstreamVersion.swift の版 = README のバッジ = CHAIN.md の chain/v*・dsp-v*・例の版、
               chain/v<版>/ が在る、CHAIN.md の例の鎖が語彙どおり
-  vendor      （--version-guard）Vendor/effetune の固定した版（HEAD の gitlink）の dsp-v* タグ = 上の版
+  vendor      （--version-guard）Vendor/effetune の固定した版（index の gitlink、無ければ HEAD の）の dsp-v* タグ = 上の版
   base        （--base）前の版にあった chain/v*/ が消えていない、dspParams が変わっていない
   store       店に出す文面（What's New・審査メモ・ベータの文面）が 4000 字以内（改行は LF で1字）
   urls        Swift のコードにある URL が site/src/worker.js の返す道に当たる。nemut.ai の別の宛先
@@ -205,13 +205,25 @@ def check_chain_example(repo, chain_md, up):
 
 
 def check_vendor(repo, args):
-    """固定した版（HEAD の gitlink）の dsp-v* タグ = UpstreamVersion。"""
+    """固定した版（index の gitlink、無ければ HEAD の）の dsp-v* タグ = UpstreamVersion。
+
+    index を先に読むのは gen_catalog.check_vendor_pin と同じ理由。上流へ追従するときは Vendor を
+    進めて git add Vendor/effetune してから setup.sh を回す（UpstreamVersion が新しい版になる）。
+    コミットする前に HEAD の gitlink と比べると、古い版と食い違って落ちる。
+    """
     up = upstream_version(repo)
-    r = repo.git("ls-tree", "HEAD", "Vendor/effetune")
-    m = re.search(r"\b160000 commit ([0-9a-f]{40})\b", r.stdout if r and r.returncode == 0 else "")
-    if not m:
-        return ["HEAD に Vendor/effetune の gitlink が無い"]
-    pin = m.group(1)
+    pin = None
+    r = repo.git("ls-files", "--stage", "--", "Vendor/effetune")
+    m = re.search(r"^160000 ([0-9a-f]{40}) 0\t", r.stdout if r and r.returncode == 0 else "", re.M)
+    if m:
+        pin = m.group(1)
+    else:
+        r = repo.git("ls-tree", "HEAD", "Vendor/effetune")
+        m = re.search(r"\b160000 commit ([0-9a-f]{40})\b", r.stdout if r and r.returncode == 0 else "")
+        if m:
+            pin = m.group(1)
+    if not pin:
+        return ["index にも HEAD にも Vendor/effetune の gitlink が無い"]
     vendor = repo.root / "Vendor" / "effetune"
     shallow = repo.git("rev-parse", "--is-shallow-repository", cwd=vendor)
     if not shallow or shallow.returncode != 0:

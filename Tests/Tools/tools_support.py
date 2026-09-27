@@ -12,6 +12,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -93,6 +94,51 @@ def have_node():
     return shutil.which("node") is not None
 
 
+def vendor_at_pin(name, *paths):
+    """Vendor/<name> がこのリポジトリの固定した版（index か HEAD の gitlink）で、paths に手が無いか。
+
+    作業ツリーの Vendor には別の版の checkout や setup.sh のパッチが混ざることがある
+    （この木の Vendor/effetune は固定が 0.11.0 なのに 0.10.0 のままだった）。そのまま比べると、
+    追跡している生成物のせいにして落ちる。固定した版でなければ比べずに飛ばす。
+    """
+    if not have_git():
+        return False
+    vendor = ROOT / "Vendor" / name
+
+    def out(cwd, *args):
+        try:
+            r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    if not vendor.is_dir():
+        return False
+    # 取っていない submodule（空のフォルダ）では git が外のリポジトリを答えるので、木の根を確かめる。
+    top = out(vendor, "rev-parse", "--show-toplevel")
+    try:
+        if not top or not os.path.samefile(top, str(vendor)):
+            return False
+    except OSError:
+        return False
+    head = out(vendor, "rev-parse", "HEAD")
+    pins = set()
+    for args in (("ls-files", "--stage", "--", "Vendor/" + name), ("ls-tree", "HEAD", "Vendor/" + name)):
+        m = re.search(r"\b([0-9a-f]{40})\b", out(ROOT, *args) or "")
+        if m:
+            pins.add(m.group(1))
+    if not head or head not in pins:
+        return False
+    if paths:
+        # Windows の checkout（CRLF）を WSL の git で見ると、改行だけの違いを手が入ったと取ることがある
+        # （index の stat が古いとき）。改行は揃えて比べる。
+        dirty = out(vendor, "-c", "core.autocrlf=input", "status", "--porcelain", "--", *paths)
+        if dirty is None or dirty:
+            return False
+    return True
+
+
 @contextlib.contextmanager
 def env_patch(**values):
     """os.environ を一時的に書き換える。None は消す。"""
@@ -149,5 +195,5 @@ def swift_raw_text(hashes, body):
 
 
 __all__ = ["ROOT", "TOOLS", "load_tool", "TempDir", "write", "hermetic_git_env", "git",
-           "have_git", "have_node", "env_patch", "quiet", "run_main", "swift_raw_text", "unittest",
+           "have_git", "have_node", "vendor_at_pin", "env_patch", "quiet", "run_main", "swift_raw_text", "unittest",
            "sys"]

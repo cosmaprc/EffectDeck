@@ -425,6 +425,25 @@ class GitCheckTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("浅い clone", out)
 
+    def test_version_guard_reads_staged_gitlink(self):
+        # 上流へ追従している途中（Vendor を進めて git add Vendor/effetune し、setup.sh が
+        # UpstreamVersion を書き換えた。まだコミットしていない）。gen_catalog.check_vendor_pin と
+        # 同じく index の gitlink を固定として読む。HEAD の gitlink を読むと 0.11.0 と食い違って落ちる。
+        with TempDir() as tmp:
+            env, sup = self.make(tmp)
+            upstream = tmp / "upstream"
+            write(upstream / "a", "3\n")
+            git(upstream, "commit", "-q", "-am", "three", env=env)
+            git(upstream, "tag", "dsp-v0.12.0", env=env)
+            new = git(upstream, "rev-parse", "HEAD", env=env)
+            git(sup / "Vendor/effetune", "fetch", "-q", "--tags", "origin", env=env)
+            git(sup, "update-index", "--cacheinfo", "160000,%s,Vendor/effetune" % new, env=env)
+            write(sup / "Sources/EffeTuneLive/Generated/UpstreamVersion.swift",
+                  'let ETUpstreamVersion = "0.12.0"\n')
+            write(sup / "chain/v0.12.0/effects.json", json.dumps({"dsp": "0.12.0"}))
+            code, out = self.run_check(env, sup, "--version-guard", "--only", "vendor")
+        self.assertEqual(code, 0, out)
+
     def test_chain_folder_tampered_against_base(self):
         with TempDir() as tmp:
             env, sup = self.make(tmp)

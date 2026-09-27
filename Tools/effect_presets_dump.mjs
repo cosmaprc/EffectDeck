@@ -18,8 +18,9 @@
 //   [ { "name": "Tube Simulator",
 //       "groups": [ { "label": "Pre", "presets": [ { "id":…, "label":…, "params": {…} } ] } ] } ]
 
-// 評価できなかったプラグインは stderr に `!! <rel> を評価できない: …` と出して飛ばす。
-// gen_effect_presets.py は ET_STRICT=1 のとき、その行を見て止める。
+// 評価できなかったプラグイン（getSystemPresetGroups() が配列を返さないものも）は stderr に
+// `!! <rel> を評価できない: …`、plugins.txt に在るのに .js が無いものは `!! <rel>.js が無い` と出して
+// 飛ばす。gen_effect_presets.py は ET_STRICT=1 のとき、その行を見て止める。
 //
 // 試験（node --test Tools/effect_presets_dump.test.mjs）から読めるよう、関数を export し、
 // 直接起動されたときだけ main を走らせる。
@@ -67,7 +68,10 @@ export function groupsOf(source, className, filename) {
         `${source}\n;window.__groups = ${className}.getSystemPresetGroups();`,
         context, { filename });
     const groups = context.window.__groups;
-    if (!Array.isArray(groups)) return [];
+    // 黙って [] にすると、そのプラグインのプリセットが !! 無しで消える。投げて dumpPlugins に報せさせる。
+    if (!Array.isArray(groups)) {
+        throw new TypeError(`${className}.getSystemPresetGroups() が配列でない（${groups === null ? 'null' : typeof groups}）`);
+    }
     return rehome(groups).map(group => ({
         label: typeof group.label === 'string' ? group.label : '',
         presets: (group.presets || []).map(p => ({
@@ -77,12 +81,16 @@ export function groupsOf(source, className, filename) {
 }
 
 // plugins.txt に載っているプラグインのうち、出荷時プリセットを持つものを並びのまま返す。
-// 評価できなかったものは report に `!! …` を渡して飛ばす。
+// 評価できなかったもの・.js が無いものは report に `!! …` を渡して飛ばす。
 export function dumpPlugins(pluginsDir, report) {
     const out = [];
     for (const { rel, name, className } of readPluginList(path.join(pluginsDir, 'plugins.txt'))) {
         const file = path.join(pluginsDir, `${rel}.js`);
-        if (!fs.existsSync(file)) continue;
+        // 固定した版では 108 本とも在る。無ければ上流が動かした（そのプリセットが黙って消える）。
+        if (!fs.existsSync(file)) {
+            report(`!! ${rel}.js が無い（plugins.txt には在る）`);
+            continue;
+        }
         const source = fs.readFileSync(file, 'utf8');
         // 持っていないものは評価もしない。読むだけで済む篩い。
         if (!source.includes('getSystemPresetGroups')) continue;

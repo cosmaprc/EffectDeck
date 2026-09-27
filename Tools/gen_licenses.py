@@ -5,7 +5,8 @@
 配布物の中身と表示が食い違わないよう、置き場のファイルをそのまま読む。
 
 ライセンスが別ファイルでなくソースの頭のコメントにしか無いもの（DPF の Base64.hpp）は、
-その文面を Licenses/ に写して読む。写しが元のコメントとずれていれば止める（COPIES）。
+その文面を Licenses/ に写して読む。写しが元の頭のコメントとずれていれば（どちらかにだけ在る行が
+あれば）止める（COPIES）。
 Tools/check_repo.py は、ここの ITEMS が全部 NOTICE.md に書いてあるかも見る。
 """
 import pathlib
@@ -32,15 +33,89 @@ ITEMS = [
 ]
 
 
-# Licenses/ の写し -> 元のソース。元がある木（Vendor/ysfx を取ってある）では文面を突き合わせる。
+# Licenses/ の写し -> 元のソース、または (元のソース, 写さない見出しの行)。元がある木（Vendor/ysfx を
+# 取ってある）では、写しと元の頭のコメント（最初のコードの行より前）を丸ごと突き合わせる。
 COPIES = {
-    "Licenses/dpf-base64.LICENSE": "Vendor/ysfx/sources/base64/Base64.hpp",
+    # 頭のコメントのうち、節の見出し（// Helpers）は注意書きでないので写さない。罫線（// ---）は
+    # 見出しに挙げなくても落とす。
+    "Licenses/dpf-base64.LICENSE": ("Vendor/ysfx/sources/base64/Base64.hpp", ("Helpers",)),
 }
+
+
+def copy_source(value):
+    """COPIES の値を (元のソース, 写さない見出しの行) にする。"""
+    if isinstance(value, str):
+        return value, ()
+    return value[0], tuple(value[1])
 
 
 def squash(text: str) -> str:
     """コメントの印（/* * //）・改行・空白の違いを無視して比べるための形。"""
     return re.sub(r"[\s*/]+", "", text)
+
+
+def header_comments(text: str) -> list:
+    """ソースの頭のコメントの中身を行ごとに（印を外し、空白を 1 つに詰めて）返す。
+
+    最初のコードの行（空行・コメント・# で始まる前処理の行のどれでもない行）の手前まで。
+    Base64.hpp は注意書きの後に #pragma と #include を挟んで 2 つめの注意書きを置くので、
+    前処理の行では止めない。罫線だけの行（// ----）は落とし、空行は段落の切れ目として残す。
+    """
+    bodies = []
+    in_block = False
+    for line in text.splitlines():
+        s = line.strip()
+        if in_block:
+            end = s.find("*/")
+            bodies.append(s if end < 0 else s[:end])
+            if end >= 0:
+                in_block = False
+                if s[end + 2:].strip():
+                    break
+            continue
+        if not s or s.startswith("#"):
+            bodies.append("")
+            continue
+        if s.startswith("//"):
+            bodies.append(s[2:])
+            continue
+        if s.startswith("/*"):
+            s = s[2:]
+            end = s.find("*/")
+            bodies.append(s if end < 0 else s[:end])
+            if end < 0:
+                in_block = True
+            elif s[end + 2:].strip():
+                break
+            continue
+        break
+    lines = []
+    for body in bodies:
+        body = " ".join(re.sub(r"^[\s*/]+", "", body).split())
+        if re.fullmatch(r"[-=*/_~#]*", body):
+            body = ""
+        lines.append(body)
+    return lines
+
+
+def compare_copy(copy_text: str, source_text: str, skip=()) -> list:
+    """写しと元の頭のコメントの食い違い。同じなら空。
+
+    どちら向きにも見る。写しの段落が元に在るかだけでは、上流が足した著作者や条項を
+    写しが持っていなくても通ってしまう（ISC は注意書きを全部載せることを求める）。
+    """
+    head = [ln for ln in header_comments(source_text) if ln not in skip]
+    if squash("\n".join(head)) == squash(copy_text):
+        return []
+    copy = [" ".join(ln.split()) for ln in copy_text.splitlines()]
+    only_source = [ln for ln in head if ln and ln not in copy]
+    only_copy = [ln for ln in copy if ln and ln not in head]
+    parts = []
+    if only_source:
+        parts.append("元にだけ在る行: " + " / ".join(only_source[:3]))
+    if only_copy:
+        parts.append("写しにだけ在る行: " + " / ".join(only_copy[:3]))
+    return ["；".join(parts) or "同じ行が揃っているが、並びか数が違う"]
 
 
 def raw_hashes(text: str) -> str:
@@ -61,9 +136,10 @@ def source_tree(source: str) -> pathlib.Path:
 
 
 def check_copies():
-    """写しの文面が元のソースの頭のコメントにそのまま在るか。ずれていれば説明の列を返す。"""
+    """写しの文面が元のソースの頭のコメントと同じか。ずれていれば説明の列を返す。"""
     bad = []
-    for copy, source in COPIES.items():
+    for copy, value in COPIES.items():
+        source, skip = copy_source(value)
         src = ROOT / source
         if not src.is_file():
             tree = source_tree(source)
@@ -72,11 +148,9 @@ def check_copies():
                 bad.append("%s の元の %s が無い（上流で動いた？ COPIES を直す）" % (copy, source))
             # 木ごと無い（Vendor/ysfx を取っていない）ときは確かめられない
             continue
-        whole = squash(src.read_text(encoding="utf-8"))
-        # 写しは段落ごとに元のどこかに在ればよい（元は 2 つのコメントの間に #include がある）。
-        for para in re.split(r"\n\s*\n", (ROOT / copy).read_text(encoding="utf-8")):
-            if squash(para) and squash(para) not in whole:
-                bad.append("%s の段落が %s に無い: %s…" % (copy, source, para.strip()[:40]))
+        for d in compare_copy((ROOT / copy).read_text(encoding="utf-8"),
+                              src.read_text(encoding="utf-8"), skip):
+            bad.append("%s が %s の頭のコメントと違う: %s" % (copy, source, d))
     return bad
 
 

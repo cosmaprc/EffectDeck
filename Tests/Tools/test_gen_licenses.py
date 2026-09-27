@@ -1,7 +1,8 @@
 """Tools/gen_licenses.py の試験。アプリに積んでいるコードのライセンスを全部出すこと。"""
 import re
 
-from tools_support import ROOT, TempDir, load_tool, quiet, run_main, swift_raw_text, unittest, write
+from tools_support import (ROOT, TempDir, load_tool, quiet, run_main, swift_raw_text, unittest,
+                           vendor_at_pin, write)
 
 
 class GenLicensesTests(unittest.TestCase):
@@ -19,8 +20,10 @@ class GenLicensesTests(unittest.TestCase):
         self.assertIn("René Nyffenegger", text)
         self.assertIn("permission notice appear in all copies", text)
 
-    # Base64.hpp でなく木の LICENSE で見る。上流が Base64.hpp を動かしたら、飛ばさずに落ちる。
-    @unittest.skipUnless((ROOT / "Vendor/ysfx/LICENSE").is_file(), "Vendor/ysfx が無い")
+    # Base64.hpp でなく木（Vendor/ysfx）が固定した版かで見る。上流が Base64.hpp を動かしたら、
+    # 飛ばさずに落ちる。別の版の checkout と比べて写しのせいにしない。
+    @unittest.skipUnless(vendor_at_pin("ysfx", "sources/base64"),
+                         "Vendor/ysfx が固定した版でない（無い・別の版・sources/base64 に手が入っている）")
     def test_base64_copy_matches_vendor_header(self):
         self.assertEqual(self.gl.check_copies(), [])
 
@@ -53,6 +56,51 @@ class GenLicensesTests(unittest.TestCase):
             self.assertEqual(self.gl.check_copies(), [])
             write(tmp / "copy.LICENSE", "Copyright (C) 2021 Someone Else\nPermission granted.\n")
             self.assertEqual(len(self.gl.check_copies()), 1)
+
+    def check(self, src, copy, source="src.hpp"):
+        with TempDir() as tmp:
+            write(tmp / "src.hpp", src)
+            write(tmp / "copy.LICENSE", copy)
+            self.gl.ROOT = tmp
+            self.gl.COPIES = {"copy.LICENSE": source}
+            return self.gl.check_copies()
+
+    # 元の頭のコメント（Base64.hpp と同じ形: 注意書き、#pragma と #include、// の出典、2 つめの注意書き）。
+    HEADER = ("/*\n * Copyright (C) 2020 Someone\n *\n * Permission granted.\n */\n\n#pragma once\n"
+              "#include <x>\n\n// ------------\n// based on http://example.invalid/b64\n\n"
+              "/*\n   Copyright (C) 2004 Other\n\n   1. First.\n\n   2. Second.\n*/\n\n"
+              "// ------------\n// Helpers\n\n#ifndef X\nnamespace N {\n// after the code starts\n}\n")
+    COPY = ("Copyright (C) 2020 Someone\n\nPermission granted.\n\nbased on http://example.invalid/b64\n\n"
+            "Copyright (C) 2004 Other\n\n1. First.\n\n2. Second.\n")
+
+    def test_copy_matches_whole_header(self):
+        # 罫線（// ---）は写さなくてよい。見出し（// Helpers）は COPIES に挙げたものだけ飛ばす。
+        # 最初のコードの行（namespace）より後ろのコメントは注意書きでない。
+        self.assertEqual(self.check(self.HEADER, self.COPY, ("src.hpp", ["Helpers"])), [])
+        bad = self.check(self.HEADER, self.COPY)
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("Helpers", bad[0])
+
+    def test_copyright_added_to_source_detected(self):
+        # 上流が著作者を足した（ISC は注意書きを全部載せることを求める）。写しの段落が
+        # 元に在るかだけ見ていると、写しが古いままでも通ってしまう。
+        src = self.HEADER.replace(" * Copyright (C) 2020 Someone\n",
+                                  " * Copyright (C) 2020 Someone\n * Copyright (C) 2025 Newcomer\n")
+        bad = self.check(src, self.COPY, ("src.hpp", ["Helpers"]))
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("Newcomer", bad[0])
+
+    def test_clause_added_to_source_detected(self):
+        src = self.HEADER.replace("   2. Second.\n", "   2. Second.\n\n   3. Third.\n")
+        bad = self.check(src, self.COPY, ("src.hpp", ["Helpers"]))
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("3. Third.", bad[0])
+
+    def test_line_comment_added_to_source_detected(self):
+        src = self.HEADER.replace("// based on", "// Copyright (C) 2025 Newcomer\n// based on")
+        bad = self.check(src, self.COPY, ("src.hpp", ["Helpers"]))
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("Newcomer", bad[0])
 
     def test_missing_file_fails(self):
         with TempDir() as tmp:

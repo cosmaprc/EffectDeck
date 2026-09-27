@@ -12,15 +12,17 @@ node が無いとき・Vendor/effetune が無いときは**生成せずに 0 で
 生成物は追跡しているので、そのときは既にあるものがそのまま正になる。
 
 **ET_STRICT=1（CI）か --strict では飛ばさずに 1 で止める。**node が無い・Vendor が無い・
-dump の出力が JSON として読めない・dump が評価できなかったプラグインを !! で報せた
-（そのプラグインのプリセットが黙って消える。146 件 / 28 種が 143 / 27 になっても 0 だった）。
-どれも何も書かない。
+dump の出力が JSON として読めない・dump が落としたプラグイン（評価できない・.js が無い）を
+!! で報せた・前の生成物に在ったエフェクトが丸ごと消えた（そのプラグインのプリセットが黙って
+消える。146 件 / 28 種が 143 / 27 になっても 0 だった）。どれも何も書かない。
+いつもは書いて、落とした数を最後の行にも出す（setup.sh は tail -1 しか見せない）。
 
     python3 Tools/gen_effect_presets.py [--strict] [Vendor/effetune のパス]
 """
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -100,6 +102,15 @@ def raw_hashes(text: str) -> str:
     return hashes
 
 
+def effects_in(path: pathlib.Path) -> set:
+    """前に書いた EffectPresets.swift が持つエフェクトの表示名。無ければ空。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return set(re.findall(r'^      effect: "([^"\\]*)",$', text, re.M))
+
+
 def strict_mode(argv) -> bool:
     return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in argv
 
@@ -135,10 +146,10 @@ def main(argv=None) -> int:
     if raw.stderr:
         warnings = raw.stderr.decode("utf-8", "replace")
         sys.stderr.write(warnings)
-    # dump は評価できなかったプラグインを !! で報せて飛ばす（そのプリセットは消える）。
+    # dump は評価できなかったプラグイン・.js が無いプラグインを !! で報せて飛ばす（そのプリセットは消える）。
     dropped = [ln for ln in warnings.splitlines() if ln.startswith("!!")]
     if dropped and strict:
-        print("!! dump が評価できなかったプラグインが %d ある（ET_STRICT）。何も書いていない"
+        print("!! dump が落としたプラグインが %d ある（ET_STRICT）。何も書いていない"
               % len(dropped), file=sys.stderr)
         return 1
 
@@ -154,6 +165,19 @@ def main(argv=None) -> int:
         print("!! dump の出力が読めない（%s）。既存の Generated を使う" % e,
               file=sys.stderr)
         return 1 if strict else 0
+
+    # dump が !! を出さずに落とす形がある（上流が getSystemPresetGroups を改名した・グループが
+    # 空になった。持たないプラグインと見分けられない）。前の生成物に在ったエフェクトが丸ごと
+    # 消えていれば報せる。strict では何も書かずに止め、いつもは書く（上流が本当に外したときは、
+    # 書いた後の生成物がそれを前として受ける）。
+    lost = sorted(effects_in(OUT) - {entry["name"] for entry in data})
+    for name in lost:
+        print("!! %s のプリセットが dump から消えた（前の %s には在った）" % (name, OUT.name),
+              file=sys.stderr)
+    if lost and strict:
+        print("!! 前の生成物に在ったエフェクトが %d 消えた（ET_STRICT）。何も書いていない" % len(lost),
+              file=sys.stderr)
+        return 1
 
     lines = [HEADER.rstrip("\n")]
     count = 0
@@ -179,7 +203,14 @@ def main(argv=None) -> int:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    print("effect presets: %d 件 / %d エフェクト" % (count, len(data)))
+    # setup.sh は 2>&1 | tail -1 で最後の行しか見せない。上の !! は流れて消えるので、ここにも書く。
+    notes = []
+    if dropped:
+        notes.append("dump が %d プラグインを落とした" % len(dropped))
+    if lost:
+        notes.append("前の生成物に在った %d エフェクトが消えた" % len(lost))
+    print("effect presets: %d 件 / %d エフェクト%s"
+          % (count, len(data), "（%s。上の !! を見る）" % "・".join(notes) if notes else ""))
     return 0
 
 

@@ -6,7 +6,7 @@ import subprocess
 from unittest import mock
 
 from tools_support import (ROOT, TempDir, env_patch, have_node, load_tool, quiet, run_main,
-                           swift_raw_text, unittest, write)
+                           swift_raw_text, unittest, vendor_at_pin, write)
 
 PLUGINS_TXT = """\
 [core]
@@ -112,6 +112,56 @@ class GenEffectPresetsTests(unittest.TestCase):
         self.assertIn('presetId: "soft"', text)
         self.assertIn('      {"sg":1}', text)
 
+    def test_dropped_plugins_on_last_line(self):
+        # setup.sh は 2>&1 | tail -1 で最後の 1 行しか見せない。!! の行は stderr で先に流れて消えるので、
+        # 落とした数を最後の行に書く（gen_presets・gen_catalog と同じ）。
+        good = json.dumps([{"name": "Power Amp Sag", "groups": [
+            {"label": "", "presets": [{"id": "soft", "label": "Soft", "params": {"sg": 1}}]}]}]).encode()
+        with TempDir() as tmp:
+            vendor = self.vendor(tmp)
+            run = fake_run(good, "!! dynamics/broken を評価できない: boom\n".encode("utf-8"))
+            with mock.patch.object(self.ge.shutil, "which", return_value="node"), \
+                    mock.patch.object(self.ge.subprocess, "run", run):
+                code, out, err = self.run_gen(vendor)
+        self.assertEqual(code, 0, err)
+        last = out.strip().splitlines()[-1]
+        self.assertIn("effect presets: 1 件 / 1 エフェクト", last)
+        self.assertIn("1 プラグインを落とした", last)
+
+    def test_effect_lost_since_last_output_fails_strict(self):
+        # dump が !! を出さずに落とす形（上流が getSystemPresetGroups を改名した、グループが
+        # 空になった）。前の生成物に在ったエフェクトが丸ごと消えたら、strict では何も書かずに
+        # 止め、いつもは書いて !! と最後の行で報せる。
+        both = json.dumps([
+            {"name": "Power Amp Sag", "groups": [
+                {"label": "", "presets": [{"id": "soft", "label": "Soft", "params": {"sg": 1}}]}]},
+            {"name": "Tube Simulator", "groups": [
+                {"label": "Pre", "presets": [{"id": "warm", "label": "Warm", "params": {"dr": -12}}]}]},
+        ]).encode()
+        one = json.dumps([{"name": "Power Amp Sag", "groups": [
+            {"label": "", "presets": [{"id": "soft", "label": "Soft", "params": {"sg": 1}}]}]}]).encode()
+        with TempDir() as tmp:
+            vendor = self.vendor(tmp)
+            with mock.patch.object(self.ge.shutil, "which", return_value="node"):
+                with mock.patch.object(self.ge.subprocess, "run", fake_run(both)):
+                    self.assertEqual(self.run_gen(vendor, strict="1")[0], 0)
+                before = self.ge.OUT.read_bytes()
+                with mock.patch.object(self.ge.subprocess, "run", fake_run(one)):
+                    code, out, err = self.run_gen(vendor, strict="1")
+                    self.assertNotEqual(code, 0)
+                    self.assertIn("Tube Simulator", err)
+                    self.assertEqual(self.ge.OUT.read_bytes(), before)
+                    code, out, err = self.run_gen(vendor)
+                self.assertEqual(code, 0, err)
+                self.assertIn("!! Tube Simulator", err)
+                self.assertIn("1 エフェクトが消えた", out.strip().splitlines()[-1])
+                self.assertNotIn('effect: "Tube Simulator"', self.ge.OUT.read_text("utf-8"))
+                # 書いた後は、それが前の生成物。同じ dump なら黙って通る。
+                with mock.patch.object(self.ge.subprocess, "run", fake_run(one)):
+                    code, out, err = self.run_gen(vendor, strict="1")
+                self.assertEqual(code, 0, err)
+                self.assertNotIn("!!", err)
+
     def test_backslash_hash_survives_swift_raw_string(self):
         # params の "C:\\#x" は中身に \# を持つ。#"""…"""# の中では \# がエスケープで、
         # Swift は \#x を読めずに止まるか別の字にする。中身に出ない数まで # を増やす。
@@ -148,8 +198,9 @@ class GenEffectPresetsTests(unittest.TestCase):
             code, out, err = self.run_gen(vendor, strict="1")
             self.assertNotEqual(code, 0)
 
-    @unittest.skipUnless(have_node() and (ROOT / "Vendor/effetune/plugins/plugins.txt").is_file(),
-                         "node か Vendor/effetune が無い")
+    # 作業ツリーの Vendor が固定した版のときだけ比べる（別の版だと追跡しているファイルのせいにして落ちる）。
+    @unittest.skipUnless(have_node() and vendor_at_pin("effetune", "plugins"),
+                         "node が無いか、Vendor/effetune が固定した版でない（無い・別の版・plugins に手が入っている）")
     def test_committed_file_matches_vendor(self):
         # 追跡している EffectPresets.swift を Vendor から作り直すと同じになる。
         with TempDir() as tmp:

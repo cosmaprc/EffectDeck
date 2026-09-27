@@ -3,7 +3,7 @@ import json
 import re
 
 from tools_support import (ROOT, TempDir, env_patch, load_tool, quiet, run_main, swift_raw_text,
-                           unittest, write)
+                           unittest, vendor_at_pin, write)
 
 RAW = re.compile(r'      category: "([^"]*)",\n      name: "([^"]*)",\n      effectCount: (\d+),\n'
                  r'      json: (#+)"""\n      (.*)\n      """\4\),')
@@ -90,7 +90,9 @@ class GenPresetsTests(unittest.TestCase):
         self.assertEqual(self.gp.raw_hashes('a"""#b'), "##")
         self.assertEqual(self.gp.raw_hashes('a\\##b"""#'), "###")
 
-    @unittest.skipUnless((ROOT / "Vendor/effetune/presets").is_dir(), "Vendor/effetune が無い")
+    # 作業ツリーの Vendor が固定した版のときだけ比べる（別の版だと追跡しているファイルのせいにして落ちる）。
+    @unittest.skipUnless(vendor_at_pin("effetune", "presets"),
+                         "Vendor/effetune が固定した版でない（無い・別の版・presets に手が入っている）")
     def test_committed_file_matches_vendor(self):
         # 追跡している SystemPresets.swift が Vendor の .effetune_preset と同じ中身を持つ。
         committed = embedded((ROOT / "Sources/EffeTuneLive/Generated/SystemPresets.swift").read_text("utf-8"))
