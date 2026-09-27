@@ -530,7 +530,8 @@ final class EffeTuneDSP: ObservableObject {
     ///
     /// engine が飛ばす段でも host は形（バスの ch 数）を作るので、置いた Ch が名乗る幅のまま
     /// 渡す（ETChannel.nominalWidth。routedChannels が 0 を返すようになる前と同じ値）。
-    private static func externalChannels(of node: Node) -> Int {
+    /// 外れていたJSFXの段を建て直すとき（ETJSFXHost.reviveDeadCards）も同じ幅を使う。
+    static func externalChannels(of node: Node) -> Int {
         ETChannel.nominalWidth(spec: node.channelSpec, engineChannels: Int(shared.maxChannels))
     }
 
@@ -765,6 +766,23 @@ final class EffeTuneDSP: ObservableObject {
         // Capturing fullStateForDocument can archive a sizeable object. Parameter
         // observers fire continuously while a native AU knob is dragged, so let
         // the existing debounce capture it once in persist() instead.
+        persistSoon()
+    }
+
+    /// 外部の段の中身が別のidのものに替わった（JSFXを取り込み直して前の版を置き換えた）。
+    /// **鎖が控えているidを、いま鳴っている版のidへ付け替える**（ETJSFXHost.build）。
+    ///
+    /// 付け替えないと、鎖・プリセット・iCloud・共有リンクは前の版のidを書き続ける。
+    /// 前のidはJSFX/aliases.jsonの付け替えでしか引けないので、それを持たない端末や、
+    /// 新しい版を消して入れ直した後では段が建たない。どの版が書いた状態かも分からなくなる。
+    /// 音には触らない（descriptorはslotの番号しか持たない）ので出し直さず、保存だけする。
+    /// spec.type（"External:<id>"）は古いまま残るが、保存の形には書かれず、読むときに
+    /// externalIDから作り直す（PipelineForm.parse）。
+    func externalComponentDidChange(instanceID: String, to componentID: String) {
+        guard let index = chain.firstIndex(where: {
+            $0.isExternal && $0.externalInstanceID == instanceID
+        }), chain[index].externalID != componentID else { return }
+        chain[index].externalID = componentID
         persistSoon()
     }
 

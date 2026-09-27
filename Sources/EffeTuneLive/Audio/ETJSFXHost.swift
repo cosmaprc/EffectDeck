@@ -140,6 +140,9 @@ final class ETJSFXHost: ObservableObject {
         let author: String
         let url: URL
         let isDebugFixture: Bool
+        /// 同じ1本かを決める鍵（desc:とauthor:。JSFXReplace.Identity）。desc:が無ければnil。
+        /// 一覧を作るときに読んだ頭から作る（取り込むたびに全部のソースを読み直さない）。
+        let identity: JSFXReplace.Identity?
     }
 
     struct Parameter: Identifiable {
@@ -190,6 +193,7 @@ final class ETJSFXHost: ObservableObject {
         var focusedGFXOwners: Set<UUID> = []
         /// 置き換えた前の版（rebuild）。**この版をinstallするまでslotに載って鳴っている。**
         /// 片付けるのはslotが替わった・空いたとき（retirePredecessor / dropPredecessor）。
+        /// この版が建たなければ表へ戻す（fail → readopt）。
         var predecessor: Instance?
         /// 前の版のつまみ。建てたときに数と範囲が合えば移す（carrySliders）。
         var carriedSliders: [Parameter]?
@@ -207,6 +211,9 @@ final class ETJSFXHost: ObservableObject {
     /// 取り込み直して置き換えた前の版のid → いまのid（JSFXReplace）。JSFX/aliases.jsonに残す。
     /// 同梱の見本の古いid（entryAliases）とは別。あちらは建てるときに決まる。
     private var replacedAliases = JSFXReplace.Aliases()
+    /// 置き場（JSFX/Replaced）で前の版が待っている、新しい版のid。1度建てば前の版を消し
+    /// （commitReplacement）、建たなければ前の版を戻す（rollBackReplacement）。
+    private var pendingTargets: Set<String> = []
     private var instances: [String: Instance] = [:]
     private var renderConfiguration: RenderConfiguration?
     private var latencyTimer: Timer?
@@ -214,6 +221,7 @@ final class ETJSFXHost: ObservableObject {
     private init() {
         replacedAliases = Self.loadReplacedAliases()
         refresh()
+        tidyShelf()
         // **init では張らない。**この型は singleton で、ピッカーを開くだけで
         // 生成される（EffectPickerView が生成式で shared を読む）。init から張ると、
         // JSFX を 1 つも読んでいなくても 10 回/秒でメインスレッドを起こし、
@@ -248,9 +256,11 @@ final class ETJSFXHost: ObservableObject {
         // 消えたふりをして次の refresh で戻ってくるより分かりやすい。
         guard (try? FileManager.default.removeItem(at: entry.url)) != nil else { return false }
         Self.setStalled(entry.id, false)
-        // この1本へ付け替えていた前の版のidも消す。消したものを直接指していた鍵と同じく、
-        // 引けない鍵になる（鎖を読み直したときに段が建たない）。
-        if replacedAliases.remove(target: entry.id) { saveReplacedAliases() }
+        // 置き場でこの1本が建つのを待っていた前の版も消す。消したものの前の版を黙って戻さない。
+        discardShelved(for: entry.id)
+        // **付け替え（前の版のid → この1本）は残す。**引く先が無いので段は建たない（消したものを
+        // 直接指していた鍵と同じ）。同じ1本をもう一度取り込めば、前の版のidで保存した鎖・
+        // プリセットもまた建つ。消すと、入れ直しても戻らない。
         refresh()
         return true
     }
@@ -396,77 +406,85 @@ final class ETJSFXHost: ObservableObject {
         }
         // 取り込み直したら 1 度は試す（同じ中身なら id も同じ）。
         Self.setStalled(entry.id, false)
+        // 前の版を入れ直した。置き場で待っていた同じ中身の写しは要らない（一覧の写しが勝つ）。
+        if let shelf = Self.shelfURL(create: false) {
+            try? FileManager.default.removeItem(at: shelf.appendingPathComponent(owned.lastPathComponent))
+        }
         // **同じdesc:とauthor:の前の版は置き換える**（JSFXReplace）。取り込みの口は
         // From Files・From Link・From Clipboard・共有の拡張／このアプリで開く（ETInbox）・
         // /jのリンク（importSource）の全部がここを通るので、ここ1か所で足りる。
-        let replaced = replaceOlderVersions(with: entry, source: text)
+        let replaced = replaceOlderVersions(with: entry)
         refresh()
-        if !replaced.isEmpty, let current = entries.first(where: { $0.id == entry.id }) {
-            adoptReplacement(of: replaced, with: current)
+        if let current = entries.first(where: { $0.id == entry.id }) {
+            // 前の版で建っている（建てている途中も含む）段は、新しい版で建て直す。
+            for instance in Array(instances.values) where replaced.contains(instance.entry.id) {
+                rebuild(instance, as: current)
+            }
+            // 外れている段も拾う。コンパイルできなかった版を直して入れ直した・消した1本を
+            // 入れ直したときがこれで、fail()がinstanceを外しているのでhostには何も残っていない。
+            reviveDeadCards(resolvingTo: [current.id])
         }
         return entry
     }
 
-    /// 同じ1本の前の版（desc:とauthor:が同じで中身が違う、人が入れたもの）を消して、
-    /// 前のid → 新しいidを控える。消したidを返す。
+    /// 同じ1本の前の版（desc:とauthor:が同じで中身が違う、人が入れたもの）を置き場
+    /// （JSFX/Replaced）へ移して、前のid → 新しいidを控える。移したidを返す。
     ///
-    /// 同梱の見本は置き換えない（JSFXReplace.replaced）。**消せなかったものは残し、
-    /// 付け替えも控えない。**removeEntryと同じく、消えたふりをして次のrefreshで戻さない。
-    private func replaceOlderVersions(with entry: Entry, source: String) -> Set<String> {
-        let identity = JSFXReplace.Identity(source: source)
-        guard identity != nil else { return [] }
+    /// **消さない。**新しい版が1度建ったら消し（commitReplacement）、建たなければ戻す
+    /// （rollBackReplacement）。直させた版が壊れていても、前の版は端末から無くならない。
+    /// 同梱の見本は置き換えない（JSFXReplace.replaced）。
+    ///
+    /// **付け替えを先に書く。**書けなければ何も動かさない（前の版は一覧に残り、並ぶだけ）。
+    /// 動かしてから書けないと、前のidが引けないまま前の版が置き場に隠れる。動かせなかった
+    /// ものは一覧に残る。付け替えは残るが、entry(id:)は一覧を先に引くので自分のidで建つ。
+    private func replaceOlderVersions(with entry: Entry) -> Set<String> {
         // 一覧の名前はdesc:が無いとファイル名になるので、名前ではなくソースの頭で比べる。
-        let candidates = entries.map { candidate in
-            JSFXReplace.Candidate(
-                id: candidate.id,
-                identity: candidate.isDebugFixture ? nil
-                    : Self.sourceText(for: candidate).flatMap(JSFXReplace.Identity.init(source:)),
-                isBundled: candidate.isDebugFixture)
+        let candidates = entries.map {
+            JSFXReplace.Candidate(id: $0.id, identity: $0.identity, isBundled: $0.isDebugFixture)
         }
-        let doomed = Set(JSFXReplace.replaced(by: entry.id, identity: identity, among: candidates))
-        guard !doomed.isEmpty else { return [] }
-        var removed: Set<String> = []
-        for old in entries where doomed.contains(old.id) {
-            guard (try? FileManager.default.removeItem(at: old.url)) != nil else { continue }
-            Self.setStalled(old.id, false)
+        let doomed = Set(JSFXReplace.replaced(by: entry.id, identity: entry.identity, among: candidates))
+        let olds = entries.filter { doomed.contains($0.id) }
+        guard !olds.isEmpty, let shelf = Self.shelfURL(create: true) else { return [] }
+        var next = replacedAliases
+        for old in olds { next.redirect(from: old.id, to: entry.id) }
+        guard Self.saveReplacedAliases(next) else { return [] }
+        replacedAliases = next
+        var moved: Set<String> = []
+        for old in olds {
+            let destination = shelf.appendingPathComponent(old.url.lastPathComponent)
+            try? FileManager.default.removeItem(at: destination)
+            guard (try? FileManager.default.moveItem(at: old.url, to: destination)) != nil else { continue }
             shareURLs[old.id] = nil
-            replacedAliases.redirect(from: old.id, to: entry.id)
-            removed.insert(old.id)
+            moved.insert(old.id)
         }
-        if !removed.isEmpty { saveReplacedAliases() }
-        return removed
+        // 前の版が待たせていたさらに前の版も、付け替えを潰したのでいまの版を待つ。
+        pendingTargets.subtract(olds.map(\.id))
+        if !shelvedVersions(for: entry.id).isEmpty { pendingTargets.insert(entry.id) }
+        return moved
     }
 
-    /// 置き換えた前の版を使っている段を、新しい版へ載せ替える。
+    /// 鎖に居るのに中身の無い段（建てられなかった・一覧に無かった）のうち、`ids`のどれかへ
+    /// 引けるものを建てる。取り込んだ・置き換えを戻したときに呼ぶ。状態は鎖のもの（restoreと同じ）。
     ///
-    /// - 建っている（建てている途中も含む）instanceは建て直す（rebuild）。
-    /// - **建てられずに外れた段も拾う。**コンパイルできなかった版を直して入れ直すのは
-    ///   まさにこのときで、fail()がinstanceもslotも返しているのでhostには何も残っていない。
-    ///   鎖から拾って建て直す（restoreと同じ形、状態も鎖のもの）。
-    ///
-    /// 外れた段は、鎖の記述子が控えている番号（externalIndex）と同じslotでないと鳴らない。
-    /// slotを取る口はreserve(instanceID:)だけで、空いている一番若い番号を返すので、
-    /// **控えている番号の若い順に取り、揃ったものだけ建てる。**揃わなければ返して触らない
-    /// （それより若い空きがある・ほかの段が使っている。次の起動で付け替えを辿って建つ）。
-    private func adoptReplacement(of replaced: Set<String>, with entry: Entry) {
-        for instance in Array(instances.values) where replaced.contains(instance.entry.id) {
-            rebuild(instance, as: entry)
-        }
-        let orphans = EffeTuneDSP.shared.chain.filter { node in
-            guard node.isExternal, let componentID = node.externalID, componentID.hasPrefix("jsfx:"),
-                  componentID != entry.id, instances[node.externalInstanceID] == nil else { return false }
-            return self.entry(id: componentID)?.id == entry.id
-        }.sorted { $0.externalIndex < $1.externalIndex }
+    /// 鳴らすには、鎖の記述子が控えている番号（externalIndex）と同じslotが要る。**段のslotは
+    /// 鎖に居る間は取ったまま**（fail()は返さない）なので揃う。揃わなければ触らない
+    /// （取ったのが別の番号なら返す。次の起動で建つ）。
+    private func reviveDeadCards(resolvingTo ids: Set<String>) {
         let bridge = ETAUExternalBridge.shared
-        for node in orphans {
+        let dead = EffeTuneDSP.shared.chain.filter { node in
+            guard node.isExternal, let componentID = node.externalID, componentID.hasPrefix("jsfx:"),
+                  instances[node.externalInstanceID] == nil,
+                  let resolved = entry(id: componentID) else { return false }
+            return ids.contains(resolved.id)
+        }
+        for node in dead {
             let held = bridge.index(for: node.externalInstanceID)
             guard (try? bridge.reserve(instanceID: node.externalInstanceID)) == node.externalIndex else {
-                // 取ったのが別の番号なら返す（前から持っていたものには触らない）。
                 if held == nil { bridge.remove(instanceID: node.externalInstanceID) }
                 continue
             }
             restore(componentID: node.externalID ?? "", instanceID: node.externalInstanceID,
-                    state: node.externalState, channels: EffeTuneDSP.routedChannels(of: node))
+                    state: node.externalState, channels: EffeTuneDSP.externalChannels(of: node))
         }
     }
 
@@ -474,7 +492,8 @@ final class ETJSFXHost: ObservableObject {
     ///
     /// remove(instanceID:)は通さない。slotを返すと取り直したときに番号が変わりうるうえ、
     /// 新しい版が建つまで素通しになる。前の版はslotに載せたまま鳴らし、新しい版をinstallした
-    /// ところで替わる（build → retirePredecessor）。建てられなかったらfail()がslotを空ける。
+    /// ところで替わる（build → retirePredecessor）。**建てられなかったら前の版のまま**
+    /// （fail → readopt。slotは替わっていないので音は途切れない）。
     ///
     /// - つまみは数と範囲が合えば持ち越す（carrySliders）。合わなければ新しい版の既定。
     /// - **@serializeの状態は持ち越さない。**読み込むと、新しい版の@serializeが前の版の並びの
@@ -997,7 +1016,9 @@ final class ETJSFXHost: ObservableObject {
         let path = instance.entry.url.path, state = instance.state, id = instance.id
         let entryID = instance.entry.id
         // 前に建ちきらなかったものは建てない。建てるたびに 1 本回り続ける。
-        guard !Self.isStalled(entryID) else { fail(instance, Self.loadError(Self.stalledMessage)); return }
+        guard !Self.isStalled(entryID) else {
+            fail(instance, Self.loadError(Self.stalledMessage), scriptFailed: true); return
+        }
         // **時間切れでも外さない。**印と表示だけにして、帰ってきたら普通に載せる。
         // 外すと、PORTABLE で @init が重いだけのスクリプトが毎回ここで捨てられ、
         // 印も完了で消えるので、起動のたびに建てては捨てて二度と載らない。
@@ -1008,10 +1029,13 @@ final class ETJSFXHost: ObservableObject {
             guard !Task.isCancelled, let self,
                   let current = self.instances[id], current === instance, current.host == nil else { return }
             Self.setStalled(entryID, true)
+            // 置き換えの途中なら、建たなかった扱いにして前の版のまま鳴らす（置き換えも戻す）。
+            // 遅れて帰ってきても表に居ないので、載せずに壊す（loadTaskの「外された」）。
+            if current.predecessor != nil {
+                self.fail(current, Self.loadError(Self.stalledMessage), scriptFailed: true)
+                return
+            }
             current.error = Self.stalledMessage
-            // 置き換えの前の版が鳴っていれば外す。残すと表示は建たなかったと言い、音は前の版で、
-            // 帰ってこなければ前の版は壊されないまま残る。
-            self.dropPredecessor(of: current)
             // 足すのを待っている picker には段を出させる。建ち終われば同じ slot に入る
             // （restore と同じ、段はあって中身がまだの形）。
             if let ready = current.ready, let index = ETAUExternalBridge.shared.index(for: id) {
@@ -1052,7 +1076,8 @@ final class ETJSFXHost: ObservableObject {
             }
             current.loadTask = nil
             guard let host = created else {
-                self.fail(current, Self.loadError(failure ?? "Could not load JSFX.")); return
+                self.fail(current, Self.loadError(failure ?? "Could not load JSFX."), scriptFailed: true)
+                return
             }
             // 置き換えた前の版のつまみを移す。**installの前に。**置いた値は最初のブロックの頭で
             // 渡る（applySliders）ので、新しい版の既定の値で鳴る瞬間が無い。
@@ -1061,6 +1086,7 @@ final class ETJSFXHost: ObservableObject {
                 Self.carrySliders(carried, into: host)
             }
             do {
+                let replacing = current.predecessor != nil
                 let index = try ETAUExternalBridge.shared.install(ETJSFX_Processor(host), instanceID: id)
                 // slotは新しい版に替わった。前の版はもう呼ばれない。
                 self.retirePredecessor(of: current)
@@ -1071,7 +1097,20 @@ final class ETJSFXHost: ObservableObject {
                 // 止まっていれば、ここで回し直す（置き換えでは前の版が表に居ないので止まりやすい）。
                 self.startLatencyTimerIfNeeded()
                 self.snapshotState(current)
+                let picking = current.ready != nil
                 current.ready?(.success(index)); current.ready = nil
+                // 建った。置き換えの途中だったなら、置き場の前の版はもう戻さない。
+                self.commitReplacement(of: current.entry.id)
+                // 鎖の段が前の版のid（付け替えで引いた）を控えていれば、いま鳴っている版のidへ。
+                // ピッカーが足した段もここで直る（readyの中で足す。足したidは前の版のことがある）。
+                EffeTuneDSP.shared.externalComponentDidChange(instanceID: id, to: current.entry.id)
+                // 遅延補正は鎖を組むときにslotから読む（ETPipelineのexternal latency callback）。
+                // installは組み直さないので、前の版から替わった・空のslotに遅れのある版が入ったときは
+                // 組み直す。ピッカーの段は足すときに組む。hostの最初の遅れは「変わった」の印を
+                // 立てないので、見回り（pollRuntimeChanges）では拾えない。
+                if replacing || (!picking && Self.latency(of: host) > 0) {
+                    EffeTuneDSP.shared.republish(reason: "JSFX installed")
+                }
                 self.revision &+= 1
                 self.followRenderConfiguration(current, built: configuration)
             } catch {
@@ -1083,15 +1122,48 @@ final class ETJSFXHost: ObservableObject {
     }
 
     /// 建てられなかった instance を外す。鎖の段は残る（status は "JSFX unavailable"）。
-    private func fail(_ instance: Instance, _ error: Error) {
+    ///
+    /// - **置き換えの途中なら前の版へ戻す**（readopt）。前の版はslotに載ったまま鳴っている。
+    /// - **鎖に居る段のslotは返さない。**段は番号（externalIndex）を控えたまま鎖に残り、
+    ///   publishはその番号を出し続ける。返すと次に足したものが同じ番号を取り、1つの処理が
+    ///   鎖の2か所で回る。返すのは段を消したとき（remove(instanceID:)）。外れた段を建て直す
+    ///   ときも同じ番号のまま（reviveDeadCards）。ピッカーが待っている（ready）ものはまだ
+    ///   鎖に居ないので返す。
+    /// - `scriptFailed`（コンパイルできない・状態を読めない・時間切れ）で、その版が置き換えの
+    ///   途中なら置き換えを戻す（rollBackReplacement）。slotが足りないのは版のせいではないので戻さない。
+    private func fail(_ instance: Instance, _ error: Error, scriptFailed: Bool = false) {
+        let id = instance.id, bridge = ETAUExternalBridge.shared
         instance.error = error.localizedDescription
-        instance.ready?(.failure(error)); instance.ready = nil
-        ETAUExternalBridge.shared.remove(instanceID: instance.id)
-        instances.removeValue(forKey: instance.id)
-        // 置き換えた新しい版が建たなかった。slotは上で空いたので前の版も片付ける
-        // （前の版のファイルはもう無い。直した版をもう一度入れればadoptReplacementが拾う）。
-        retirePredecessor(of: instance)
+        instances.removeValue(forKey: id)
+        let ready = instance.ready
+        instance.ready = nil
+        if let previous = instance.predecessor {
+            instance.predecessor = nil
+            readopt(previous, ready: ready)
+        } else if let ready {
+            bridge.remove(instanceID: id)
+            ready(.failure(error))
+        } else if let index = bridge.index(for: id) {
+            // 載っているものは無いはずだが、番号だけ残して素通しにしておく。
+            ETPipeline_ClearExternalProcessorAt(UInt32(index))
+        }
+        if scriptFailed { rollBackReplacement(of: instance.entry.id) }
         revision &+= 1
+    }
+
+    /// 置き換えに失敗した段を前の版へ戻す。**前の版はslotに載ったまま鳴っている**ので表へ
+    /// 戻すだけで、音も番号も替わらない。置き換えを始めたとき（rebuild）に取り消した状態保存は
+    /// ここで頼み直す。ピッカーが待っていれば、前の版の段として出させる。
+    private func readopt(_ previous: Instance, ready: ((Result<UInt8, Error>) -> Void)?) {
+        instances[previous.id] = previous
+        startLatencyTimerIfNeeded()
+        snapshotState(previous)
+        guard let ready else { return }
+        if let index = ETAUExternalBridge.shared.index(for: previous.id) {
+            ready(.success(index))
+        } else {
+            ready(.failure(Self.loadError(previous.error ?? "Could not load JSFX.")))
+        }
     }
 
     private static func loadError(_ message: String) -> Error {
@@ -1283,6 +1355,12 @@ final class ETJSFXHost: ObservableObject {
         }
     }
 
+    /// hostがいま名乗っている遅れ（標本）。鎖を組むときにETPipelineがslotから読むのと同じ値。
+    private static func latency(of host: OpaquePointer) -> UInt32 {
+        var processor = ETJSFX_Processor(host)
+        return ETExternalProcessor_Latency(&processor)
+    }
+
     /// 置き換えた前の版のつまみを、建てたばかりの新しい版へ置く。
     /// **数と範囲が全部同じときだけ**（JSFXReplace.carriedSliderValues）。合わなければ何もしない
     /// ＝新しい版の既定から始まる。隠しつまみも数に入れる（readParametersは全部を返す）。
@@ -1310,11 +1388,120 @@ final class ETJSFXHost: ObservableObject {
         return JSFXReplace.Aliases(data: data) ?? .init()
     }
 
-    private func saveReplacedAliases() {
-        guard let url = Self.replacedAliasesURL() else { return }
+    /// 書けたらtrue。**置き換えは書けてからファイルを動かす**（replaceOlderVersions）。
+    @discardableResult
+    private static func saveReplacedAliases(_ aliases: JSFXReplace.Aliases) -> Bool {
+        guard let url = replacedAliasesURL() else { return false }
+        let data = aliases.encoded()
+        guard !data.isEmpty else { return false }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
-        try? replacedAliases.encoded().write(to: url, options: .atomic)
+        return (try? data.write(to: url, options: .atomic)) != nil
+    }
+
+    /// 置き換えた前の版の置き場。**Sourcesの隣で、中の`.jsfx`は一覧に出さない。**
+    /// 新しい版が1度建つまでここで待つ（commitReplacement / rollBackReplacement）。
+    private static func shelfURL(create: Bool) -> URL? {
+        guard let url = try? storageURL("JSFX/Replaced") else { return nil }
+        if create { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    /// 置き場の前の版。**新しく取り込んだ順**（ファイルの更新日時。移しても変わらない）。
+    private static func shelvedFiles() -> [(id: String, url: URL)] {
+        guard let shelf = shelfURL(create: false),
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: shelf, includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]) else { return [] }
+        func date(_ url: URL) -> Date {
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            return values?.contentModificationDate ?? .distantPast
+        }
+        return files.filter { $0.pathExtension.lowercased() == "jsfx" }
+            .map { (url: $0, date: date($0)) }
+            .sorted { $0.date > $1.date }
+            .map { (id: "jsfx:" + $0.url.deletingPathExtension().lastPathComponent, url: $0.url) }
+    }
+
+    /// 置き場で`target`が建つのを待っている前の版（新しい順）。
+    private func shelvedVersions(for target: String) -> [(id: String, url: URL)] {
+        Self.shelvedFiles().filter { replacedAliases.resolve($0.id) == target }
+    }
+
+    /// `target`が1度建った。置き場で待っていた前の版を消す（もう戻さない）。
+    /// **付け替えは残す**（前のidで保存したプリセット・バックアップはこれで引く）。
+    /// 消せなかったものは置き場に残り、次の起動で待ち直す（tidyShelf）。
+    private func commitReplacement(of target: String) {
+        guard pendingTargets.remove(target) != nil else { return }
+        for shelved in shelvedVersions(for: target) {
+            guard (try? FileManager.default.removeItem(at: shelved.url)) != nil else { continue }
+            Self.setStalled(shelved.id, false)
+        }
+    }
+
+    /// `target`が建たなかった（コンパイルできない・状態を読めない・時間切れ）。置き換えを戻す。
+    ///
+    /// 置き場の前の版を一覧へ戻し、付け替えを外す（JSFXReplace.Aliases.rollBack）。
+    /// **建たなかった新しい版は一覧に残す。**取り込んだものを黙って消さない。同じ名前が2本並ぶが、
+    /// 直した版を入れれば両方まとめて置き換わる。鳴っていた段は、置き換えに失敗した時点で
+    /// 前の版のまま（fail → readopt）。外れていた段は戻した版で建て直す。
+    /// **ファイルを先に戻す。**付け替えを書く前に落ちても、戻した版は一覧を先に引く
+    /// entry(id:)で自分のidのまま建つ。
+    private func rollBackReplacement(of target: String) {
+        guard pendingTargets.remove(target) != nil,
+              let sources = try? Self.storageURL("JSFX/Sources") else { return }
+        var restored: [String] = []
+        for shelved in shelvedVersions(for: target) {
+            let destination = sources.appendingPathComponent(shelved.url.lastPathComponent)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try? FileManager.default.removeItem(at: shelved.url)
+            } else {
+                guard (try? FileManager.default.moveItem(at: shelved.url, to: destination)) != nil else { continue }
+            }
+            restored.append(shelved.id)
+        }
+        guard !restored.isEmpty else { return }
+        replacedAliases.rollBack(target: target, restored: restored)
+        Self.saveReplacedAliases(replacedAliases)
+        refresh()
+        reviveDeadCards(resolvingTo: Set(restored))
+    }
+
+    /// `target`を消した。置き場で待っていた前の版も消す。
+    private func discardShelved(for target: String) {
+        pendingTargets.remove(target)
+        for shelved in shelvedVersions(for: target) {
+            try? FileManager.default.removeItem(at: shelved.url)
+        }
+    }
+
+    /// 起動のときに置き場を見直す（JSFXReplace.shelfFate）。行き先が一覧に居るものは待たせ、
+    /// 行き先を消した・同じ中身が一覧に居るものは消し、付け替えの無いものは一覧へ戻す。
+    ///
+    /// 一覧はJSFX/Sourcesを直に読む。読めなければ何もしない（空の一覧で見直すと、
+    /// 待っている前の版を「行き先を消した」と読んで消す）。閉じた版（isEnabled）でも触らない。
+    private func tidyShelf() {
+        guard Self.isEnabled else { return }
+        let shelved = Self.shelvedFiles()
+        guard !shelved.isEmpty,
+              let sources = try? Self.storageURL("JSFX/Sources"),
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: sources, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
+        let live = Set(files.filter { $0.pathExtension.lowercased() == "jsfx" }
+            .map { "jsfx:" + $0.deletingPathExtension().lastPathComponent })
+        var restored = false
+        for file in shelved {
+            switch JSFXReplace.shelfFate(of: file.id, aliases: replacedAliases, live: live) {
+            case .waiting(let target):
+                pendingTargets.insert(target)
+            case .discard:
+                try? FileManager.default.removeItem(at: file.url)
+            case .restore:
+                let destination = sources.appendingPathComponent(file.url.lastPathComponent)
+                if (try? FileManager.default.moveItem(at: file.url, to: destination)) != nil { restored = true }
+            }
+        }
+        if restored { refresh() }
     }
 
     private static func ownedEntries(at root: URL?, debug: Bool) -> [Entry] {
@@ -1344,7 +1531,8 @@ final class ETJSFXHost: ObservableObject {
             identifier = "jsfx:" + owned.deletingPathExtension().lastPathComponent
         }
         return Entry(id: identifier, name: metadata.name ?? fallbackName,
-                     author: metadata.author ?? "", url: owned, isDebugFixture: debug)
+                     author: metadata.author ?? "", url: owned, isDebugFixture: debug,
+                     identity: JSFXReplace.Identity(metadata: metadata))
     }
 
     /// Bundled debug fixtures are developer-owned files, not user imports.

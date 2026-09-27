@@ -1,8 +1,9 @@
 //  JSFXReplaceTests.swift
 //  取り込み直したJSFXで前の版を置き換える規則（Sources/EffeTuneLive/Audio/JSFXReplace.swift）。
-//  **ホストもエンジンも要らない。**同じ1本かの判定・付け替えの表（辿り方と輪の落とし方）・
-//  保存の形・つまみを持ち越すかを見る。ファイルを消す・段を建て直すのはETJSFXHost.importFileで、
-//  そちらは実機で見る。
+//  **ホストもエンジンも要らない。**同じ1本かの判定・付け替えの表（辿り方と輪の落とし方・
+//  置き換えを戻したときの付け替え）・保存の形・置き場の見直し・つまみを持ち越すかを見る。
+//  ファイルを動かす・段を建て直すのはETJSFXHost（importFile・commitReplacement・
+//  rollBackReplacement）で、そちらは実機で見る。
 
 import XCTest
 import Foundation
@@ -66,6 +67,15 @@ final class JSFXReplaceTests: XCTestCase {
     /// 大文字小文字は区別する（消すほうへ倒さない）。
     func testIdentityIsCaseSensitive() {
         XCTAssertNotEqual(identity("desc:Gain\n"), identity("desc:gain\n"))
+    }
+
+    /// 一覧を作るときに読んだ頭から作っても、ソースから作ったのと同じ鍵（ETJSFXHost.Entry.identity）。
+    func testIdentityFromMetadataMatchesSource() {
+        let source = "desc: Gain \nauthor:Masa\n@init\n"
+        XCTAssertEqual(JSFXReplace.Identity(metadata: JSFXReplace.metadata(source)), identity(source))
+        XCTAssertNil(JSFXReplace.Identity(metadata: (name: nil, author: "Masa")))
+        XCTAssertNil(JSFXReplace.Identity(metadata: (name: "  ", author: nil)))
+        XCTAssertEqual(JSFXReplace.Identity(metadata: (name: "Gain", author: nil))?.author, "")
     }
 
     // MARK: - 置き換える相手
@@ -197,16 +207,85 @@ final class JSFXReplaceTests: XCTestCase {
         XCTAssertTrue(aliases.isEmpty)
     }
 
-    /// 消した1本を指していた付け替えは全部消える。ほかは残る。
-    func testRemovingTargetDropsItsAliases() {
+    // MARK: - 置き換えを戻す
+
+    /// v2が建たなかった。戻したv1の鍵は外れ、v1は自分のidで引ける（付け替えなし）。
+    func testRollBackDropsRestoredKeys() {
         var aliases = JSFXReplace.Aliases()
         aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        aliases.redirect(from: "jsfx:x", to: "jsfx:y")
+        aliases.rollBack(target: "jsfx:v2", restored: ["jsfx:v1"])
+        XCTAssertNil(aliases.resolve("jsfx:v1"))
+        XCTAssertEqual(aliases.map, ["jsfx:x": "jsfx:y"], "ほかの1本の付け替えは残る")
+    }
+
+    /// v0→v1を置き換え終えたあと、v2で置き換えて建たなかった。v0はv1へ戻る（v2へ残さない）。
+    func testRollBackRepointsOlderAliasesToRestored() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v0", to: "jsfx:v1")
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        XCTAssertEqual(aliases.resolve("jsfx:v0"), "jsfx:v2")
+        aliases.rollBack(target: "jsfx:v2", restored: ["jsfx:v1"])
+        XCTAssertEqual(aliases.map, ["jsfx:v0": "jsfx:v1"])
+    }
+
+    /// 2本戻したときは、ほかの付け替えはいちばん新しい版（先頭）へ。戻した2本は鍵から外れる。
+    func testRollBackWithSeveralRestoredPrefersNewest() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v0", to: "jsfx:v1")
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v3")
         aliases.redirect(from: "jsfx:v2", to: "jsfx:v3")
-        aliases.redirect(from: "jsfx:a1", to: "jsfx:a2")
-        XCTAssertTrue(aliases.remove(target: "jsfx:v3"))
-        XCTAssertEqual(aliases.map, ["jsfx:a1": "jsfx:a2"])
-        XCTAssertFalse(aliases.remove(target: "jsfx:v3"), "2度目は消すものが無い")
-        XCTAssertFalse(aliases.remove(target: "jsfx:nothing"))
+        aliases.rollBack(target: "jsfx:v3", restored: ["jsfx:v2", "jsfx:v1"])
+        XCTAssertEqual(aliases.map, ["jsfx:v0": "jsfx:v2"])
+    }
+
+    /// 戻したものが無ければ何もしない（付け替えをv2に残す）。
+    func testRollBackWithNothingRestoredKeepsAliases() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        aliases.rollBack(target: "jsfx:v2", restored: [])
+        XCTAssertEqual(aliases.map, ["jsfx:v1": "jsfx:v2"])
+    }
+
+    /// 戻したあとにもう一度直した版を入れれば、戻した版も建たなかった版もまとめて付け替わる。
+    func testFixAfterRollBackRedirectsBoth() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        aliases.rollBack(target: "jsfx:v2", restored: ["jsfx:v1"])
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v3")
+        aliases.redirect(from: "jsfx:v2", to: "jsfx:v3")
+        XCTAssertEqual(aliases.map, ["jsfx:v1": "jsfx:v3", "jsfx:v2": "jsfx:v3"])
+    }
+
+    // MARK: - 置き場の見直し
+
+    func testShelvedVersionWaitsForLiveTarget() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        XCTAssertEqual(JSFXReplace.shelfFate(of: "jsfx:v1", aliases: aliases, live: ["jsfx:v2"]),
+                       .waiting("jsfx:v2"))
+    }
+
+    /// 行き先を消したなら、待っていた前の版も要らない。
+    func testShelvedVersionOfDeletedTargetIsDiscarded() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        XCTAssertEqual(JSFXReplace.shelfFate(of: "jsfx:v1", aliases: aliases, live: ["jsfx:other"]),
+                       .discard)
+    }
+
+    /// 同じ中身が一覧に居る（前の版を入れ直した）なら、置き場の写しは要らない。
+    func testShelvedCopyOfLiveVersionIsDiscarded() {
+        var aliases = JSFXReplace.Aliases()
+        aliases.redirect(from: "jsfx:v1", to: "jsfx:v2")
+        XCTAssertEqual(JSFXReplace.shelfFate(of: "jsfx:v1", aliases: aliases, live: ["jsfx:v1", "jsfx:v2"]),
+                       .discard)
+    }
+
+    /// 付け替えの無いもの（表が読めなかった・戻す途中で落ちた）は消さずに一覧へ戻す。
+    func testShelvedVersionWithoutAliasIsRestored() {
+        XCTAssertEqual(JSFXReplace.shelfFate(of: "jsfx:v1", aliases: JSFXReplace.Aliases(), live: ["jsfx:v2"]),
+                       .restore)
     }
 
     // MARK: - 保存の形

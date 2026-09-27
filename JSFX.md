@@ -136,6 +136,8 @@ word in a string, break it up (`"inclu" + "de("`).
 
 - [ ] `desc:` is the first non-comment line
 - [ ] `author:` is the user's name, not yours
+- [ ] after a fix, `desc:` and `author:` are exactly as before; a new effect
+      has a specific `desc:` of its own
 - [ ] no line begins with `import`, `filename:`, or `data:`
 - [ ] the text `include(` appears nowhere (strings and comments included)
 - [ ] no MIDI function, no file slider, no external resource
@@ -151,6 +153,15 @@ They cannot put a script together from pieces.
 
 - **Always hand over the whole script**, also after a fix or a change. Never
   send only the changed lines, a diff, or "replace this part with".
+- **After a fix, keep `desc:` and `author:` exactly as they were.** EffectDeck
+  treats an imported script with the same `desc:` and `author:` as a new
+  version of the one already there: it replaces the old one in the Plugins
+  list and switches the effects in the chain over to it. A changed `desc:`
+  (for example with "v2" or "fixed" added) makes it a separate effect, and the
+  old one stays next to it.
+- **Give a new effect a specific `desc:`**, such as `desc:Vocal Compressor`
+  rather than `desc:Compressor`. A new script with the same `desc:` and
+  `author:` as one the user already imported replaces it.
 - **As a file if you can create files:** one downloadable file holding the
   complete script, named after the effect with the `.jsfx` extension (for
   example `Tape Wobble.jsfx`).

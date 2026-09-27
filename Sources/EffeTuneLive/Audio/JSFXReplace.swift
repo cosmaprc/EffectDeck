@@ -3,12 +3,14 @@
 //
 //  idはソースのsha256（ETJSFXHost.ownedCopyの置き場の名前）なので、ChatGPTに直させた版を
 //  入れ直すたびに別の1本として並び、Pluginsの一覧が際限なく伸びていた。
-//  `desc:`と`author:`が同じなら同じ1本の新しい版とみなし、前の版を消して
-//  「前のid → 新しいid」の付け替えを残す。鎖・プリセット・バックアップ・共有リンクは
+//  `desc:`と`author:`が同じなら同じ1本の新しい版とみなし、前の版を置き場（JSFX/Replaced）へ
+//  移して「前のid → 新しいid」の付け替えを残す。鎖・プリセット・バックアップ・共有リンクは
 //  前のidのまま書かれているので、引くときにこの付け替えを辿る（ETJSFXHost.entry(id:)）。
+//  **前の版は新しい版が1度建つまで消さない。**建たなければ（コンパイルできない・時間切れ）
+//  前の版を一覧へ戻し、付け替えも戻す（Aliases.rollBack）。
 //
-//  ここにあるのは判定と付け替えの表と保存の形だけ。ファイルを消す・段を建て直すのは
-//  ETJSFXHost.importFile。
+//  ここにあるのは判定と付け替えの表と保存の形と置き場の見直し方だけ。ファイルを動かす・
+//  段を建て直すのはETJSFXHost（importFile・commitReplacement・rollBackReplacement）。
 
 import Foundation
 
@@ -52,10 +54,15 @@ enum JSFXReplace {
         /// 貼り付けたものはどれも同じ仮の名前（pasted）になるので、名前で束ねると別物を消す。
         /// `author:`は無くても空でもよく、どちらも空として比べる。
         init?(source: String) {
-            let found = JSFXReplace.metadata(source)
-            guard let name = found.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+            self.init(metadata: JSFXReplace.metadata(source))
+        }
+
+        /// 読み終えた頭（metadata）から作る。一覧を作るときに1度読んだものを使い回す
+        /// （ETJSFXHost.Entry.identity。取り込むたびに全部のソースを読み直さない）。
+        init?(metadata: (name: String?, author: String?)) {
+            guard let name = metadata.name?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !name.isEmpty else { return nil }
-            self.init(name: name, author: found.author ?? "")
+            self.init(name: name, author: metadata.author ?? "")
         }
     }
 
@@ -68,7 +75,7 @@ enum JSFXReplace {
         let isBundled: Bool
     }
 
-    /// `newID`を取り込んだときに置き換える（消して付け替える）もの。一覧の順のまま返す。
+    /// `newID`を取り込んだときに置き換える（置き場へ移して付け替える）もの。一覧の順のまま返す。
     ///
     /// - 人が入れたものだけ。**同梱の見本は置き換えない。**同じ名前で入れたものは今までどおり
     ///   別の1本として並ぶ。
@@ -148,14 +155,20 @@ enum JSFXReplace {
             map = Self.normalized(next)
         }
 
-        /// `id`の1本を消した。**そこへ付け替えていたものを全部消す。**
-        /// 残すと、消したものを指す鍵がいつまでも引けないまま残る。消したらtrue。
-        @discardableResult
-        mutating func remove(target id: String) -> Bool {
-            let kept = map.filter { key, _ in key != id && resolve(key) != id }
-            guard kept.count != map.count else { return false }
-            map = kept
-            return true
+        /// `target`での置き換えを戻した。`restored`は置き場から一覧へ戻した前の版で、**新しい順**。
+        ///
+        /// - `restored`の鍵は外す（いま生きた1本）。
+        /// - ほかに`target`へ付け替えていたもの（もっと前に置き換え終えた版）は、戻した中で
+        ///   いちばん新しい版へ。表は潰して持つので、どの版を経て来たかは残っていない。
+        /// - `target`から出ている付け替えは元から無い（生きた1本）。`restored`が空なら何もしない。
+        mutating func rollBack(target: String, restored: [String]) {
+            guard let newest = restored.first else { return }
+            let back = Set(restored)
+            var next = map
+            for (key, value) in map where value == target {
+                next[key] = back.contains(key) ? nil : newest
+            }
+            map = Self.normalized(next)
         }
 
         private static func resolve(_ id: String, in map: [String: String]) -> String? {
@@ -200,5 +213,28 @@ enum JSFXReplace {
             guard let file = try? JSONDecoder().decode(File.self, from: data) else { return nil }
             self.init(file.aliases)
         }
+    }
+
+    // MARK: - 置き場の見直し
+
+    /// 置き場（JSFX/Replaced）に残っている前の版をどうするか。起動のときに決める。
+    enum ShelfFate: Equatable, Sendable {
+        /// 新しい版（行き先のid）が建つのを待たせる。
+        case waiting(String)
+        /// 消してよい。同じ中身が一覧に居る（前の版を入れ直した）か、行き先を消した。
+        case discard
+        /// 一覧へ戻す。付け替えが無いので、置き場に置いたままだと誰からも引けない。
+        case restore
+    }
+
+    /// `id`の前の版の行き先。`live`は一覧（JSFX/Sources）に在る1本のid。
+    ///
+    /// **行き先の分からないものは消さずに戻す。**付け替えの表が読めなかった・戻す途中で
+    /// 落ちたときがこれで、消すと人が入れたものが黙って無くなる。戻すと一覧に同じ名前が
+    /// 2本並ぶが、次に取り込んだときにまとまる。
+    static func shelfFate(of id: String, aliases: Aliases, live: Set<String>) -> ShelfFate {
+        if live.contains(id) { return .discard }
+        guard let target = aliases.resolve(id) else { return .restore }
+        return live.contains(target) ? .waiting(target) : .discard
     }
 }
