@@ -9,8 +9,9 @@
 //  Doubleの丸めの差しか無い。係数はどちらもFloatへ落としてから比べるので、許す幅は
 //  「Floatの2ulp」か「最大の係数の1e-12」の大きいほう。
 //  応答の曲線は線形の振幅で比べる（深い阻止域ではFloatの1ulpの差がdBで大きく見えるため）。
-//  帯域1本の式（Doubleのまま）だけは対数で比べる。libmの1ulpの差が桁落ちとslope/12乗で膨らむため
-//  （BandFIRPEQDesignTests.testRBJPerTypeMatchesUpstream）。
+//  帯域1本の式と5Band FIR PEQの狙いの曲線（Doubleのまま）は対数で比べる。libmの1ulpの差が
+//  桁落ちとslope/12乗で膨らむため（BandFIRPEQDesignTests.testRBJPerTypeMatchesUpstream・
+//  testDesignMatchesUpstream）。最大誤差はFloatの係数の丸めで動く分を許す（同じ試験の注）。
 
 import XCTest
 
@@ -88,6 +89,8 @@ struct DesignersAGolden: Decodable {
             let filterDelaySamples: Int
             let resolutionHz: Double
             let qualityWarnings: [String]
+            /// 上流の戻り値には無い。見本の生成器がdesign-core.jsを評価し直して控えた値。
+            let maximumErrorDb: Double
             let responsePointCount: Int
             let response: Response
             let channel: ChannelStats

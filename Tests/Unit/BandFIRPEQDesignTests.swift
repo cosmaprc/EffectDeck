@@ -99,7 +99,20 @@ final class BandFIRPEQDesignTests: XCTestCase {
 
     // MARK: - 設計
 
-    /// 係数・遅延・分解能・狙いと出来上がりの曲線・精度の警告が、上流のdesignFiveBandFirPeqと一致する。
+    /// 係数・遅延・分解能・狙いと出来上がりの曲線・最大誤差と精度の警告が、上流のdesignFiveBandFirPeqと一致する。
+    ///
+    /// 狙いの曲線（dB）は、帯域1本の試験（testRBJPerTypeMatchesUpstream）と同じ理由で1e-9では比べない。
+    /// 狙いは効く帯の応答の積なので、帯域1本の幅（lnで1e-6×max(1, slope/12)）を有効な帯について足し、
+    /// dBに直して許す（見本の6例で3.5e-5〜1.0e-4 dB）。cos・sin・pow・hypotを呼ぶたび±1ulp振ると
+    /// 最大1.3e-8 dB動く（min-steep-96k、hp 60Hz・slope 96の19Hz）ので、この幅はその数千倍ある。
+    ///
+    /// 最大誤差は画面の「Accuracy is off by up to %.1f dB.」の数。Floatへ落とした係数の丸めで動くので、
+    /// 係数の照合が許す差（2ulp）が最大の係数に乗ったときの上限まで許す: 係数1本がΔ動くと各binの振幅は
+    /// 高々Δ動き、検証は1e-4（design-core.jsのVERIFICATION_FLOOR）より下を見ないので、
+    /// 20/ln10 × 2ulp(最大の係数) / 1e-4 dB（見本の6例で3.2e-4〜4.1e-2 dB）。
+    /// 上流の設計で試すと、最大の係数を±2ulp動かして最大6.0e-3 dB、全部の係数を±1ulp振って最大8.1e-3 dB
+    /// （どちらもmin-steep-96k）。この幅でも式の取り違えは落ちる: 検証の下端を20Hzから40Hzにすると
+    /// min-steep-96kは11.72→0.71 dB、lin-clamped-32kは0.052→0.029 dBに動く。
     func testDesignMatchesUpstream() throws {
         for design in try DesignersAGolden.load().bandFirPeq.designs {
             let label = design.input.name
@@ -112,6 +125,14 @@ final class BandFIRPEQDesignTests: XCTestCase {
             XCTAssertEqual(result.resolutionHz, design.resolutionHz, accuracy: 1e-12, "\(label) 分解能")
             XCTAssertEqual(result.hasAccuracyWarning, !design.qualityWarnings.isEmpty,
                            "\(label) 精度の警告（最大誤差 \(result.maximumErrorDb) dB）")
+            let errorTolerance = 20 / log(10.0) * 2 * Double(Float(design.channel.peak).ulp) / 1e-4
+            XCTAssertEqual(result.maximumErrorDb, design.maximumErrorDb, accuracy: errorTolerance,
+                           "\(label) 最大誤差")
+
+            let lnTolerance = 1e-6 * max(1, config.bands.filter(\.enabled)
+                .map { $0.type.usesSlope ? max(1, $0.slope / 12) : 1 }
+                .reduce(0, +))
+            let targetTolerance = 20 / log(10.0) * lnTolerance
 
             XCTAssertEqual(result.response.frequencies.count, design.responsePointCount, "\(label) 曲線の点数")
             for (k, index) in design.response.indices.enumerated() {
@@ -122,7 +143,8 @@ final class BandFIRPEQDesignTests: XCTestCase {
                 XCTAssertTrue(DesignerMatch.close(result.response.frequencies[index],
                                                   design.response.frequencies[k], relative: 1e-12),
                               "\(label) f[\(index)]")
-                XCTAssertEqual(result.response.targetDb[index], design.response.targetDb[k], accuracy: 1e-9,
+                XCTAssertEqual(result.response.targetDb[index], design.response.targetDb[k],
+                               accuracy: targetTolerance,
                                "\(label) 狙い[\(index)] @\(design.response.frequencies[k])Hz")
                 let realized = pow(10, result.response.realizedDb[index] / 20)
                 let expected = pow(10, design.response.realizedDb[k] / 20)

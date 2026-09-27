@@ -112,6 +112,7 @@
      "sampleRate": 48000,
      "taps": 8192
     },
+    "maximumErrorDb": 7.073094174892664e-7,
     "qualityWarnings": [],
     "resolutionHz": 5.859375,
     "response": {
@@ -232,6 +233,7 @@
      "sampleRate": 44100,
      "taps": 8192
     },
+    "maximumErrorDb": 1.5157272939051878,
     "qualityWarnings": ["filterAccuracy"],
     "resolutionHz": 5.38330078125,
     "response": {
@@ -352,6 +354,7 @@
      "sampleRate": 96000,
      "taps": 16384
     },
+    "maximumErrorDb": 11.719998977904456,
     "qualityWarnings": ["filterAccuracy"],
     "resolutionHz": 5.859375,
     "response": {
@@ -472,6 +475,7 @@
      "sampleRate": 32000,
      "taps": 8192
     },
+    "maximumErrorDb": 0.05214536987121405,
     "qualityWarnings": [],
     "resolutionHz": 3.90625,
     "response": {
@@ -592,6 +596,7 @@
      "sampleRate": 0,
      "taps": 8192
     },
+    "maximumErrorDb": 0,
     "qualityWarnings": [],
     "resolutionHz": 5.859375,
     "response": {
@@ -712,6 +717,7 @@
      "sampleRate": 5000.4,
      "taps": 8192
     },
+    "maximumErrorDb": 0.0005327206813355885,
     "qualityWarnings": [],
     "resolutionHz": 0.9765625,
     "response": {

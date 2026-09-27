@@ -24,6 +24,10 @@
 // ここでDoubleの基数2のFFTを差す。約束はfft.jsと同じ（前進は正規化なしでN/2+1個、
 // 逆は1/Nを掛けた実部）。設計の手順・丸め・窓・Float32へ落とす位置は上流のまま。
 //
+// --- 5Band FIR PEQの最大誤差 ---
+// designFiveBandFirPeqは最大誤差（maximumErrorDb）を返さないので、design-core.jsの本文を
+// 評価し直した版から控える（下の「5Band FIR PEQの最大誤差を上流から取る」）。
+//
 // --- bass_management.jsの読み方 ---
 // 画面のクラス（PluginBaseを継ぐただのscript）なので、PluginBaseの代役と空のwindowを渡して
 // new Functionで評価し、判断だけをするメソッドを直に呼ぶ。_setSubOutputEnabledは最後に
@@ -122,6 +126,52 @@ const doubleFFT = {
 };
 peq.setFiveBandFirPeqFftBackend(doubleFFT);
 crossover.setFIRCrossoverFftBackend(doubleFFT);
+
+// ---- 5Band FIR PEQの最大誤差を上流から取る ----
+// 画面の「Accuracy is off by up to %.1f dB.」の数はmaximumErrorDbだが、designFiveBandFirPeqの
+// 戻り値は警告の有無（qualityWarnings）しか持たない。design-core.jsの本文を読んで評価し直し、
+// measureMagnitudeResponseの結果を1行で控える。書き換えは次の2か所だけで、どちらも1回ずつ当たる
+// ことを確かめる: fft.jsのimportを絶対URLにする（data: URLからは相対で引けない）、控える1行を足す。
+// 評価し直した版の係数と警告が元の版と一致することも下で確かめる（書き換えで設計が変わっていない）。
+function replaceOnce(text, from, to) {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + from.length) >= 0) {
+        throw new Error(`five-band-fir-peq/design-core.js: 「${from}」が1か所でない（上流が変わった）`);
+    }
+    return text.slice(0, at) + to + text.slice(at + from.length);
+}
+const peqMeasureLine = 'const { maximumErrorDb, response } = measureMagnitudeResponse(taps, magnitudes, config);';
+let peqProbeSource = fs.readFileSync(path.join(root, 'js', 'five-band-fir-peq', 'design-core.js'), 'utf8');
+peqProbeSource = replaceOnce(peqProbeSource, "from '../utils/measurement-dsp/fft.js'",
+    `from '${pathToFileURL(path.join(root, 'js', 'utils', 'measurement-dsp', 'fft.js')).href}'`);
+peqProbeSource = replaceOnce(peqProbeSource, peqMeasureLine,
+    `${peqMeasureLine}\n    probedMaximumErrorDb = maximumErrorDb;`);
+peqProbeSource += '\nlet probedMaximumErrorDb = NaN;\n'
+    + 'export function takeProbedMaximumErrorDb() {\n'
+    + '    const value = probedMaximumErrorDb;\n'
+    + '    probedMaximumErrorDb = NaN;\n'
+    + '    return value;\n'
+    + '}\n';
+const peqProbe = await import('data:text/javascript;base64,' + Buffer.from(peqProbeSource).toString('base64'));
+
+// 控えから返ると測り直さない（NaNのまま）ので、呼ぶたびにsetFiveBandFirPeqFftBackendで控えを空にする。
+function probePeqMaximumErrorDb(candidate, expected) {
+    peqProbe.setFiveBandFirPeqFftBackend(doubleFFT);
+    const probed = peqProbe.designFiveBandFirPeq(candidate);
+    const maximumErrorDb = peqProbe.takeProbedMaximumErrorDb();
+    if (Number.isNaN(maximumErrorDb)) throw new Error('maximumErrorDb を控えられなかった');
+    finite(maximumErrorDb, 'maximumErrorDb');
+    const a = probed.channels[0];
+    const b = expected.channels[0];
+    if (a.length !== b.length || a.some((value, index) => !Object.is(value, b[index]))
+        || JSON.stringify(probed.qualityWarnings) !== JSON.stringify(expected.qualityWarnings)) {
+        throw new Error('評価し直したdesign-core.jsの設計が元と違う');
+    }
+    if ((maximumErrorDb > 0.5) !== (expected.qualityWarnings.length > 0)) {
+        throw new Error('maximumErrorDb と qualityWarnings が食い違う');
+    }
+    return maximumErrorDb;
+}
 
 // ---- 道具 ----
 
@@ -280,12 +330,13 @@ const peqCases = [
 
 const responseStride = 8;
 const peqDesigns = peqCases.map(input => {
-    const result = peq.designFiveBandFirPeq({
+    const candidate = () => ({
         sampleRate: input.sampleRate,
         taps: input.taps,
         phase: input.phase,
-        eqBands: input.bands
+        eqBands: input.bands.map(band => ({ ...band }))
     });
+    const result = peq.designFiveBandFirPeq(candidate());
     const indices = Array.from({ length: Math.ceil(result.response.frequencies.length / responseStride) },
         (_, k) => k * responseStride);
     return {
@@ -294,6 +345,7 @@ const peqDesigns = peqCases.map(input => {
         filterDelaySamples: result.latencyInfo.filterDelaySamples,
         resolutionHz: result.latencyInfo.resolutionHz,
         qualityWarnings: result.qualityWarnings,
+        maximumErrorDb: probePeqMaximumErrorDb(candidate(), result),
         responsePointCount: result.response.frequencies.length,
         response: {
             indices,
@@ -501,7 +553,7 @@ const configurationError = [...structured, ...randomStates].map(s => ({
 }));
 
 const routeSummary = [...structured.slice(2), ...randomStates.slice(0, 30),
-    state(4, s => { s.subs = 8; s.roles = [0, 0, 3, 2, ...Array(12).fill(0)]; }),  // ManagedもLFEも無い
+    state(4, s => { s.subs = 8; s.roles = [0, 0, 3, 2, ...Array(12).fill(0)]; }),  // Sub（Ch 4）に置いたLFEが経路なし（Unusedも混ぜる）
     state(3, s => { s.roles[0] = 1; })                                          // Subなし
 ].filter(s => s.width >= 1 && s.width <= 16).map(s => {
     const p = plugin(s);
