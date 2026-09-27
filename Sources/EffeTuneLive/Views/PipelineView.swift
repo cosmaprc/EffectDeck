@@ -66,6 +66,9 @@ struct PipelineView: View {
     /// 2列で、ピッカーをpopoverでなく根のシートで出しているか。
     /// **出すときに決め、閉じるまで変えない**（openPicker）。
     @State private var pickerInSheet = false
+    /// ピッカーが本当に画面に出ているか（シートでもpopoverでも）。ETPickerHostが立てる。
+    /// sheetが.pickerでも、同じ回に頼んだだけでまだ出ていないことがある（drainShared）。
+    @State private var pickerOnScreen = false
     /// 「Reset chain」の確認を出しているか。
     /// ツールバーは ToolbarContent で View ではないから .confirmationDialog を
     /// 持てない。押されたことだけ Binding で受け取り、出すのは下の List 側。
@@ -239,7 +242,7 @@ struct PipelineView: View {
             switch which {
             case .picker:
                 ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
-                             pane: $pickerPane, fresh: $freshJSFX)
+                             pane: $pickerPane, fresh: $freshJSFX, onScreen: $pickerOnScreen)
             case .settings:
                 SettingsView(io: io)
             case .routing:
@@ -456,6 +459,7 @@ struct PipelineView: View {
                         pickerAsPopover: pickerAsPopover,
                         pickerAnchored: $pickerAnchored, pickerInSheet: $pickerInSheet,
                         pickerPane: $pickerPane, freshJSFX: $freshJSFX,
+                        pickerOnScreen: $pickerOnScreen,
                         pluginError: $pluginError, afterSheet: $afterSheet)
     }
 
@@ -475,12 +479,14 @@ struct PipelineView: View {
     /// `fresh`は取り込んだばかりのJSFX（id）。渡すとPluginsで開き、その行を塗る。
     /// **面は開くときに指す（openPicker）。**先に指すと、2列で畳むのを待つ間に
     /// onChange(of: sheet)がEffectsへ戻してしまう（出ていたシート→nilはピッカーを経ない）。
+    /// 畳むのを待つ間に待っていた続き（警告）は、ピッカーが閉じた後へ回す（openAfterClosingSheet）。
     private func presentPicker(fresh: String? = nil) {
         guard usesSplit, let open = sheet, open != .picker else {
             openPicker(fresh: fresh)
             return
         }
-        afterClosingSheet { openPicker(fresh: fresh) }
+        Self.openAfterClosingSheet({ openPicker(fresh: fresh) },
+                                   sheet: $sheet, afterSheet: $afterSheet)
     }
 
     /// ピッカーを立てる。**2列で+がまだ画面に居なければ、popoverでなくシートで出す。**
@@ -509,7 +515,7 @@ struct PipelineView: View {
             sheet = which
             return
         }
-        afterClosingSheet { sheet = which }
+        Self.openAfterClosingSheet({ sheet = which }, sheet: $sheet, afterSheet: $afterSheet)
     }
 
     /// 窓の幅。**跨いだときだけ書く。**同じ値を書いても、送るたびの組み直しは起きないが、
@@ -738,6 +744,10 @@ struct PipelineView: View {
     /// **開くのは最後の1つだけ。**1列では、前のものは同じ回で次のsheetに上書きされて出ない。
     /// 2列では、次のものが前のものを畳んでから出ようとする（presentSheet・presentPicker）が、
     /// 前のものはまだ出ていないので閉じた知らせが来ず、どちらも出ないまま残っていた。
+    ///
+    /// **頼んだだけでまだ出ていないピッカーも畳まない。**JSFXのリンク（openLink）と同じ回に
+    /// 断りだけが届くと、畳まれたピッカーは出ないまま閉じた知らせも寄越さず、警告は関係の無い
+    /// 次のシートを閉じるまで残り、面もPluginsのままだった。出ているピッカーは今までどおり畳んで出す。
     private func drainShared() {
         guard let root = ETShareInbox.root else { return }
         let received = ETShareInbox.drain(in: root, { ETInbox.receive($0) })
@@ -751,12 +761,13 @@ struct PipelineView: View {
             }
         }
         if let opener { show(opener, unsupported: ETInbox.unsupportedLink) }
+        let waits = opener != nil || (sheet == .picker && !pickerOnScreen)
         for item in received {
             switch item {
             case .ir, .jsfx:
                 break
             case .failed, .unsupported:
-                if opener != nil {
+                if waits {
                     afterOpened { show(item, unsupported: ETInbox.unsupportedLink) }
                 } else {
                     show(item, unsupported: ETInbox.unsupportedLink)
@@ -771,14 +782,7 @@ struct PipelineView: View {
     /// （presentPicker・presentSheet）、開く側がもうafterSheetで待っていることがある。
     /// 上書きするとピッカーが出なくなる。後ろへ繋ぎ、開いたものが出たらそれが閉じるのを待つ。
     private func afterOpened(_ next: @escaping () -> Void) {
-        guard let opening = afterSheet else {
-            afterSheet = next
-            return
-        }
-        afterSheet = {
-            opening()
-            if sheet != nil { afterSheet = next } else { next() }
-        }
+        Self.queueAfterSheet(next, sheet: $sheet, afterSheet: $afterSheet)
     }
 
     /// 鎖。1列でも2列でも同じもの。`split`は2列の右に置くときに真。
@@ -803,7 +807,7 @@ struct PipelineView: View {
                 .padding(.vertical, 4)
 
             if !hasPeer {
-                ConnectBanner(openTips: { sheet = .tips })
+                ConnectBanner(openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
@@ -1557,6 +1561,44 @@ struct PipelineView: View {
         next?()
     }
 
+    /// afterSheetの**後ろへ**`next`を繋ぐ。上書きしない（afterOpened）。
+    /// 前のものがシートを開いたら、`next`はそのシートが閉じるまで待つ。そのシートの後ろに
+    /// 別のものが既に待っていれば、さらにその後ろへ回る。
+    /// ツールバー（PipelineToolbar.present）からも使うので、状態はBindingで受ける。
+    fileprivate static func queueAfterSheet(_ next: @escaping () -> Void,
+                                            sheet: Binding<Sheet?>,
+                                            afterSheet: Binding<(() -> Void)?>) {
+        guard let first = afterSheet.wrappedValue else {
+            afterSheet.wrappedValue = next
+            return
+        }
+        afterSheet.wrappedValue = {
+            first()
+            if sheet.wrappedValue != nil {
+                PipelineView.queueAfterSheet(next, sheet: sheet, afterSheet: afterSheet)
+            } else {
+                next()
+            }
+        }
+    }
+
+    /// 出ているシート（2列ではピッカーのpopover）を畳み、畳み終えてから`opening`で次を出す。
+    /// 2列のpresentPicker・presentSheetと、ツールバーのpresentが使う。
+    ///
+    /// **待っていた続きを捨てない。**出したものが閉じた後へ回す。1列でsheetを入れ替えたときと
+    /// 同じ順になる（入れ替えてもafterSheetは残り、新しいシートが閉じてから走る）。
+    /// 上書きしていた頃は、共有のIRと読めないファイルが届いてIRの一覧の後ろで警告が待っている間に
+    /// JSFXが届くと、ピッカーは出ても警告は出ないまま消えていた。
+    fileprivate static func openAfterClosingSheet(_ opening: @escaping () -> Void,
+                                                  sheet: Binding<Sheet?>,
+                                                  afterSheet: Binding<(() -> Void)?>) {
+        guard sheet.wrappedValue != nil else { opening(); return }
+        let waiting = afterSheet.wrappedValue
+        afterSheet.wrappedValue = opening
+        sheet.wrappedValue = nil
+        if let waiting { queueAfterSheet(waiting, sheet: sheet, afterSheet: afterSheet) }
+    }
+
     /// 確かめたあとに消す。配下は連れない。
     private func removeConfirmed(_ id: UUID) {
         guard let i = dsp.chain.firstIndex(where: { $0.id == id }) else { return }
@@ -1687,6 +1729,8 @@ private struct PipelineToolbar: ToolbarContent {
     /// popoverのピッカーの面と、取り込んだばかりのJSFX。根のシートと同じ値（持ち主は親）。
     @Binding var pickerPane: EffectPickerView.Pane
     @Binding var freshJSFX: String?
+    /// ピッカーが画面に出ているか。popoverのETPickerHostが立てる（持ち主は親。drainSharedが見る）。
+    @Binding var pickerOnScreen: Bool
     @Binding var pluginError: String?
     @Binding var afterSheet: (() -> Void)?
 
@@ -1722,6 +1766,24 @@ private struct PipelineToolbar: ToolbarContent {
             after.wrappedValue = nil
             next?()
         }
+    }
+
+    /// Presets・Settings・Routingを出す。**2列でpopoverが出ていたら、畳み終えてから出す**
+    /// （親のpresentSheetと同じ）。1列は今までどおりその場で替える。
+    ///
+    /// popoverは+に付けてあり、出ている間もバーの他の項目は押せる。同じ回にsheetを替えると、
+    /// popoverが畳み終わる前に根のシートを出すことになり、出ないまま残る。sheetは替わったままなので
+    /// 押し直しても何も起きず、popoverの後ろで待っていた警告も出ないシートを待ち続ける。
+    /// 親のpresentSheetを閉包で受け取らないのは、閉包は毎回違う値になり、親が作り直されるたびに
+    /// ここも評価し直されるから（提示の途中のMenuが作り直される。型の頭）。
+    private func present(_ which: PipelineView.Sheet) {
+        guard pickerAsPopover, sheet == .picker else {
+            sheet = which
+            return
+        }
+        let shown = $sheet
+        PipelineView.openAfterClosingSheet({ shown.wrappedValue = which },
+                                           sheet: $sheet, afterSheet: $afterSheet)
     }
 
     var body: some ToolbarContent {
@@ -1766,7 +1828,7 @@ private struct PipelineToolbar: ToolbarContent {
             LiveStatusStrip(io: io)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Button("Presets", systemImage: "square.stack") { sheet = .presets }
+            Button("Presets", systemImage: "square.stack") { present(.presets) }
             if pickerAsPopover {
                 // **+から出す。**選ぶたびに閉じる。つまんで運ぶと自分で閉じ、
                 // 右のカード・余白、左の一覧の行の間のどれへでも落とせる。
@@ -1778,6 +1840,7 @@ private struct PipelineToolbar: ToolbarContent {
                     .popover(isPresented: pickerShown) {
                         ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
                                      pane: $pickerPane, fresh: $freshJSFX,
+                                     onScreen: $pickerOnScreen,
                                      waitsForDismissal: true)
                             .frame(minWidth: 380, idealWidth: 420,
                                    minHeight: 520, idealHeight: 720)
@@ -1796,8 +1859,8 @@ private struct PipelineToolbar: ToolbarContent {
             }
             // IR Library はここに出さない。IR Reverb のカードから開く。
             Menu {
-                Button("Settings", systemImage: "gearshape") { sheet = .settings }
-                Button("Routing", systemImage: "arrow.triangle.branch") { sheet = .routing }
+                Button("Settings", systemImage: "gearshape") { present(.settings) }
+                Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
                 Divider()
                 // 上流に鎖を空にする操作は無く、既定を組む所を
                 // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
@@ -1833,6 +1896,9 @@ struct ETPickerHost: View {
     /// 持ち主はPipelineView。取り込みの口がPluginsを指して開く（openPicker）。
     @Binding var pane: EffectPickerView.Pane
     @Binding var fresh: String?
+    /// 画面に出ているか。持ち主はPipelineView（drainSharedが、頼んだだけでまだ出ていない
+    /// ピッカーを畳まないために見る）。
+    @Binding var onScreen: Bool
     /// popoverで出しているとき。足せなかった警告を、popoverが畳み終わってから出す。
     /// JSFXは音の準備が無いとその場で失敗し、閉じる途中に警告を立てると出ないまま残る。
     /// シート（1列）は今までどおりその場で立てる。
@@ -1870,11 +1936,13 @@ struct ETPickerHost: View {
             dsp.addPreset(named: name, items: items, at: nil)
             sheet = nil
         }, pane: $pane, fresh: $fresh)
+        .onAppear { onScreen = true }
         // 次に開くときはEffectsから。Pluginsを指して開くのは取り込みの口だけ。
         // シートでもpopoverでも、閉じたらここで戻す。
         .onDisappear {
             pane = .effects
             fresh = nil
+            onScreen = false
         }
     }
 
