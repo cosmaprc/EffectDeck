@@ -129,8 +129,54 @@ enum ETRemoteFile {
     /// 名指しの無いgistのリンクで取る1本。**名前の順で最初のもの**（gistの画面の並び）。
     /// 一覧の`files`はJSONの辞書で、JSONSerializationが並びを落とすので自分で並べる。
     /// 比べ方は文字の値の順（大文字が小文字より先）。
+    ///
+    /// **添え物は飛ばす。**`README.md`や`convert.py`が名前の順で先に来ると、音やJSFXが後ろに
+    /// あっても「音でもJSFXでもない」と断ることになる。全部が添え物なら先頭を返す（断るのはETInbox）。
     static func firstGistFile(among names: [String]) -> String? {
-        names.sorted().first
+        let sorted = names.sorted()
+        return sorted.first { !isAccompanying($0) } ?? sorted.first
+    }
+
+    /// 取り込めないと名前だけで分かるもの。JSFXは拡張子が決まっていない（`.txt`や無しもある）ので、
+    /// 決め打ちできるものだけ挙げる。
+    private static let accompanyingExtensions: Set<String> = [
+        "md", "markdown", "rst", "py", "sh", "ps1", "js", "json", "yml", "yaml",
+        "html", "htm", "css", "png", "jpg", "jpeg", "gif", "svg", "pdf", "zip",
+    ]
+
+    private static func isAccompanying(_ name: String) -> Bool {
+        let dot = name.lastIndex(of: ".")
+        let ext = dot.map { name[name.index(after: $0)...].lowercased() } ?? ""
+        if accompanyingExtensions.contains(ext) { return true }
+        let stem = (dot.map { String(name[..<$0]) } ?? name).uppercased()
+        return stem == "README" || stem == "LICENSE"
+    }
+
+    /// gistの画面が各ファイルに付けるRawの行き先（`/<持ち主>/<id>/raw/<版>/<名前>`）。
+    /// **画面の並びのまま**、同じ名前は1つにして返す。APIに断られたときの逃げ道（download）。
+    static func gistRawLinks(inPage html: String, id: String) -> [(name: String, raw: URL)] {
+        let pattern = #"href="(?:https://gist\.github\.com)?(/[^/"]+/"#
+            + NSRegularExpression.escapedPattern(for: id)
+            + #"/raw/[0-9a-f]+/([^"/]+))""#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var out: [(name: String, raw: URL)] = []
+        for m in re.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
+            guard let pathRange = Range(m.range(at: 1), in: html),
+                  let nameRange = Range(m.range(at: 2), in: html) else { continue }
+            // 属性の中なので`&`は`&amp;`で来る。名前は%で包まれている（空白など）。
+            let path = unescapeAttribute(html[pathRange])
+            guard let name = unescapeAttribute(html[nameRange]).removingPercentEncoding,
+                  !out.contains(where: { $0.name == name }),
+                  let raw = URL(string: "https://gist.github.com" + path) else { continue }
+            out.append((name, raw))
+        }
+        return out
+    }
+
+    private static func unescapeAttribute(_ s: Substring) -> String {
+        s.replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 
     /// gist の一覧から、印に合う 1 本の名前を選ぶ。**当たりが 2 本以上なら選ばない。**
@@ -170,19 +216,52 @@ enum ETRemoteFile {
             let anchor = address.fragment.flatMap {
                 $0.hasPrefix("file-") ? String($0.dropFirst("file-".count)) : nil
             } ?? ""
-            let (listingFile, _) = try await stream(address)
-            defer { try? FileManager.default.removeItem(at: listingFile) }
-            let listing = try Data(contentsOf: listingFile)
-            guard let root = try? JSONSerialization.jsonObject(with: listing) as? [String: Any],
-                  let files = root["files"] as? [String: [String: Any]],
-                  let name = anchor.isEmpty ? firstGistFile(among: Array(files.keys))
-                                            : gistFile(named: anchor, among: Array(files.keys)),
-                  let raw = (files[name]?["raw_url"] as? String).flatMap(URL.init(string:))
+            let files: [(name: String, raw: URL)]
+            do {
+                files = try await gistListing(address)
+            } catch Failure.http(let code) where code == 403 || code == 429 {
+                // **APIに断られたら画面から引く。**未認証のAPIは1つのIPから1時間に60回までで、
+                // 同じIPを大勢で使う回線では自分が呼んでいなくても尽きている（開発機でも
+                // `403 rate limit exceeded`が返った）。画面のRawの行き先にも本当の名前が載っている。
+                // `<gist>/raw`へは逃げない。持ち主の名前の無いリンクだと404で、あっても先頭の1本ではない。
+                files = try await gistPageListing(id: address.lastPathComponent)
+            }
+            let names = files.map { $0.name }
+            guard let name = anchor.isEmpty ? firstGistFile(among: names)
+                                            : gistFile(named: anchor, among: names),
+                  let raw = files.first(where: { $0.name == name })?.raw
             else { throw Failure.noSuchFile }
             let (part, _) = try await stream(raw)
             return (part, ETShareInbox.safeName(name))
         }
         return try await stream(address)
+    }
+
+    /// APIの一覧から名前とraw_urlを引く。
+    private static func gistListing(_ address: URL) async throws -> [(name: String, raw: URL)] {
+        let (file, _) = try await stream(address)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let listing = try Data(contentsOf: file)
+        guard let root = try? JSONSerialization.jsonObject(with: listing) as? [String: Any],
+              let files = root["files"] as? [String: [String: Any]]
+        else { throw Failure.noSuchFile }
+        return files.compactMap { name, info in
+            (info["raw_url"] as? String).flatMap(URL.init(string:)).map { (name, $0) }
+        }
+    }
+
+    /// gistの画面から引く。`gist.github.com/<id>`は持ち主の名前の付いた先へ飛ばされる。
+    private static func gistPageListing(id: String) async throws -> [(name: String, raw: URL)] {
+        var page = URLComponents()
+        page.scheme = "https"
+        page.host = "gist.github.com"
+        page.path = "/" + id
+        guard let url = page.url else { throw Failure.noSuchFile }
+        let (file, _) = try await stream(url)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let data = try Data(contentsOf: file)
+        let html = String(decoding: data, as: UTF8.self)
+        return gistRawLinks(inPage: html, id: id)
     }
 
     private static func stream(_ address: URL) async throws -> (file: URL, name: String) {

@@ -58,6 +58,41 @@ final class RemoteFileTests: XCTestCase {
         XCTAssertNil(ETRemoteFile.firstGistFile(among: []))
     }
 
+    /// 名前の順で先に来る添え物（README.md・convert.py）は飛ばす。全部が添え物なら先頭。
+    func testBareGistSkipsFilesThatCannotBeImported() {
+        XCTAssertEqual(ETRemoteFile.firstGistFile(among: ["effect.jsfx", "README.md", "convert.py"]), "effect.jsfx")
+        XCTAssertEqual(ETRemoteFile.firstGistFile(among: ["LICENSE", "notes.txt"]), "notes.txt")
+        XCTAssertEqual(ETRemoteFile.firstGistFile(among: ["b.py", "a.md"]), "a.md")
+    }
+
+    /// APIに断られたときは画面のRawの行き先から引く。字は実際のgistの画面から写したもの
+    /// （同じファイルが相対と絶対の2通りで出る）。よそのgistを指す行き先は拾わない。
+    func testRawLinksFromTheGistPage() {
+        let id = "c542880fc52d3874404998b440e931b5"
+        let sha = "52b1c7a1d78bcb32c87d9626e66c9fd6a77f4a09"
+        let html = """
+            <a href="/satomasahiro2005/\(id)/raw/\(sha)/atmos_4ch_ffmpeg.wav" data-view-component="true" class="Button--secondary Button--small Button">
+            <a href="https://gist.github.com/satomasahiro2005/\(id)/raw/\(sha)/atmos_4ch_ffmpeg.wav">View raw</a>
+            <a href="/satomasahiro2005/\(id)/raw/\(sha)/convert.py" data-view-component="true" class="Button--secondary Button--small Button">
+            <a href="/satomasahiro2005/\(id)/raw/\(sha)/dh++_4ch_ffmpeg.wav" data-view-component="true" class="Button--secondary Button--small Button">
+            <a href="/someone/0123456789abcdef/raw/\(sha)/other.wav">
+            """
+        let links = ETRemoteFile.gistRawLinks(inPage: html, id: id)
+        let names = links.map { $0.name }
+        XCTAssertEqual(names, ["atmos_4ch_ffmpeg.wav", "convert.py", "dh++_4ch_ffmpeg.wav"])
+        XCTAssertEqual(links.first?.raw.absoluteString,
+                       "https://gist.github.com/satomasahiro2005/\(id)/raw/\(sha)/atmos_4ch_ffmpeg.wav")
+        XCTAssertEqual(ETRemoteFile.gistFile(named: "dh-_4ch_ffmpeg-wav", among: names), "dh++_4ch_ffmpeg.wav")
+        XCTAssertEqual(ETRemoteFile.firstGistFile(among: names), "atmos_4ch_ffmpeg.wav")
+    }
+
+    /// 属性の中の字（`&amp;`と`%`）は戻してから名前にする。
+    func testRawLinkNamesAreUnescaped() {
+        let html = #"<a href="/u/abc123/raw/0f/my%20ir%20&amp;%20hall.wav">"#
+        XCTAssertEqual(ETRemoteFile.gistRawLinks(inPage: html, id: "abc123").map { $0.name },
+                       ["my ir & hall.wav"])
+    }
+
     /// Raw を押した先を貼られたら、そのまま取りに行く（/raw を足さない）。
     func testRawGistLinkIsLeftAlone() {
         let raw = gist + "/raw/130e3a95c65f7f49749631d3f6ec846805141629/dh%2B%2B_4ch_ffmpeg.wav"
