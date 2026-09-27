@@ -83,6 +83,10 @@ A JSON array with one element per stage, in signal order:
   put it in switched off.
 - a Section: `{"nm":"Section","cm":"Drums"}`. It groups the stages after it,
   up to the next Section, so the user can switch the group with one toggle.
+  **Most chains need no Section.** Add one only when the user asks for
+  groups, or when the chain has clearly separate parts the user will want to
+  switch on and off on their own (for example room correction and a colour
+  effect). Never put a Section around a single stage.
 - a JSFX the user has imported: `{"jsfx":"<its desc: name>"}`. See *When the
   built-in effects are not enough*.
 
@@ -142,6 +146,7 @@ keep the chain the only `json` code block in its reply.
 - [ ] no `external`, `ir`, `ib`, `ob` and no Audio Unit; `ch` only if asked
 - [ ] strict JSON that parses
 - [ ] the chain ends at or below 0 dB
+- [ ] no Section unless the user asked for groups or the parts really need separate switches
 - [ ] every `{"jsfx":…}` names the `desc:` of a script the user has imported
 - [ ] the reply carries the whole chain
 
