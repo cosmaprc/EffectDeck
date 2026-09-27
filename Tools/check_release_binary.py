@@ -20,7 +20,7 @@ Release の書庫では実行ファイルのシンボルが strip されるの�
   abiname    自前の C の口（ET…・et_…）の名前がそのまま実行ファイルの字に在るなら、export されている
              （ソースを読まずに、名前で引く形が戻ってきたのを拾う）
   plist      Info.plist（識別子・3 本の版が同じ・展開されていない $(…)・拡張の口・
-             NSExtensionPrincipalClass などクラス名で引くものが実在する）
+             NSExtensionPrincipalClass などクラス名で引くものが実在する。UI…・NS… の系のクラスは測らない）
   entitle    署名の entitlements。media-device-extension は本体では鍵が在って中身が空（ITMS-91183）、
              中身を持つのは Media Device Extension の .appex だけ。App Group・associated domains・iCloud KVS。
              署名済みならリポジトリの .entitlements の鍵が全部入っていること、ipa なら get-task-allow が無いことも
@@ -36,6 +36,7 @@ Release の書庫では実行ファイルのシンボルが strip されるの�
 一つでも FAIL なら 1、入口の誤りは 2 で終わる。
 """
 import argparse
+import functools
 import hashlib
 import os
 import pathlib
@@ -89,7 +90,8 @@ ROLE_LABEL = {"app": "本体", "device": "Media Device Extension", "share": "共
 # アイコンと ET_BETA を 1 つの引数で決めるので、紫なら見本が在る、が成り立つ。
 ICON_FLAVOR = {"EffeTuneLive": "store", "EffectDeckPublicBeta": "beta"}
 
-# どのソースがどの実行ファイルに入るか（project.yml の sources の写し）。
+# どのソースがどの実行ファイルに入るか（project.yml の sources の写し。写し忘れは
+# Tests/Tools/test_check_release_binary.py の ProjectYmlTests が本物の project.yml と突き合わせて落とす）。
 # (場所, 役, 積むものの正規表現, 積まないものの正規表現)。正規表現は場所からの相対パスに当てる。
 # 場所が / で終わらなければファイル 1 本。WDL は名指しのものしか積まない（eel_lice.h などは建たない）。
 SOURCE_ROLES = [
@@ -109,7 +111,11 @@ SOURCE_ROLES = [
     ("Vendor/ysfx/thirdparty/WDL/source/WDL/fft.c", ("app",), None, None),
     ("Vendor/ysfx/thirdparty/WDL/source/WDL/lice/", ("app",),
      r"^lice(_arc|_colorspace|_image|_line|_palette|_texgen|_text)?\.cpp$", None),
+    # Note Spectrogram のモデル（Scripts/setup.sh が吐く）。.S は読まない（名前で引く口は書けない）。
+    ("Generated/note-models/", ("app",), None, None),
 ]
+# setup.sh が用意するもの。無ければ読めなかったと書く（黙って通さない）。
+FETCHED_HEADS = ("Vendor/", "Generated/")
 # 拡張は DSP コアを積まない（project.yml の EffeTuneLiveExtension の excludes）。
 DEVICE_SHARED_EXCLUDES = re.compile(r"^(ETPipeline|ETResample|ETPreviewTone|ETJSFXHost|ETLICEFont)\.")
 SHARE_EXTRA_SOURCES = ("Sources/EffeTuneLive/DSP/ETRemoteFile.swift",
@@ -140,6 +146,9 @@ LOOKUP_ALLOW = {}
 # 名前で引くクラスを書く Info.plist の鍵。
 PLIST_CLASS_KEYS = ("NSExtensionPrincipalClass", "NSPrincipalClass", "UISceneDelegateClassName",
                     "UISceneClassName", "UIApplicationDelegateClassName")
+# そこに UIKit・Foundation のクラス（UIApplication・UIWindowScene など）を書くのは普通で、それは束の外に在る。
+# Module.Class・_Tt… の形は自前の Swift のクラスなので、この形に当たらず必ず束で引く。
+SYSTEM_CLASS = re.compile(r"^(UI|NS)[A-Z][A-Za-z0-9_]*$")
 
 # 自前の C の口の宣言を拾うところ。
 ABI_HEADER_GLOBS = ("Sources/Shared/*.h", "Sources/Extension/*.h", "Vendor/effetune/dsp/include/effetune/abi.h")
@@ -199,6 +208,21 @@ CSMAGIC_EMBEDDED_ENTITLEMENTS = 0xFADE7171
 
 class MachOError(Exception):
     pass
+
+
+def _reads(method):
+    """読んでいる途中で表が壊れていると分かったら、どのファイルかを付けて MachOError にする。"""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except MachOError as e:
+            if self.path in str(e):
+                raise
+            raise MachOError("%s: %s" % (self.path, e)) from e
+        except (struct.error, IndexError) as e:
+            raise MachOError("%s: %s" % (self.path, e)) from e
+    return wrapper
 
 
 def uleb(b, p):
@@ -349,6 +373,7 @@ class MachO:
     def _chained(self):
         return self._range(self.chained_range)
 
+    @_reads
     def pointer_formats(self):
         """段の番号 → pointer_format。chained fixups が無ければ {}。"""
         if self._formats is not None:
@@ -399,6 +424,7 @@ class MachO:
 
     # -- シンボル -------------------------------------------------------------
 
+    @_reads
     def symbols(self):
         if "symbols" in self._cache:
             return self._cache["symbols"]
@@ -418,6 +444,7 @@ class MachO:
         return [s for s in self.symbols()
                 if not (s[1] & N_STAB) and (s[1] & N_TYPE) == N_SECT and not (s[1] & N_EXT)]
 
+    @_reads
     def exports(self):
         """dlsym が見る export trie の名前（先頭の _ 付き）。"""
         if "exports" in self._cache:
@@ -451,6 +478,7 @@ class MachO:
         self._cache["exports"] = names
         return names
 
+    @_reads
     def imports(self):
         """外の dylib から取り込む名前（先頭の _ 付き）。bind 表・chained fixups・nlist の未定義。"""
         if "imports" in self._cache:
@@ -480,6 +508,7 @@ class MachO:
 
     # -- 字 ------------------------------------------------------------------
 
+    @_reads
     def cstrings(self, include_objc=True):
         """cstring_literals の節の字（bytes の集合）。"""
         key = ("cstrings", include_objc)
@@ -495,6 +524,7 @@ class MachO:
         self._cache[key] = out
         return out
 
+    @_reads
     def objc_methnames(self):
         out = set()
         for s in self.sections:
@@ -502,6 +532,7 @@ class MachO:
                 out.update(x.decode("utf-8", "replace") for x in self.section_bytes(s).split(b"\0") if x)
         return out
 
+    @_reads
     def objc_classes(self):
         """ObjC のクラス一覧（__objc_classlist → class_t → class_ro_t → name）。"""
         if "classes" in self._cache:
@@ -646,11 +677,58 @@ def _skip_parens(text, i, swift):
 _C_TOKENS = re.compile(r"//[^\n]*|/\*.*?(?:\*/|\Z)|\"(?:\\.|[^\"\\\n])*\"?|'(?:\\.|[^'\\\n])*'?", re.S)
 
 
+def _blank(text):
+    return re.sub(r"[^\n]", " ", text)
+
+
 def _blank_comment(m):
     tok = m.group(0)
     if tok.startswith("//") or tok.startswith("/*"):
-        return re.sub(r"[^\n]", " ", tok)
+        return _blank(tok)
     return tok
+
+
+def _blank_strings(clean, swift):
+    """字（と C の文字）の中身を空白にした写し。長さと行は保つので、位置は clean と同じに使える。
+    字に書いた dlsym(…) や名前をコードとして数えないため。Swift の \\( … ) の中はコードなので残す
+    （その中の字はまた空白にする）。raw 文字列（#"…"#）の \\( は字。"""
+    if not swift:
+        return _C_TOKENS.sub(lambda m: _blank(m.group(0)), clean)
+    return _swift_code_only(clean, 0, len(clean))
+
+
+def _swift_code_only(text, start, end):
+    out, i = [], start
+    while i < end:
+        j = text.find('"', i, end)
+        if j < 0:
+            out.append(text[i:end])
+            break
+        out.append(text[i:j])
+        stop = min(_skip_string(text, j, True), end)
+        out.append(_swift_blank_literal(text, j, stop))
+        i = stop
+    return "".join(out)
+
+
+def _swift_blank_literal(text, start, stop):
+    if start > 0 and text[start - 1] == "#":
+        return _blank(text[start:stop])
+    out, k = [], start
+    while k < stop:
+        if text[k] == "\\" and k + 1 < stop:
+            if text[k + 1] == "(":
+                close = min(_skip_parens(text, k + 1, True), stop)
+                inner = close - 1 if close > k + 2 and text[close - 1] == ")" else close
+                out.append("  " + _swift_code_only(text, k + 2, inner) + " " * (close - inner))
+                k = close
+                continue
+            out.append(_blank(text[k:k + 2]))
+            k += 2
+            continue
+        out.append(_blank(text[k]))
+        k += 1
+    return "".join(out)
 
 
 def strip_comments(text, swift):
@@ -746,6 +824,7 @@ def _literal(arg):
 CALL_RE = re.compile(r"(?<![\w#@$])(%s)\s*\(" % "|".join(sorted(LOOKUP_CALLS, key=len, reverse=True)))
 OBJC_CLASSNAMED_RE = re.compile(r"\bclassNamed:\s*(@\"(?:[^\"\\\n]|\\.)*\"|[^\]\s]+)")
 SILGEN_RE = re.compile(r'@_silgen_name\s*\(\s*"([^"]+)"\s*\)')
+SILGEN_START = re.compile(r"@_silgen_name\b")
 LOOKUP_PREFILTER = re.compile("|".join(sorted(LOOKUP_CALLS)) + "|@_silgen_name")
 DECL_BEFORE = re.compile(r"(\bfunc\s+|\*\s*|\b(?:void|int|Class|SEL|id|extern)\s+)$")
 
@@ -790,7 +869,8 @@ def source_files(repo):
 
 
 def missing_source_roots(repo):
-    return [head for head, _r, _i, _e in SOURCE_ROLES if head.startswith("Vendor/") and not (repo / head).exists()]
+    return [head for head, _r, _i, _e in SOURCE_ROLES
+            if head.startswith(FETCHED_HEADS) and not (repo / head).exists()]
 
 
 def _line_of(text, pos):
@@ -808,14 +888,16 @@ def scan_lookups(repo, files=None):
         if not LOOKUP_PREFILTER.search(text):
             continue
         clean = strip_comments(text, swift)
-        for m in CALL_RE.finditer(clean):
+        # 呼び出しは字の外でだけ探す（位置は clean と同じ）。引数の字は clean から読む。
+        code = _blank_strings(clean, swift)
+        for m in CALL_RE.finditer(code):
             call = m.group(1)
             if call in SWIFT_ONLY_CALLS and not swift:
                 continue
             if call in OBJC_OR_SWIFT_CALLS and not (swift or objc):
                 continue
-            line_start = clean.rfind("\n", 0, m.start()) + 1
-            if DECL_BEFORE.search(clean[line_start:m.start()]):
+            line_start = code.rfind("\n", 0, m.start()) + 1
+            if DECL_BEFORE.search(code[line_start:m.start()]):
                 continue
             args = _call_args(clean, m.end() - 1, swift)
             if args is None:
@@ -824,11 +906,14 @@ def scan_lookups(repo, files=None):
             name = _literal(args[index]) if index < len(args) else None
             lookups.append(Lookup(rel, _line_of(clean, m.start()), call, kind, name, frozenset(roles)))
         if objc:
-            for m in OBJC_CLASSNAMED_RE.finditer(clean):
+            for m in OBJC_CLASSNAMED_RE.finditer(code):
+                real = OBJC_CLASSNAMED_RE.match(clean, m.start())
                 lookups.append(Lookup(rel, _line_of(clean, m.start()), "classNamed:", "class",
-                                      _literal(m.group(1)), frozenset(roles)))
-        for m in SILGEN_RE.finditer(clean):
-            silgen.append((rel, _line_of(clean, m.start()), m.group(1)))
+                                      _literal(real.group(1)) if real else None, frozenset(roles)))
+        for m in SILGEN_START.finditer(code):
+            real = SILGEN_RE.match(clean, m.start())
+            if real:
+                silgen.append((rel, _line_of(clean, m.start()), real.group(1)))
     return lookups, silgen, len(files)
 
 
@@ -857,19 +942,26 @@ def _is_debug_condition(cond):
     return any(part.strip("()") == "DEBUG" for part in c.split("&&"))
 
 
+def _is_not_debug_condition(cond):
+    return cond.replace(" ", "").replace("\t", "") in ("!DEBUG", "!(DEBUG)")
+
+
 def debug_line_flags(clean):
-    """行ごとに、DEBUG でしか建たない行か。"""
+    """行ごとに、DEBUG でしか建たない行か。枝ごとに [この枝は DEBUG だけか, 前の枝に !DEBUG が在ったか]。
+    #if !DEBUG の後ろの #elseif・#else は、どれも DEBUG でしか建たない。"""
     stack, flags = [], []
     for line in clean.split("\n"):
         m = DIRECTIVE.match(line)
         if m:
             kw, cond = m.group(1), m.group(2).strip()
             if kw == "if":
-                stack.append([_is_debug_condition(cond), cond])
+                stack.append([_is_debug_condition(cond), _is_not_debug_condition(cond)])
             elif kw == "elseif" and stack:
-                stack[-1] = [_is_debug_condition(cond), cond]
+                after_not_debug = stack[-1][1]
+                stack[-1] = [after_not_debug or _is_debug_condition(cond),
+                             after_not_debug or _is_not_debug_condition(cond)]
             elif kw == "else" and stack:
-                stack[-1] = [stack[-1][1].replace(" ", "") == "!DEBUG", stack[-1][1]]
+                stack[-1] = [stack[-1][1], stack[-1][1]]
             elif kw == "endif" and stack:
                 stack.pop()
             flags.append(False)
@@ -990,21 +1082,6 @@ _TOP_DECL = re.compile(r"(?:\b(?:public|internal|fileprivate|private|final|stati
                        r"\b(?:enum|struct|class|actor|protocol|typealias|func|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def _blank_swift_strings(clean):
-    """字の中身を空白にする（行は保つ）。字に書いた名前を使っていると数えないため。"""
-    out, i, n = [], 0, len(clean)
-    while i < n:
-        j = clean.find('"', i)
-        if j < 0:
-            out.append(clean[i:])
-            break
-        out.append(clean[i:j])
-        end = _skip_string(clean, j, True)
-        out.append(re.sub(r"[^\n]", " ", clean[j:end]))
-        i = end
-    return "".join(out)
-
-
 def _top_level_names(text):
     """括弧の外（ファイルの一番上の段）で宣言した名前。"""
     names, depth = [], 0
@@ -1022,7 +1099,7 @@ def debug_only_callers(repo, files=None):
     owners = {}
     for rel in DEBUG_ONLY_FILES:
         if (repo / rel).is_file():
-            code = _blank_swift_strings(strip_comments(read_text(repo / rel), True))
+            code = _blank_strings(strip_comments(read_text(repo / rel), True), True)
             for name in _top_level_names(code):
                 owners.setdefault(name, rel)
     if not owners:
@@ -1032,7 +1109,7 @@ def debug_only_callers(repo, files=None):
     for rel in sorted(f for f in files if f.endswith(".swift") and f not in DEBUG_ONLY_FILES):
         clean = strip_comments(read_text(repo / rel), True)
         flags = debug_line_flags(clean)
-        for number, line in enumerate(_blank_swift_strings(clean).split("\n")):
+        for number, line in enumerate(_blank_strings(clean, True).split("\n")):
             if number < len(flags) and flags[number]:
                 continue
             for m in pattern.finditer(line):
@@ -1235,7 +1312,7 @@ def check_lookups(rep, repo, bundles, frameworks, files):
     lookups, silgen, scanned = scan_lookups(repo, files)
     vendor_missing = missing_source_roots(repo)
     if vendor_missing:
-        rep.skipped("lookup", "submodule が無いので読んでいない: %s" % ", ".join(vendor_missing))
+        rep.skipped("lookup", "submodule・生成物が無いので読んでいない: %s" % ", ".join(vendor_missing))
     for lk in lookups:
         if (lk.path, lk.call) in LOOKUP_ALLOW:
             rep.ok("lookup", "%s %s は除外（%s）" % (lk.where(), lk.call, LOOKUP_ALLOW[(lk.path, lk.call)]))
@@ -1414,6 +1491,8 @@ def check_plist(rep, bundles, unknown, app_dir):
             ok, how = _resolve("class", name, [b.macho])
             if ok:
                 rep.ok("plist", "%s: %s = %s は %s" % (b.label(), key, name, how))
+            elif SYSTEM_CLASS.match(name):
+                rep.skipped("plist", "%s: %s = %s は系のクラス（束の外なので測らない）" % (b.label(), key, name))
             else:
                 rep.fail("plist", "%s: %s = %s が %s。拡張が開かない" % (b.label(), key, name, how))
 
@@ -1734,6 +1813,9 @@ def run(args, out=None):
                 rep.skipped("crosscheck", "nm が無い（Mac では xcrun nm、Linux では llvm-nm）")
         out.write("== PASS %d / FAIL %d / SKIP %d\n" % (rep.counts["PASS"], rep.counts["FAIL"], rep.counts["SKIP"]))
         return 1 if rep.counts["FAIL"] else 0
+    except (MachOError, struct.error) as e:
+        # 読んでいる途中で壊れていると分かった実行ファイル。確かめ切れていないので FAIL（1）でなく 2。
+        raise InputError("実行ファイルを読み切れない（壊れているか、ここが知らない形）: %s" % e) from e
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

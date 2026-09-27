@@ -12,6 +12,7 @@ import io
 import os
 import pathlib
 import plistlib
+import re
 import shutil
 import stat
 import struct
@@ -83,12 +84,22 @@ def align(n, a=8):
 BASE = 0x100000000
 
 
+def bind_opcodes(names):
+    """LC_DYLD_INFO の bind 表（名前ごとに ordinal・名前・型・場所・DO_BIND、最後に DONE）。"""
+    out = bytearray()
+    for i, name in enumerate(names):
+        out += b"\x11" + b"\x40" + name.encode() + b"\0" + b"\x51" + b"\x72" + uleb(8 * i) + b"\x90"
+    return bytes(out + b"\x00")
+
+
 def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), locals_count=0, classes=(),
                 methnames=(), entitlements=None, simulated=None, chained=True, pointer_format=6, cputype=None,
-                import_format=1, nlist_imports=True):
+                import_format=1, nlist_imports=True, arm64e_auth=False):
     """薄い arm64 の MH_EXECUTE。classes は ObjC の実行時の名前。
+    pointer_format は chained fixups の番地の形（6・2、arm64e の 1・9・12）。arm64e_auth なら署名つきの rebase。
     import_format は chained fixups の取り込み表の形（1 = IMPORT、2 = ADDEND、3 = ADDEND64）。
-    nlist_imports=False なら取り込む名前を nlist に置かない（chained fixups の表にだけ在る）。"""
+    chained=False なら LC_DYLD_INFO で、取り込みは bind 表に書く。
+    nlist_imports=False なら取り込む名前を nlist に置かない（chained fixups の表か bind 表にだけ在る）。"""
     text_secs = [("__text", b"\x1f\x20\x03\xd5", 0x80000400),
                  ("__cstring", b"".join(s + b"\0" for s in cstrings), 2),
                  ("__objc_methname", b"".join(s.encode() + b"\0" for s in methnames), 2),
@@ -120,11 +131,15 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
     le = data_end
 
     def enc(target):
+        """ディスク上の 8 バイト。next（鎖の次）にも値を入れて、読む側が落とすことを見る。"""
         if not chained:
             return target
-        if pointer_format == 6:
-            return target - BASE
-        return target
+        if pointer_format in (2, 6):
+            return (target - BASE if pointer_format == 6 else target) | (3 << 51)
+        if arm64e_auth:   # auth:1 bind:0 next:11 key:2 addrDiv:1 diversity:16 target:32（base からの差）
+            return (1 << 63) | (3 << 51) | (2 << 49) | (1 << 48) | (0xBEEF << 32) | (target - BASE)
+        # arm64e の rebase。1 は番地そのもの、9・12 は base からの差。
+        return (target if pointer_format == 1 else target - BASE) | (3 << 51)
 
     class_name_addr = {}
     cn = next(t for t in text_layout if t[0] == "__objc_classname")
@@ -151,6 +166,7 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
         return start, len(blob)
 
     chained_range = exports_range = None
+    bind_range = (0, 0)
     if chained:
         imp_names = list(imports)
         pool = b"".join(x.encode() + b"\0" for x in imp_names)
@@ -183,6 +199,8 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
         exports_range = put(export_trie(exports))
     else:
         exports_range = put(export_trie(exports))
+        if imports:
+            bind_range = put(bind_opcodes(imports))
 
     strtab = bytearray(b"\0")
     syms = []
@@ -233,7 +251,7 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
         cmds += struct.pack("<IIII", 0x80000034, 16, *chained_range)
         cmds += struct.pack("<IIII", 0x80000033, 16, *exports_range)
     else:
-        cmds += struct.pack("<II10I", 0x80000022, 48, 0, 0, 0, 0, 0, 0, 0, 0, *exports_range)
+        cmds += struct.pack("<II10I", 0x80000022, 48, 0, 0, *bind_range, 0, 0, 0, 0, *exports_range)
     cmds += struct.pack("<IIIIII", 0x2, 24, symoff, len(syms), stroff, strsize)
     if has_sig:
         cmds += struct.pack("<IIII", 0x1D, 16, *sig_range)
@@ -257,6 +275,20 @@ def fat(*slices):
         entries += struct.pack(">iiIII", cpu, 0, off + len(blobs), len(blob), 12)
         blobs += blob + b"\0" * (align(len(blob), 0x1000) - len(blob))
     return head + entries + b"\0" * (off - 8 - len(entries)) + blobs
+
+
+def patch_command(blob, cmd_id, field_off, value):
+    """load command cmd_id の field_off バイト目の 32 ビットを value にする（(bytes, その command の位置)）。"""
+    b = bytearray(blob)
+    ncmds = struct.unpack_from("<I", b, 16)[0]
+    off = 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", b, off)
+        if cmd == cmd_id:
+            struct.pack_into("<I", b, off + field_off, value)
+            return bytes(b), off
+        off += size
+    raise AssertionError("load command %#x が無い" % cmd_id)
 
 
 # ---------------------------------------------------------------------------
@@ -498,13 +530,64 @@ class ReaderTests(unittest.TestCase):
 
     def test_objc_classes_through_every_pointer_encoding(self):
         names = ["ETRootProbe", SHARE_CLASS]
-        for chained, fmt in ((True, 6), (True, 2), (False, None)):
-            with self.subTest(chained=chained, fmt=fmt):
+        for chained, fmt, auth in ((True, 6, False), (True, 2, False), (False, None, False),
+                                   (True, 1, False), (True, 9, False), (True, 12, False),
+                                   (True, 1, True), (True, 9, True), (True, 12, True)):
+            with self.subTest(chained=chained, fmt=fmt, auth=auth):
                 m = CRB.MachO("x", build_macho(classes=names, methnames=["viewDidLoad", "probe:"],
-                                               chained=chained, pointer_format=fmt or 6))
+                                               chained=chained, pointer_format=fmt or 6, arm64e_auth=auth))
                 self.assertEqual(m.objc_classes(), set(names))
                 self.assertEqual(m.objc_methnames(), {"viewDidLoad", "probe:"})
                 self.assertEqual(m.exports(), {"__mh_execute_header"})
+
+    def test_decode_pointer_every_format(self):
+        """鎖の next・arm64e の key/diversity は落とし、high8 は上の 8 ビットへ戻し、外への bind は None。"""
+        m = CRB.MachO("x", build_macho())
+        t = BASE + 0x4000
+        cases = [
+            (6, (0x12 << 36) | (5 << 51) | 0x4000, t | (0x12 << 56)),
+            (2, (0x12 << 36) | (5 << 51) | t, t | (0x12 << 56)),
+            (6, (1 << 63) | 7, None),                                     # bind
+            (1, (0x34 << 43) | (3 << 51) | t, t | (0x34 << 56)),           # arm64e: 番地そのもの
+            (9, (0x34 << 43) | (3 << 51) | 0x4000, t | (0x34 << 56)),      # USERLAND: base からの差
+            (12, (3 << 51) | 0x4000, t),                                  # USERLAND24
+        ]
+        for fmt in (1, 9, 12):
+            cases += [
+                (fmt, (1 << 63) | (7 << 51) | (3 << 49) | (1 << 48) | (0xBEEF << 32) | 0x4000, t),  # auth rebase
+                (fmt, (1 << 62) | 7, None),                                # bind
+                (fmt, (1 << 63) | (1 << 62) | 7, None),                    # auth bind
+            ]
+        cases += [(None, 0x1234, 0x1234), (4, 0x1234, None)]              # 鎖なし・知らない形
+        for fmt, raw, want in cases:
+            with self.subTest(fmt=fmt, raw=hex(raw)):
+                self.assertEqual(m.decode_pointer(raw, fmt), want)
+
+    def test_bind_opcode_names_every_opcode(self):
+        """LC_DYLD_INFO の bind・lazy bind 表。ULEB・SLEB の引数を正しく飛ばして名前だけを拾う。"""
+        stream = (b"\x20" + uleb(300)                 # SET_DYLIB_ORDINAL_ULEB
+                  + b"\x3e"                           # SET_DYLIB_SPECIAL_IMM（flat lookup）
+                  + b"\x41_dlsym\0"                   # SET_SYMBOL_TRAILING_FLAGS_IMM（weak import）
+                  + b"\x51"                           # SET_TYPE_IMM
+                  + b"\x60\xff\x7f"                   # SET_ADDEND_SLEB（2 バイト）
+                  + b"\x72" + uleb(0x4000)            # SET_SEGMENT_AND_OFFSET_ULEB
+                  + b"\x80" + uleb(0x81)              # ADD_ADDR_ULEB
+                  + b"\x90"                           # DO_BIND
+                  + b"\xa0" + uleb(0x200)             # DO_BIND_ADD_ADDR_ULEB
+                  + b"\xb1"                           # DO_BIND_ADD_ADDR_IMM_SCALED
+                  + b"\xc0" + uleb(3) + uleb(0x4001)  # DO_BIND_ULEB_TIMES_SKIPPING_ULEB
+                  + b"\xd0" + uleb(0x180)             # THREADED / SET_BIND_ORDINAL_TABLE_SIZE_ULEB
+                  + b"\xd1"                           # THREADED / APPLY
+                  + b"\x40_objc_msgSend\0\x90"
+                  + b"\x00"                           # DONE（lazy bind では区切り）
+                  + b"\x72" + uleb(0x4008) + b"\x11\x40_vDSP_fft_zip\0\x90\x00")
+        self.assertEqual(CRB.bind_opcode_names(stream), {"_dlsym", "_objc_msgSend", "_vDSP_fft_zip"})
+
+    def test_imports_from_the_dyld_info_bind_table_alone(self):
+        """chained fixups の無い（LC_DYLD_INFO の）実行ファイルで、nlist に未定義を置かない形。"""
+        m = CRB.MachO("x", build_macho(imports=["_dlsym", "_vDSP_fft_zip"], chained=False, nlist_imports=False))
+        self.assertFalse([s for s in m.symbols() if (s[1] & CRB.N_TYPE) == CRB.N_UNDF], "nlist が空でない")
+        self.assertEqual(m.imports(), {"_dlsym", "_vDSP_fft_zip"})
 
     def test_dyld_info_exports_without_chained_fixups(self):
         m = CRB.MachO("x", build_macho(exports=["__mh_execute_header", "_et_abi_version"], chained=False))
@@ -585,6 +668,49 @@ class SourceTests(unittest.TestCase):
             got = sorted((lk.call, lk.name) for lk in CRB.scan_lookups(repo)[0])
             self.assertEqual(got, [("Selector", "probe:"), ("classNamed", "Foo")])
 
+    def test_scan_ignores_call_text_inside_string_literals(self):
+        """ログの字に書いた dlsym(…) や Selector(…) は呼び出しではない。\\( … ) の中はコードなので拾う。"""
+        with TempDir() as d:
+            repo = make_repo(d)
+            write(repo / "Sources/EffeTuneLive/Log.swift", "\n".join([
+                'let a = "Selector(fire) failed; dlsym(handle) returned nil"',                 # 1
+                'let b = """',                                                               # 2
+                '    NSClassFromString(name) is not used',                                   # 3
+                '    @_silgen_name("fake") either',                                          # 4
+                '    """',                                                                   # 5
+                'let c = "v: \\(NSClassFromString("ETReal").map { "\\($0)" } ?? "dlsym(x)")"',  # 6
+                'let e = #"raw \\(dlsym(h, n))"#',                                           # 7
+                'let f = "a\\\\(dlsym(h, n))"',                                              # 8 \\ のあとの ( は字
+                ""]))
+            write(repo / "Sources/Shared/Log.c",
+                  'const char *m = "dlsym(RTLD_DEFAULT) failed";\n'
+                  'char q = \'"\'; void *p = dlsym(h, "ETCReal");\n')
+            write(repo / "Sources/Extension/Log.m",
+                  'NSString *s = @"[b classNamed:x]"; Class k = [b classNamed:@"ETObjCReal"];\n')
+            lookups, silgen, _n = CRB.scan_lookups(repo)
+            got = sorted((lk.path, lk.line, lk.call, lk.name) for lk in lookups)
+            self.assertEqual(got, [
+                ("Sources/EffeTuneLive/Log.swift", 6, "NSClassFromString", "ETReal"),
+                ("Sources/Extension/Log.m", 1, "classNamed:", "ETObjCReal"),
+                ("Sources/Shared/Log.c", 2, "dlsym", "ETCReal"),
+            ])
+            self.assertEqual(silgen, [])
+
+    def test_blank_strings_keeps_positions_and_interpolated_code(self):
+        swift = CRB.strip_comments(
+            'let x = "a \\(f("in")) b" + """\n  m \\(g(1))\n  """ // "gone"\nlet y = "e\\"q"\n', True)
+        blank = CRB._blank_strings(swift, True)
+        self.assertEqual(len(blank), len(swift))
+        self.assertEqual(blank.count("\n"), swift.count("\n"))
+        self.assertIn("f(    )", blank)
+        self.assertIn("g(1)", blank)
+        for word in ('"in"', "a ", " b", " m ", "e\\", "q"):
+            self.assertNotIn(word, blank.replace("let ", ""))
+        c = 'char q = \'"\'; f("x(y)", 2); /* "c" */\n'
+        blank = CRB._blank_strings(CRB.strip_comments(c, False), False)
+        self.assertEqual(len(blank), len(c))
+        self.assertIn("f(      , 2);", blank)
+
     def test_scan_objc_forms(self):
         with TempDir() as d:
             repo = make_repo(d)
@@ -651,9 +777,30 @@ class SourceTests(unittest.TestCase):
             "#if DEBUG && targetEnvironment(simulator)",  # 17
             "h",                              # 18 debug
             "#endif",                         # 19
+            "#if os(macOS)",                  # 20
+            "i",                              # 21
+            "#elseif DEBUG",                  # 22
+            "j",                              # 23 debug
+            "#elseif ET_BETA",                # 24
+            "k",                              # 25 TestFlight（DEBUG でない）
+            "#else",                          # 26
+            "l",                              # 27 どれでもない（DEBUG でない）
+            "#endif",                         # 28
+            "#if !DEBUG",                     # 29
+            "m",                              # 30
+            "#elseif os(iOS)",                # 31
+            "n",                              # 32 debug（前の枝が !DEBUG）
+            "#else",                          # 33
+            "o",                              # 34 debug
+            "#endif",                         # 35
+            "#if DEBUG",                      # 36
+            "p",                              # 37 debug
+            "#elseif ET_BETA",                # 38
+            "q",                              # 39 TestFlight
+            "#endif",                         # 40
         ])
         flags = CRB.debug_line_flags(src)
-        self.assertEqual([i for i, f in enumerate(flags) if f], [2, 4, 15, 18])
+        self.assertEqual([i for i, f in enumerate(flags) if f], [2, 4, 15, 18, 23, 32, 34, 37])
 
     def test_multiline_literal_value(self):
         body = '\n    [{"nm":"Volume"},\n     {"nm":"Level Meter"}] \\\n    tail\n    '
@@ -696,6 +843,7 @@ class SourceTests(unittest.TestCase):
                 "        #if DEBUG || ET_BETA",                           # 11
                 "        _ = ETDebugPresets.all",                         # 12 TestFlight（Release）でも建つ
                 "        #endif",                                         # 13
+                '        print("n = \\(ETDebugPresets.all.count)")',     # 14 \\( … ) の中はコード
                 "    }",
                 "}",
                 ""]))
@@ -703,9 +851,10 @@ class SourceTests(unittest.TestCase):
             self.assertEqual(CRB.debug_only_callers(repo), [
                 ("Sources/EffeTuneLive/Views/Picker.swift", 10, "ETDebugPresets", owner),
                 ("Sources/EffeTuneLive/Views/Picker.swift", 12, "ETDebugPresets", owner),
+                ("Sources/EffeTuneLive/Views/Picker.swift", 14, "ETDebugPresets", owner),
             ])
             # Debug だけのファイルの中で自分を使うのは数えない。宣言は一番上の段のものだけ拾う。
-            code = CRB._blank_swift_strings(CRB.strip_comments(DEBUG_PRESETS, True))
+            code = CRB._blank_strings(CRB.strip_comments(DEBUG_PRESETS, True), True)
             self.assertEqual(CRB._top_level_names(code), ["ETDebugPresets"])
 
     def test_covers_signed_values_against_repo_entitlements(self):
@@ -723,6 +872,122 @@ class SourceTests(unittest.TestCase):
         self.assertFalse(cover({"b": True}, {"a": [1]}, "x"))
         self.assertTrue(cover(True, True, "x"))
         self.assertFalse(cover(False, True, "x"))
+
+
+# ---------------------------------------------------------------------------
+# SOURCE_ROLES が本物の project.yml の写しになっているか
+# ---------------------------------------------------------------------------
+
+# 出荷する実行ファイルを作るターゲットと、その中身が入る役（YSFX は本体に静的に繋ぐ）。
+PROJECT_TARGET_ROLES = {"EffeTuneLive": "app", "YSFX": "app", "EffeTuneLiveExtension": "device",
+                        "EffectDeckShare": "share"}
+# project.yml の sources には無いが、積んだソースが #include するので読んでおくヘッダの場所。
+HEADER_ONLY_HEADS = {"Vendor/effetune/dsp/include/", "Vendor/ysfx/include/"}
+
+
+def project_sources(text):
+    """{ターゲット: [{"path": …, 鍵: 値か字の列}]}。project.yml を行で読む（PyYAML は無い）。"""
+    out, in_targets, target, in_sources, entry, list_key = {}, False, None, False, None, None
+    for raw in text.replace("\r\n", "\n").split("\n"):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        line = raw.split(" #", 1)[0].rstrip()
+        ind, s = len(line) - len(line.lstrip(" ")), line.strip()
+        if ind == 0:
+            in_targets, target = s == "targets:", None
+            continue
+        if not in_targets:
+            continue
+        if ind == 2:
+            target, in_sources, entry = s.rstrip(":"), False, None
+        elif ind == 4:
+            in_sources, entry = s == "sources:", None
+        elif in_sources and target in PROJECT_TARGET_ROLES:
+            if ind == 6 and s.startswith("- path:"):
+                entry = {"path": s[len("- path:"):].strip()}
+                out.setdefault(target, []).append(entry)
+            elif ind == 8 and entry is not None and ":" in s:
+                key, value = (x.strip() for x in s.split(":", 1))
+                if value.startswith("["):
+                    value = [v.strip().strip("\"'") for v in value.strip("[]").split(",") if v.strip()]
+                entry[key], list_key = (value if value else []), key
+            elif ind == 10 and entry is not None and s.startswith("- ") and isinstance(entry.get(list_key), list):
+                entry[list_key].append(s[2:].strip().strip("\"'"))
+    return out
+
+
+class ProjectYmlTests(unittest.TestCase):
+    """lookup と debugonly は SOURCE_ROLES の場所しか読まない。project.yml に足した場所を写し忘れると、
+    そこは黙って読まれなくなる（落ちずに通る）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.targets = project_sources((ROOT / "project.yml").read_text(encoding="utf-8"))
+
+    def test_every_target_is_read(self):
+        self.assertEqual(set(self.targets), set(PROJECT_TARGET_ROLES))
+
+    def heads(self, role):
+        return [(head, inc, exc) for head, roles, inc, exc in CRB.SOURCE_ROLES if role in roles]
+
+    def test_every_source_path_is_covered_for_its_role(self):
+        for target, entries in sorted(self.targets.items()):
+            role = PROJECT_TARGET_ROLES[target]
+            for e in entries:
+                path = e["path"]
+                if e.get("type") == "file" and e.get("buildPhase") == "resources":
+                    continue
+                with self.subTest(target=target, path=path):
+                    covered = any(path == head.rstrip("/") or (head.endswith("/") and path.startswith(head))
+                                  for head, _i, _e in self.heads(role))
+                    covered = covered or (role == "share" and path in CRB.SHARE_EXTRA_SOURCES)
+                    self.assertTrue(covered, "project.yml の %s（%s）を SOURCE_ROLES が読まない" % (path, target))
+
+    def test_every_head_is_still_in_project_yml(self):
+        paths = {(PROJECT_TARGET_ROLES[t], e["path"]) for t, entries in self.targets.items() for e in entries}
+        for head, roles, _i, _e in CRB.SOURCE_ROLES:
+            if head in HEADER_ONLY_HEADS:
+                continue
+            for role in roles:
+                with self.subTest(head=head, role=role):
+                    self.assertIn((role, head.rstrip("/")), paths,
+                                  "SOURCE_ROLES の %s（%s）が project.yml に無い" % (head, role))
+        for rel in CRB.SHARE_EXTRA_SOURCES:
+            self.assertIn(("share", rel), paths)
+
+    def test_listed_includes_and_excludes_match(self):
+        """名指しのファイルと「dir/**」は、SOURCE_ROLES の正規表現と同じに振り分けられる。"""
+        by_head = {head.rstrip("/"): (inc, exc) for head, _r, inc, exc in CRB.SOURCE_ROLES}
+        checked = 0
+        for target, entries in sorted(self.targets.items()):
+            for e in entries:
+                if e["path"] not in by_head:
+                    continue
+                inc, exc = by_head[e["path"]]
+
+                def taken(sub):
+                    return (not inc or re.search(inc, sub)) and not (exc and re.search(exc, sub))
+                for key, want in (("includes", True), ("excludes", False)):
+                    for pattern in e.get(key) or []:
+                        if pattern.endswith("/**") and "*" not in pattern[:-3]:
+                            sample = pattern[:-3] + "/x.cpp"
+                        elif "*" not in pattern:
+                            sample = pattern
+                        else:
+                            continue
+                        got = bool(taken(sample))
+                        checked += 1
+                        with self.subTest(target=target, path=e["path"], pattern=pattern):
+                            self.assertEqual(got, want, "%s の %s %s が SOURCE_ROLES と食い違う"
+                                             % (e["path"], key, pattern))
+        self.assertGreaterEqual(checked, 15)
+
+    def test_device_shared_excludes_match(self):
+        entries = [e for e in self.targets["EffeTuneLiveExtension"] if e["path"] == "Sources/Shared"]
+        self.assertEqual(len(entries), 1)
+        listed = {p.split(".", 1)[0] for p in entries[0]["excludes"]}
+        mine = set(re.search(r"\^\(([^)]*)\)", CRB.DEVICE_SHARED_EXCLUDES.pattern).group(1).split("|"))
+        self.assertEqual(listed, mine)
 
 
 # ---------------------------------------------------------------------------
@@ -798,6 +1063,100 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(code, 1, text)
             self.assertEqual(len(fails(text)), 1, text)
             self.assertIn("Sources/Shared/Loader.c:1: dlsym の引数が字でない", fails(text, "lookup")[0])
+
+    def test_lookup_is_resolved_in_the_image_that_runs_the_code(self):
+        """364f940 の型は「引く先の実行ファイルを取り違える」。拡張のコードは拡張の実行ファイルで、
+        Sources/Shared は本体と Media Device Extension の両方で、本体のコードは本体と Frameworks/ で引く。"""
+        greeting = [b"Welcome to EffectDeck, have fun"]
+        foo = ["__mh_execute_header", "_ETFoo"]
+        with TempDir() as d:
+            with self.subTest("拡張と共有の拡張のコード"):
+                repo = make_repo(d / "r1")
+                write(repo / "Sources/Extension/Probe.m", 'void *f(void) { return dlsym(RTLD_DEFAULT, "ETFoo"); }\n')
+                write(repo / "Sources/ShareExtension/Probe.swift",
+                      'let k: AnyClass? = NSClassFromString("EffectDeckShare.ShareViewController")\n')
+                code, text = check(make_app(d / "a", device_bin=build_macho(exports=foo)), repo)
+                self.assertEqual(code, 0, text)
+                self.assertIn('Sources/Extension/Probe.m:1 dlsym("ETFoo") → EffeTuneLiveExtension: export trie に在る',
+                              text)
+                self.assertIn('Sources/ShareExtension/Probe.swift:1 NSClassFromString('
+                              '"EffectDeckShare.ShareViewController") → EffectDeckShare: ObjC のクラス一覧に', text)
+                self.assertNotIn("→ EffectDeck:", text)
+                # 本体だけが持っていても、拡張の中で引くものは見つからない。
+                code, text = check(make_app(d / "b", app_bin=build_macho(exports=foo, classes=[SHARE_CLASS],
+                                                                         cstrings=greeting),
+                                            share_bin=build_macho(methnames=["viewDidLoad"])), repo)
+                got = fails(text, "lookup")
+                self.assertEqual(len(got), 2, text)
+                self.assertIn('dlsym("ETFoo") → EffeTuneLiveExtension: export されていない', got[0])
+                self.assertIn('→ EffectDeckShare: ObjC のクラス一覧に無い', got[1])
+            with self.subTest("Sources/Shared は両方"):
+                repo = make_repo(d / "r2")
+                write(repo / "Sources/Shared/Probe.c", 'void *g(void) { return dlsym(RTLD_DEFAULT, "ETFoo"); }\n')
+                code, text = check(make_app(d / "c", app_bin=build_macho(exports=foo, cstrings=greeting),
+                                            device_bin=build_macho(exports=foo)), repo)
+                self.assertEqual(code, 0, text)
+                self.assertIn('dlsym("ETFoo") → EffectDeck: export trie に在る', text)
+                self.assertIn('dlsym("ETFoo") → EffeTuneLiveExtension: export trie に在る', text)
+                code, text = check(make_app(d / "e", app_bin=build_macho(exports=foo, cstrings=greeting)), repo)
+                self.assertEqual(code, 1, text)
+                self.assertEqual(len(fails(text)), 1, text)
+                self.assertIn('dlsym("ETFoo") → EffeTuneLiveExtension: export されていない', fails(text, "lookup")[0])
+            with self.subTest("本体のコードは Frameworks/ も見る"):
+                repo = make_repo(d / "r3")
+                write(repo / "Sources/EffeTuneLive/Fw.swift",
+                      'let p = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "ETFoo")\n')
+                app = make_app(d / "f")
+                code, text = check(app, repo)
+                self.assertEqual(len(fails(text, "lookup")), 1, text)
+                fw = app / "Frameworks/Helper.framework"
+                fw.mkdir(parents=True)
+                (fw / "Helper").write_bytes(build_macho(exports=foo))
+                code, text = check(app, repo)
+                self.assertEqual(code, 0, text)
+                self.assertIn('Fw.swift:1 dlsym("ETFoo") → EffectDeck: export trie に在る', text)
+
+    def test_unreadable_executable_exits_2(self):
+        """読んでいる途中で壊れていると分かった実行ファイルは FAIL（1）でなく入口の誤り（2）。どれかを名指す。"""
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            base = build_macho(cstrings=[b"Welcome to EffectDeck, have fun", b"ETPipeline_Publish"])
+            # nlist の数が表の外まで伸びている。
+            bad_symtab, _ = patch_command(base, 0x2, 12, 10 ** 6)
+            # export trie の最初の ULEB が途中で切れている（abiname が export を引く）。
+            cut, off = patch_command(base, 0x80000033, 12, 1)
+            dataoff = struct.unpack_from("<I", cut, off + 8)[0]
+            cut = cut[:dataoff] + b"\x80" + cut[dataoff + 1:]
+            for i, blob in enumerate((bad_symtab, cut)):
+                with self.subTest(i):
+                    code, text = check(make_app(d / ("a%d" % i), app_bin=blob), repo)
+                    self.assertEqual(code, 2, text)
+                    self.assertIn("読み切れない", text)
+                    self.assertIn("EffectDeck.app/EffectDeck", text.replace("\\", "/"))
+
+    def test_plist_system_classes_are_not_looked_up_in_the_bundle(self):
+        """NSPrincipalClass・UISceneClassName は UIKit の名前を書くのが普通。束の外なので測らず、自前のものは測る。"""
+        scenes = {"UIApplicationSceneManifest": {"UISceneConfigurations": {"UIWindowSceneSessionRoleApplication": [
+            {"UISceneClassName": "UIWindowScene", "UISceneDelegateClassName": "EffectDeck.SceneDelegate"}]}}}
+        own = "_TtC10EffectDeck13SceneDelegate"
+        greeting = [b"Welcome to EffectDeck, have fun"]
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            info = dict(scenes, NSPrincipalClass="UIApplication")
+            code, text = check(make_app(d / "a", app_info=info,
+                                        app_bin=build_macho(classes=[own], cstrings=greeting)), repo)
+            self.assertEqual(code, 0, text)
+            self.assertIn("NSPrincipalClass = UIApplication は系のクラス", text)
+            self.assertIn("UISceneClassName = UIWindowScene は系のクラス", text)
+            self.assertIn("UISceneDelegateClassName = EffectDeck.SceneDelegate は ObjC のクラス一覧に %s が在る" % own,
+                          text)
+            # 自前のクラス（Module.Class・接頭辞の無い ObjC の名前）が無ければ落とす。
+            info = dict(scenes, NSPrincipalClass="ETPrincipal")
+            code, text = check(make_app(d / "b", app_info=info, app_bin=build_macho(cstrings=greeting)), repo)
+            got = fails(text, "plist")
+            self.assertEqual(len(got), 2, text)
+            self.assertTrue(any("NSPrincipalClass = ETPrincipal" in ln for ln in got), text)
+            self.assertTrue(any("UISceneDelegateClassName = EffectDeck.SceneDelegate" in ln for ln in got), text)
 
     def test_unstripped_binary_fails_unless_allowed(self):
         with TempDir() as d:
@@ -1183,6 +1542,12 @@ class RealToolchainTests(unittest.TestCase):
         self.assertEqual(CRB.MachO(self.bins["noexp"]).exports(), set())
         self.assertEqual(CRB.MachO(self.bins["chained"]).pointer_formats().get(2), 2)
         self.assertEqual(CRB.MachO(self.bins["opcodes"]).pointer_formats(), {})
+        # LC_DYLD_INFO の bind 表そのもの（nlist の未定義に隠れないように、表だけを読む）。
+        m = CRB.MachO(self.bins["opcodes"])
+        info, names = m.dyld_info, set()
+        for off, size in ((info[2], info[3]), (info[4], info[5]), (info[6], info[7])):
+            names |= CRB.bind_opcode_names(m.data[off:off + size])
+        self.assertIn("_dlsym", names)
 
     def test_strip_count_matches_llvm_strip(self):
         if not self.strip:
