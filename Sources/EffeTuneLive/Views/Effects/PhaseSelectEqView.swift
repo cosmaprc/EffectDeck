@@ -533,7 +533,9 @@ struct PhaseSelectEqView: View {
             },
             overlay: { plot in
                 // バンドが切ってあるときは面を置かない。置くと一覧の縦スクロールを食う。
-                if displayRegion(band).enabled {
+                // 畳んだカードでも置かない（FrequencyResponseGraph と同じ）。取っ手が無いので
+                // 使えないうえ、etOwnsDragの印が図の上の払いと長押しを止めてしまう。
+                if displayRegion(band).enabled && !graphOnly {
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(dragGesture(in: plot))
