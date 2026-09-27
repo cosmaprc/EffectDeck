@@ -103,18 +103,20 @@ ARGS=(-project EffeTuneLive.xcodeproj -scheme Logic
       -parallel-testing-enabled NO
       -resultBundlePath "$RESULT")
 
+# DRY_RUN で出すものと本当に走らせるものは、この 1 つの配列から作る（別々に書くと食い違う）。
+CMD=(xcodebuild "${ARGS[@]}" ${SAN_ARGS[@]+"${SAN_ARGS[@]}"}
+     ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test)
+
 # -resultBundlePath は既にあると落ちる。
 et_run rm -rf "$RESULT"
 if [ "$DRY" = "1" ]; then
-  et_run xcodebuild "${ARGS[@]}" ${SAN_ARGS[@]+"${SAN_ARGS[@]}"} \
-    ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test
+  et_run "${CMD[@]}"
   finish 0
 fi
 
 echo "--- 走らせる ---"
 echo "--- xcodebuild test $(date) ---" >> "$LOG"
-xcodebuild "${ARGS[@]}" ${SAN_ARGS[@]+"${SAN_ARGS[@]}"} \
-  ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test >> "$LOG" 2>&1
+"${CMD[@]}" >> "$LOG" 2>&1
 CODE=$?
 
 echo "--- 落ちたもの ---"

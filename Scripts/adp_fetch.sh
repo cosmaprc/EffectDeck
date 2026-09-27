@@ -54,8 +54,11 @@ while IFS=$'\t' read -r id vurl; do
   [ -n "$id" ] || continue
   n=$((n + 1))
   f="$ROOT/variant/$id.ipa"
-  grep -qF "variant/$id.ipa" "$MANIFEST" \
-    || echo "!! manifest.json に variant/$id.ipa が見えない。置き場所を確かめる"
+  # manifest.json が指していない名前で置くと、その ADP は入れられない（sha256 が合っていても）。
+  if ! grep -qF "variant/$id.ipa" "$MANIFEST"; then
+    echo "!! manifest.json に variant/$id.ipa が見えない（asc.py adp-variants の 1 列目が manifest の名前と違う）"
+    bad=1
+  fi
   if ! curl -fsSL "$vurl" -o "$f"; then
     echo "!! 落とせない: $id"
     bad=1

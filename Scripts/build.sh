@@ -14,6 +14,8 @@ LOG="$ROOT/build.log"
 # exceed the build Mac's memory on a cold build. Override when the machine has
 # headroom (BUILD_JOBS=4, etc.); keep the safe default for remote builds.
 BUILD_JOBS="${BUILD_JOBS:-2}"
+# xcodebuild は名指し。ET_XCODEBUILD は Tests/Scripts/sim_test.sh が偽物を渡すための口。
+XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
 
 # 実機だけを探す。シミュレータが起きていると devicectl はそれも connected として
 # 並べるので、最後の列（Reality）が physical のものに絞る。
@@ -48,7 +50,7 @@ find_device() {
 # **出す前に一度は Release で入れて触ること。**
 build_one() {
   echo "================ build $1 (${CONFIG:-Debug}) ================"
-  /usr/bin/xcodebuild -project EffeTuneLive.xcodeproj \
+  "$XCODEBUILD" -project EffeTuneLive.xcodeproj \
     -scheme "$1" -configuration "${CONFIG:-Debug}" \
     -jobs "$BUILD_JOBS" \
     -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
@@ -93,7 +95,7 @@ install_one() {
 # （落ちたことは build.log を読まないと分からなかった）。
 main() {
   echo "=== start $(date) ==="
-  /usr/bin/xcodebuild -version | head -1
+  "$XCODEBUILD" -version | head -1
 
   if [ ! -d Vendor/effetune/dsp ]; then
     echo "!! Vendor/effetune が無い。git submodule update --init --depth 1 を先に。"

@@ -70,16 +70,20 @@ ARGS=(-project EffeTuneLiveSim.xcodeproj -scheme EffeTuneLive
       -disable-concurrent-destination-testing
       -resultBundlePath "$RESULT")
 
+# DRY_RUN で出すものと本当に走らせるものは、この 1 つの配列から作る（別々に書くと食い違う）。
+# ET_XCODEBUILD は lib/sim.sh が決める（既定は名指しの /usr/bin/xcodebuild）。
+CMD=("$ET_XCODEBUILD" "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test)
+
 et_run rm -rf "$RESULT"
 if [ "$DRY" = "1" ]; then
-  et_run /usr/bin/xcodebuild "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test
+  et_run "${CMD[@]}"
   sim_terminate_app
   finish 0
 fi
 
 echo "--- 走らせる ---"
 echo "--- xcodebuild test $(date) ---" >> "$LOG"
-/usr/bin/xcodebuild "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} "${ONLY[@]}" test >> "$LOG" 2>&1
+"${CMD[@]}" >> "$LOG" 2>&1
 CODE=$?
 sim_terminate_app
 

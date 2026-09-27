@@ -20,6 +20,8 @@
 #                    読むだけの simctl list は走らせる
 #   SHOW=1           sim_show が DeviceHub.app を開く。**Xcode 27 に Simulator.app は無い**
 #                    （/Applications/Xcode.app/Contents/Applications/DeviceHub.app）
+#   ET_XCODEBUILD=   xcodebuild の置き場。既定は /usr/bin/xcodebuild（名指し）。
+#                    Tests/Scripts/sim_test.sh が偽物を渡すための口
 #
 # Mac の /bin/bash は 3.2。連想配列・mapfile・${x,,} は使わない。set -u の下で空の
 # "${a[@]}" は unbound variable で落ちるので、空になり得る配列は ${a[@]+"${a[@]}"} で渡す。
@@ -28,6 +30,7 @@
 
 ET_SIM_DEFAULT="iPad Pro 13-inch (M5)"
 ET_APPID="ai.nemut.effetune"
+ET_XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
 
 # 状態を変えるコマンドはここを通す。DRY_RUN=1 なら出すだけ。
 et_run() {
@@ -198,7 +201,7 @@ sim_project() {
   if [ "${SKIP_SETUP:-0}" = "1" ]; then
     echo "-- SKIP_SETUP=1 なので Scripts/setup.sh は飛ばす"
   else
-    # SKIP_XCODEGEN=1: 実機用の project.yml はここでは組まない（setup.sh が読むようになるまでは組まれる）
+    # SKIP_XCODEGEN=1: 実機用の project.yml はここでは組まない（この変数を読む版の setup.sh から効く）
     et_step "$log" "Scripts/setup.sh" env SKIP_XCODEGEN=1 bash Scripts/setup.sh || return 1
   fi
   et_step "$log" "gen_sim_spec.py" python3 Tools/gen_sim_spec.py || return 1
@@ -213,7 +216,7 @@ sim_project() {
 sim_build_app() {
   local log="$1"
   et_run rm -rf "$ROOT/out-sim"
-  et_step "$log" "xcodebuild（シミュレータ向け）" /usr/bin/xcodebuild \
+  et_step "$log" "xcodebuild（シミュレータ向け）" "$ET_XCODEBUILD" \
     -project EffeTuneLiveSim.xcodeproj -scheme EffeTuneLive \
     -configuration Debug -sdk iphonesimulator -arch arm64 -jobs "${BUILD_JOBS:-2}" \
     CONFIGURATION_BUILD_DIR="$ROOT/out-sim" build || return 1

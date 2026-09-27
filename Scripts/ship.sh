@@ -39,6 +39,9 @@ EXPORT_DIR="${EXPORT_DIR:-/tmp/live-ipa}"
 EXPORT_PLIST="$HOME/signing/export.plist"
 IPA="$EXPORT_DIR/EffectDeck.ipa"
 LOG="$PWD/ship.log"
+# 名指しの道具。ET_XCODEBUILD・ET_PLISTBUDDY は Tests/Scripts/sim_test.sh が偽物を渡すための口。
+XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
+PLISTBUDDY="${ET_PLISTBUDDY:-/usr/libexec/PlistBuddy}"
 
 main() {
   echo "=== start $(date) === icon=${APPICON:-EffectDeckPublicBeta}"
@@ -61,7 +64,7 @@ main() {
 
   echo "=== 書き出し $(date) ==="
   rm -rf "$EXPORT_DIR"
-  /usr/bin/xcodebuild -exportArchive \
+  "$XCODEBUILD" -exportArchive \
     -archivePath "$ARCHIVE" \
     -exportPath "$EXPORT_DIR" \
     -exportOptionsPlist "$EXPORT_PLIST" \
@@ -77,7 +80,7 @@ main() {
   local plist build_num
   plist=$(mktemp)
   unzip -p "$IPA" "Payload/EffectDeck.app/Info.plist" > "$plist" 2>/dev/null
-  build_num=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$plist" 2>/dev/null)
+  build_num=$("$PLISTBUDDY" -c "Print :CFBundleVersion" "$plist" 2>/dev/null)
   rm -f "$plist"
   echo "ビルド番号: ${build_num:-(読めない)}"
 

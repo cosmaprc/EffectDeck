@@ -38,13 +38,15 @@ else
 fi
 LOG="$PWD/archive.log"
 ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
+# xcodebuild は名指し。ET_XCODEBUILD は Tests/Scripts/sim_test.sh が偽物を渡すための口。
+XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
 
 main() {
   echo "=== start $(date) === icon=$APPICON"
   rm -rf "$ARCHIVE"
   # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
   bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
-  /usr/bin/xcodebuild -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
+  "$XCODEBUILD" -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
     -configuration Release -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
     ET_APPICON="$APPICON" \
     SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_FLAGS" \
