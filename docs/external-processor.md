@@ -52,5 +52,6 @@ width rather than silently inserting a sample-rate converter.
 atomically. Published copies are never freed, because the render thread may already hold
 an older one. The `context` inside a copy still belongs to the adapter, so the adapter must
 keep it alive for as long as any copy that points at it can run. `ETAUExternalBridge` does
-that by retaining replaced contexts for the life of the process. Destruction and
-replacement are control-plane operations.
+that by retaining replaced contexts until the audio engine stops. Its `suspend()`, called
+once no render callback can run, clears every external slot and only then releases them.
+Destruction and replacement are control-plane operations.

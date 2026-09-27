@@ -175,14 +175,18 @@ own, and create them in the Apple Developer portal.
 | App ID for the app | `ai.nemut.effetune` | `project.yml` (`EffeTuneLive` target) |
 | App ID for the Media Device extension | `ai.nemut.effetune.extension` | `project.yml` (`EffeTuneLiveExtension`) |
 | App ID for the share extension | `ai.nemut.effetune.share` | `project.yml` (`EffectDeckShare`) |
-| Media Device Sharing Extension identifier | `media-device-protocol.ai.nemut.effetune` | `Sources/Extension/Extension.entitlements` and `UTExportedTypeDeclarations` in `Sources/Extension/Info.plist` |
+| Media Device Sharing Extension identifier | `media-device-protocol.ai.nemut.effetune` | `Sources/Extension/Extension.entitlements`, `UTExportedTypeDeclarations` in `Sources/Extension/Info.plist`, and `kProtocolID` in `Sources/Extension/EffeTuneLiveExtension.swift` |
 | App Group | `group.ai.nemut.effetune` | all three `.entitlements` files and `ETShareInbox.group` in `Sources/EffeTuneLive/DSP/ETShareInbox.swift` |
 | iCloud key-value storage | follows the app's bundle ID | `Sources/EffeTuneLive/EffeTuneLive.entitlements` |
 | Associated Domains | `applinks:effectdeck.nemut.ai` | `Sources/EffeTuneLive/EffeTuneLive.entitlements` |
 
 - The Media Device Sharing Extension identifier is made under Identifiers > new. There is
   no review. The entitlement value must be an array with one element; a bare string stops
-  the extension from launching.
+  the extension from launching. Change all three places together: the extension offers
+  `kProtocolID` as its protocol type, and it must match the entitlement.
+- `Tools/check_release_binary.py` checks a release archive against today's values
+  (`BUNDLES`, `APP_GROUP` and `APPLINKS` at the top of the file). Change them there too if
+  you use it.
 - The app itself carries `com.apple.developer.media-device-extension` as an **empty**
   array. Leave it empty (see **The iOS 27 Media Device Extension** above).
 - Enable App Groups on all three App IDs, iCloud (key-value storage only) on the app, and
@@ -228,7 +232,7 @@ has the exact commands.
 | Native C tests (`Tests/Native`) | Linux, macOS or WSL with CMake | `cd Tests/Native && cmake --preset asan && cmake --build --preset asan && ctest --preset asan` |
 | Website (`site/`) | Node 22 | `cd site && npm ci && npm test` |
 | Generators and checks (`Tools/`, `Tests/Tools`) | Python 3.10+ and Node 22, any OS | `python3 -m unittest discover -s Tests/Tools` |
-| UI tests (`Tests/UI`) | Mac with Xcode, simulator | `bash Scripts/uitest.sh` |
+| UI tests (`Tests/UI`) | Mac with Xcode, simulator | `bash Scripts/uitest.sh MenuProbe` (one class; see CONTRIBUTING) |
 
 GitHub Actions runs all of them but the UI tests, and checks that generated files are up to
 date, on every push to `main` and every pull request ([CI](CONTRIBUTING.md#ci)).
@@ -247,11 +251,11 @@ XCUITest `launchArguments`. The icon on the home screen passes none.
 | `-ETLayout wide` | With `-ETSeed`, keeps the two-column iPad layout instead of one column |
 | `-ETCollapsed 1` | With `-ETSeed`, starts with every card folded |
 | `-ETSheet <name>` | Opens a sheet at launch: `picker`, `settings`, `routing`, `presets`, `ir`, `tips` |
-| `-ETAutoExpand 1`, `-ETAutoExpandIndex <n>` | Opens the first (or n-th, not counting Sections) effect a moment after launch, to record the animation |
+| `-ETAutoExpand 1`, `-ETAutoExpandIndex <n>` | Opens an effect 4 seconds after launch, to record the animation. The first one by default; `n` counts from 0 and skips Sections |
 | `-ETDebugBlocks 1` | Tints each Section block to check grouping |
 | `-ETDiag 1` | Adds a hidden `diag` text with the active node count and chain length, for UI tests |
 | `-ETConsole 1` | Also prints the diagnostic log to stdout, for `devicectl ... --console` |
-| `-ETNowPlaying on\|off\|first` | Whether the app claims Now Playing (default `off`). Saved to `UserDefaults` and kept on later launches until another value is passed |
+| `-ETNowPlaying on\|off\|first` | Whether the app claims Now Playing (default `off`). Debug builds save it to `UserDefaults` and keep it on later launches until another value is passed; Release builds use it for that launch only |
 | `-ETProbe 1` | Shows the reorder probe screen instead of the app |
 | `-pref.<key> <value>` | Overrides a setting for that launch, for example `-pref.power balanced` |
 

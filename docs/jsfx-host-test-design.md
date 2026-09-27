@@ -1,6 +1,6 @@
 # EffectDeck JSFX Host Test Design
 
-**Status:** 一部を実装済み（2026-09-21 `6f394d7`、2026-09-26 `41ca430` で追加）。下の「実装の状況」  
+**Status:** 一部を実装済み（2026-09-21 `6f394d7`、2026-09-26 `41ca430`、2026-09-27 `e5c933a` で追加）。下の「実装の状況」  
 **Scope:** JSFX Host 全体（`codex/jsfx-host` で入り、いまは main にある）  
 **Target:** EffectDeck  
 **Primary goal:** JSFX Host を「手動で一通り触る」状態から、互換性・安全性・リアルタイム性・ライフサイクルを自動テストで継続的に保証できる状態へ移す。
@@ -22,6 +22,7 @@
 | §16 の一部（`@gfx` から壊れた値が届いても落ちない） | `JSFXGFXCrashTests` |
 | §10.3・§11・§13・§14 の境界（出力の NaN、`@serialize` の 16 MiB、`pdc_delay` の上限、保守の直列） | `JSFXStabilityTests` |
 | §24 の一部（`ETJSFXLoader` のスレッドと列挙つまみ） | `JSFXLoaderTests` |
+| §28・§30・§31 の一部（取り込み直したときに前の版を置き換える規則: `desc:`・`author:` の読み方、同じ1本かの判定、別名の付け替えと戻し、保存の形、つまみの持ち越し） | `JSFXReplaceTests` |
 | 設計の外: ソース表示の行分けと色分け | `JSFXSourceSyntaxTests` |
 
 どれも Mac の Logic（`bash Scripts/test.sh`）で走る。Linux の `Tests/Linux/run.sh` は

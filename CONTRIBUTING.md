@@ -149,25 +149,39 @@ wrangler and miniflare need Node 22 or later.
 python3 -m unittest discover -s Tests/Tools   # the generators and checks in Tools/
 node --test Tools/*.test.mjs                  # the Node tools in Tools/
 python3 Tools/check_repo.py                   # facts that must agree across the repository
-bash Tests/Scripts/sim_test.sh                # Scripts/lib/sim.sh and the scripts that use it
+bash Tests/Scripts/sim_test.sh                # the shell scripts in Scripts/, against fakes
 ```
 
-None of them need the submodules, a Mac or a network, and all of them run on Windows too
-(the last one in Git Bash or WSL). Run them in a clone: `check_repo.py` asks git which
-paths are ignored.
+None of them need a Mac or a network, and all of them run on Windows too (the last one in
+Git Bash or WSL). Run them in a clone: `check_repo.py` asks git which paths are ignored.
+They also run without the submodules, but then a few checks skip (see below).
 
 - `Tests/Tools` runs the generators and checks in `Tools/` on small inputs in a temporary
-  directory. Nothing tracked is written. Three tests of the privacy-manifest check compile a small binary and
-  skip when `cc` and `nm` are missing, as on Windows.
+  directory. Nothing tracked is written. A test that cannot run here is reported as
+  skipped, not failed, so read the skip count:
+  - Without the submodules, the three that compare committed files with `Vendor/`: the
+    presets written by `gen_presets.py` and `gen_effect_presets.py`, and the `Base64.hpp`
+    copy in `gen_licenses.py`. If you change one of those generators, run the suite with
+    the submodules checked out.
+  - Without `cc` and `nm`, as on Windows, the privacy-manifest tests that compile a small
+    binary.
+  - On Windows, the `check_release_binary.py` tests that run a fake `nm` and `codesign`,
+    or its bash wrapper. Its tests on real linker output need `clang`, `ld64.lld` and
+    `llvm-nm` (one of them also `llvm-strip`) on any system.
+  - Without `node`, `git` or PyYAML, the tests that call them.
 - `check_repo.py` compares facts that are written in more than one place: the EffeTune
   version in the README badge, `CHAIN.md` and `chain/`; the URLs in the app against what
   `site/` serves; the bundled components against `NOTICE.md`; the repository paths that
   documents and comments cite. The top of the file lists every check, and
   `--only chain,urls` runs just the named ones. `--version-guard` also compares with the
-  `dsp-v*` tag of the pinned `Vendor/effetune`, so it needs that submodule.
-- `sim_test.sh` replaces `xcrun`, `xcodegen` and `setup.sh` with fakes and runs
-  `Scripts/test.sh`, `Scripts/uitest.sh` and the other simulator scripts against them, so
-  the way they pick a simulator and stop on failure is checked without a Mac.
+  `dsp-v*` tag of the pinned `Vendor/effetune`, so it needs that submodule. `--base <rev>`
+  checks that every `chain/v*` of that revision is still there with the same `dspParams`.
+- `sim_test.sh` replaces `xcrun`, `xcodebuild`, `xcodegen`, `setup.sh`, `security`,
+  `curl` and the other Mac tools with fakes, and runs the scripts in `Scripts/` against
+  them: `Scripts/lib/sim.sh`, the test, build and screenshot scripts, and the archive and
+  release scripts. `Tools/asc.py` runs for real against a fake App Store Connect
+  (`Tests/Scripts/asc_fake_api.py`). So the way the scripts pick a simulator, call Xcode
+  and stop on failure is checked without a Mac.
 
 ### Golden files
 
@@ -190,10 +204,13 @@ sorted, deterministic JSON, so running them again on the same pin changes nothin
 ### UI tests (Mac)
 
 ```bash
-bash Scripts/uitest.sh                                    # SmokeTests
 bash Scripts/uitest.sh MenuProbe                          # one class (several may follow)
 bash Scripts/uitest.sh DynamicProbe/test03ExpandCollapse  # one test
+bash Scripts/uitest.sh                                    # SmokeTests
 ```
+
+With no argument the script runs `SmokeTests`, which is not in `Tests/UI` yet, so that run
+tests nothing. Name a class until it is.
 
 The simulator SDK has no `MediaDevice.framework`, so the app is built from a simulator
 project without the extension: `Tools/gen_sim_spec.py` writes `project-sim.yml`, and
@@ -213,10 +230,10 @@ signed.
 | Job | What it checks |
 |---|---|
 | `site` | `npm ci` and `npm test` on Node 22 |
-| `checks` | Python and shell syntax, shellcheck, actionlint, and the repository checks and tool tests in `Tools/` and `Tests/Tools` |
+| `checks` | Python and shell syntax, shellcheck, actionlint, the unit tests in `.github/scripts`, the script tests in `Tests/Scripts`, `Tools/check_repo.py` (plus `--base` against the previous commit), `Tests/Tools` and `Tools/*.test.mjs` |
 | `native` | The native tests with gcc and clang, each under ASan+UBSan and TSan |
 | `linux-swift` | The Linux harness in the `swift:6.4.0-noble` image, plain and with ASan |
-| `generated` | Runs `Scripts/setup.sh` (without xcodegen) and the golden generators with both submodules at the pin, then fails if any committed file changed |
+| `generated` | Runs `Scripts/setup.sh` (without xcodegen) and the golden generators with both submodules at the pin, then fails if any committed file changed. Also `check_repo.py --version-guard` |
 | `macos (logic)` | The Logic tests on an iOS 27 simulator |
 | `macos (sim-build)` | Builds the app for the simulator without the extension |
 
@@ -230,8 +247,7 @@ with it.
 `XCODEBUILD_EXTRA="CODE_SIGNING_ALLOWED=NO" bash Scripts/test.sh` is the local equivalent.
 CI retries a failed test once (`-retry-tests-on-failure`); the script does not.
 
-The UI tests and `Tests/Scripts/sim_test.sh` are not run in CI. Run them yourself when you
-change what they cover.
+The UI tests are not run in CI. Run them yourself when you change what they cover.
 
 `.github/workflows/dsp.yml` runs upstream's own DSP test suite on `Vendor/effetune` with
 our patches applied, in Debug and with ASan+UBSan. It runs nightly and when `Patches/`,
