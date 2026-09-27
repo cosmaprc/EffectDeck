@@ -188,6 +188,11 @@ final class ETJSFXHost: ObservableObject {
         var pendingRelease: (Int32, Int32)?
         var visibleGFXOwners: Set<UUID> = []
         var focusedGFXOwners: Set<UUID> = []
+        /// 置き換えた前の版（rebuild）。**この版をinstallするまでslotに載って鳴っている。**
+        /// 片付けるのはslotが替わった・空いたとき（retirePredecessor / dropPredecessor）。
+        var predecessor: Instance?
+        /// 前の版のつまみ。建てたときに数と範囲が合えば移す（carrySliders）。
+        var carriedSliders: [Parameter]?
 
         init(id: String, entry: Entry, state: Data?, channels: Int) {
             self.id = id; self.entry = entry; self.state = state; self.channels = channels
@@ -199,11 +204,15 @@ final class ETJSFXHost: ObservableObject {
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var revision = 0
     private var entryAliases: [String: Entry] = [:]
+    /// 取り込み直して置き換えた前の版のid → いまのid（JSFXReplace）。JSFX/aliases.jsonに残す。
+    /// 同梱の見本の古いid（entryAliases）とは別。あちらは建てるときに決まる。
+    private var replacedAliases = JSFXReplace.Aliases()
     private var instances: [String: Instance] = [:]
     private var renderConfiguration: RenderConfiguration?
     private var latencyTimer: Timer?
 
     private init() {
+        replacedAliases = Self.loadReplacedAliases()
         refresh()
         // **init では張らない。**この型は singleton で、ピッカーを開くだけで
         // 生成される（EffectPickerView が生成式で shared を読む）。init から張ると、
@@ -239,6 +248,9 @@ final class ETJSFXHost: ObservableObject {
         // 消えたふりをして次の refresh で戻ってくるより分かりやすい。
         guard (try? FileManager.default.removeItem(at: entry.url)) != nil else { return false }
         Self.setStalled(entry.id, false)
+        // この1本へ付け替えていた前の版のidも消す。消したものを直接指していた鍵と同じく、
+        // 引けない鍵になる（鎖を読み直したときに段が建たない）。
+        if replacedAliases.remove(target: entry.id) { saveReplacedAliases() }
         refresh()
         return true
     }
@@ -384,8 +396,97 @@ final class ETJSFXHost: ObservableObject {
         }
         // 取り込み直したら 1 度は試す（同じ中身なら id も同じ）。
         Self.setStalled(entry.id, false)
+        // **同じdesc:とauthor:の前の版は置き換える**（JSFXReplace）。取り込みの口は
+        // From Files・From Link・From Clipboard・共有の拡張／このアプリで開く（ETInbox）・
+        // /jのリンク（importSource）の全部がここを通るので、ここ1か所で足りる。
+        let replaced = replaceOlderVersions(with: entry, source: text)
         refresh()
+        if !replaced.isEmpty, let current = entries.first(where: { $0.id == entry.id }) {
+            adoptReplacement(of: replaced, with: current)
+        }
         return entry
+    }
+
+    /// 同じ1本の前の版（desc:とauthor:が同じで中身が違う、人が入れたもの）を消して、
+    /// 前のid → 新しいidを控える。消したidを返す。
+    ///
+    /// 同梱の見本は置き換えない（JSFXReplace.replaced）。**消せなかったものは残し、
+    /// 付け替えも控えない。**removeEntryと同じく、消えたふりをして次のrefreshで戻さない。
+    private func replaceOlderVersions(with entry: Entry, source: String) -> Set<String> {
+        let identity = JSFXReplace.Identity(source: source)
+        guard identity != nil else { return [] }
+        // 一覧の名前はdesc:が無いとファイル名になるので、名前ではなくソースの頭で比べる。
+        let candidates = entries.map { candidate in
+            JSFXReplace.Candidate(
+                id: candidate.id,
+                identity: candidate.isDebugFixture ? nil
+                    : Self.sourceText(for: candidate).flatMap(JSFXReplace.Identity.init(source:)),
+                isBundled: candidate.isDebugFixture)
+        }
+        let doomed = Set(JSFXReplace.replaced(by: entry.id, identity: identity, among: candidates))
+        guard !doomed.isEmpty else { return [] }
+        var removed: Set<String> = []
+        for old in entries where doomed.contains(old.id) {
+            guard (try? FileManager.default.removeItem(at: old.url)) != nil else { continue }
+            Self.setStalled(old.id, false)
+            shareURLs[old.id] = nil
+            replacedAliases.redirect(from: old.id, to: entry.id)
+            removed.insert(old.id)
+        }
+        if !removed.isEmpty { saveReplacedAliases() }
+        return removed
+    }
+
+    /// 置き換えた前の版を使っている段を、新しい版へ載せ替える。
+    ///
+    /// - 建っている（建てている途中も含む）instanceは建て直す（rebuild）。
+    /// - **建てられずに外れた段も拾う。**コンパイルできなかった版を直して入れ直すのは
+    ///   まさにこのときで、fail()がinstanceもslotも返しているのでhostには何も残っていない。
+    ///   鎖から拾って建て直す（restoreと同じ形、状態も鎖のもの）。
+    ///
+    /// 外れた段は、鎖の記述子が控えている番号（externalIndex）と同じslotでないと鳴らない。
+    /// slotを取る口はreserve(instanceID:)だけで、空いている一番若い番号を返すので、
+    /// **控えている番号の若い順に取り、揃ったものだけ建てる。**揃わなければ返して触らない
+    /// （それより若い空きがある・ほかの段が使っている。次の起動で付け替えを辿って建つ）。
+    private func adoptReplacement(of replaced: Set<String>, with entry: Entry) {
+        for instance in Array(instances.values) where replaced.contains(instance.entry.id) {
+            rebuild(instance, as: entry)
+        }
+        let orphans = EffeTuneDSP.shared.chain.filter { node in
+            guard node.isExternal, let componentID = node.externalID, componentID.hasPrefix("jsfx:"),
+                  componentID != entry.id, instances[node.externalInstanceID] == nil else { return false }
+            return self.entry(id: componentID)?.id == entry.id
+        }.sorted { $0.externalIndex < $1.externalIndex }
+        let bridge = ETAUExternalBridge.shared
+        for node in orphans {
+            let held = bridge.index(for: node.externalInstanceID)
+            guard (try? bridge.reserve(instanceID: node.externalInstanceID)) == node.externalIndex else {
+                // 取ったのが別の番号なら返す（前から持っていたものには触らない）。
+                if held == nil { bridge.remove(instanceID: node.externalInstanceID) }
+                continue
+            }
+            restore(componentID: node.externalID ?? "", instanceID: node.externalInstanceID,
+                    state: node.externalState, channels: EffeTuneDSP.routedChannels(of: node))
+        }
+    }
+
+    /// 建っている段を、置き換えた新しい版で建て直す。**段のid・slotの番号・画面は同じまま。**
+    ///
+    /// remove(instanceID:)は通さない。slotを返すと取り直したときに番号が変わりうるうえ、
+    /// 新しい版が建つまで素通しになる。前の版はslotに載せたまま鳴らし、新しい版をinstallした
+    /// ところで替わる（build → retirePredecessor）。建てられなかったらfail()がslotを空ける。
+    ///
+    /// - つまみは数と範囲が合えば持ち越す（carrySliders）。合わなければ新しい版の既定。
+    /// - **@serializeの状態は持ち越さない。**読み込むと、新しい版の@serializeが前の版の並びの
+    ///   バイト列を読む。足りない分は0で埋まる（ysfx_serializer_t::var）ので、@serializeを
+    ///   足した版では@initが置いた値まで0になる。新しい版の@initから始める。
+    private func rebuild(_ old: Instance, as entry: Entry) {
+        let id = old.id
+        instances.removeValue(forKey: id)
+        old.loadTask?.cancel(); old.stateTask?.cancel()
+        let ready = old.ready
+        old.ready = nil
+        create(entry, instanceID: id, state: nil, channels: old.channels, ready: ready, replacing: old)
     }
 
     /// 貼られた字から取り込む。ChatGPTなどに書かせたものをコピーして戻ってきたとき用。
@@ -410,14 +511,27 @@ final class ETJSFXHost: ObservableObject {
         return try importFile(file)
     }
 
-    func entry(id: String) -> Entry? { entries.first { $0.id == id } ?? entryAliases[id] }
+    /// `jsfx:<id>`から1本を引く。鎖の復元・プリセット・バックアップ・共有リンク・
+    /// 鎖へのドラッグ・作者の表示がみなここを通る。
+    ///
+    /// **置き換えた前の版のidは、付け替えを辿っていまの版を返す**（JSFXReplace.Aliases）。
+    /// 鎖やプリセットは前のidのまま保存してあるので、辿らないと直した版を入れた途端に
+    /// 段が建たなくなる。保存してある状態はそのまま新しい版へ渡る（restore）。同梱の見本の
+    /// 古いid（entryAliases）と同じ扱いで、REAPERがJSFXのファイルを書き換えた後に
+    /// プロジェクトを開いたときとも同じ（つまみは番号で、@serializeは新しいコードが読む）。
+    func entry(id: String) -> Entry? {
+        if let found = entries.first(where: { $0.id == id }) ?? entryAliases[id] { return found }
+        guard let current = replacedAliases.resolve(id) else { return nil }
+        return entries.first { $0.id == current }
+    }
 
     /// 鎖の字が`{"jsfx":"<desc:の名前>"}`で指すものを、取り込んである一覧から引く（CHAIN.md）。
     /// 引き方（綴りが同じもの → 大文字小文字を無視）はETChainText.jsfxResolverが持つ。
+    /// 名前で引くので付け替えは要らない。置き換えた前の版は一覧から消えている。
     ///
-    /// **同じ名前が2本あれば最後に取り込んだほう。**ChatGPTに直させた版を入れ直すと、
-    /// 中身が違うので別の1本（名前はsha256）として前の版と並ぶ。取り込んだ時刻はファイルの
-    /// 更新日時で、同じ中身を入れ直したときもownedCopyが進める。
+    /// **同じ名前が2本あれば最後に取り込んだほう。**desc:とauthor:が両方同じなら
+    /// 取り込んだときに置き換わる（importFile）ので、並ぶのは作者が違うものか同梱の見本。
+    /// 取り込んだ時刻はファイルの更新日時で、同じ中身を入れ直したときもownedCopyが進める。
     /// **同梱の見本は後ろへ。**refreshのたびに写し直すので、日時で並べると常に一番新しくなる。
     /// 一覧はこの時点で写し取るので、閉包が後からこのクラスに触ることは無い。
     func chainResolver() -> ETChainText.JSFXResolver {
@@ -482,11 +596,31 @@ final class ETJSFXHost: ObservableObject {
         create(entry, instanceID: instanceID, state: state, channels: channels, ready: completion)
     }
 
+    /// `previous`は置き換える前の版（rebuild）。表からは外してあり、slotには載ったまま。
     private func create(_ entry: Entry, instanceID: String, state: Data?, channels: Int,
-                        ready: ((Result<UInt8, Error>) -> Void)?) {
+                        ready: ((Result<UInt8, Error>) -> Void)?, replacing previous: Instance? = nil) {
         guard instances[instanceID] == nil else { return }
         let instance = Instance(id: instanceID, entry: entry, state: state, channels: channels)
         instance.ready = ready
+        if let previous {
+            instance.carriedSliders = previous.host.map(Self.readParameters) ?? previous.carriedSliders
+            if previous.host == nil {
+                // 建てている途中。建ち終えた側が壊す（build）。slotにはさらに前の版が
+                // 載っているかもしれない（続けて2回置き換えた）ので、それを引き継ぐ。
+                instance.predecessor = previous.predecessor
+                previous.predecessor = nil
+            } else if previous.loadTask == nil {
+                // 鳴っている。新しい版をinstallするまでslotに載せておく。
+                instance.predecessor = previous
+            } else {
+                // 組み直しの途中（resumeの後）。終わっても表に居ないので載せ直されず、slotの
+                // 記述子は前のmaxFramesのまま残る。今すぐ外して素通しにする（壊すのは組み直しの後）。
+                if let index = ETAUExternalBridge.shared.index(for: instanceID) {
+                    ETPipeline_ClearExternalProcessorAt(UInt32(index))
+                }
+                retire(previous)
+            }
+        }
         instances[instanceID] = instance
         startLatencyTimerIfNeeded()
         do { _ = try ETAUExternalBridge.shared.reserve(instanceID: instanceID) }
@@ -494,6 +628,7 @@ final class ETJSFXHost: ObservableObject {
             instance.error = error.localizedDescription
             instance.ready?(.failure(error)); instance.ready = nil
             instances.removeValue(forKey: instanceID)
+            retirePredecessor(of: instance)
             revision &+= 1
             return
         }
@@ -511,6 +646,7 @@ final class ETJSFXHost: ObservableObject {
         ETAUExternalBridge.shared.remove(instanceID: instanceID)
         if let instance = instances.removeValue(forKey: instanceID) {
             instance.loadTask?.cancel(); instance.stateTask?.cancel()
+            retirePredecessor(of: instance)
             retire(instance)
         }
         revision &+= 1
@@ -519,6 +655,29 @@ final class ETJSFXHost: ObservableObject {
     func removeAll() { for id in Array(instances.keys) { remove(instanceID: id) } }
     func suspend() {
         renderConfiguration = nil
+        // 置き換えの途中なら前の版を外す。ETAUHost.suspendがslotを全部空けていて、
+        // resumeが載せ直すのは表にあるものだけ（前の版は表に居ない）。
+        for instance in instances.values { dropPredecessor(of: instance) }
+    }
+
+    /// 置き換えた前の版を片付ける。**slotが新しい版に替わった・空いた後に呼ぶ**（音のスレッドが
+    /// 読み終えるのはretireが待つ）。載ったまま呼ぶと、壊したhostをslotが指す。
+    private func retirePredecessor(of instance: Instance) {
+        guard let previous = instance.predecessor else { return }
+        instance.predecessor = nil
+        retire(previous)
+    }
+
+    /// 置き換えた前の版を今すぐ外す。slotを空け、新しい版が建つまで素通しにする。
+    ///
+    /// 前の版は表に居ないのでresumeが組み直さない。古いsrate / maxFramesのままslotに残すと、
+    /// ブロックがmaxFramesを超えたところで鎖ごと落ちる（followRenderConfiguration）。
+    private func dropPredecessor(of instance: Instance) {
+        guard instance.predecessor != nil else { return }
+        if let index = ETAUExternalBridge.shared.index(for: instance.id) {
+            ETPipeline_ClearExternalProcessorAt(UInt32(index))
+        }
+        retirePredecessor(of: instance)
     }
 
     /// 外した host を、誰も触らなくなった時点で壊す。
@@ -563,6 +722,7 @@ final class ETJSFXHost: ObservableObject {
                                                 maxFrames: maxFrames)
         renderConfiguration = configuration
         for instance in instances.values {
+            dropPredecessor(of: instance)
             if let host = instance.host { reconfigure(host, instance: instance, configuration: configuration) }
             else { build(instance, configuration: configuration) }
         }
@@ -849,6 +1009,9 @@ final class ETJSFXHost: ObservableObject {
                   let current = self.instances[id], current === instance, current.host == nil else { return }
             Self.setStalled(entryID, true)
             current.error = Self.stalledMessage
+            // 置き換えの前の版が鳴っていれば外す。残すと表示は建たなかったと言い、音は前の版で、
+            // 帰ってこなければ前の版は壊されないまま残る。
+            self.dropPredecessor(of: current)
             // 足すのを待っている picker には段を出させる。建ち終われば同じ slot に入る
             // （restore と同じ、段はあって中身がまだの形）。
             if let ready = current.ready, let index = ETAUExternalBridge.shared.index(for: id) {
@@ -891,11 +1054,22 @@ final class ETJSFXHost: ObservableObject {
             guard let host = created else {
                 self.fail(current, Self.loadError(failure ?? "Could not load JSFX.")); return
             }
+            // 置き換えた前の版のつまみを移す。**installの前に。**置いた値は最初のブロックの頭で
+            // 渡る（applySliders）ので、新しい版の既定の値で鳴る瞬間が無い。
+            if let carried = current.carriedSliders {
+                current.carriedSliders = nil
+                Self.carrySliders(carried, into: host)
+            }
             do {
                 let index = try ETAUExternalBridge.shared.install(ETJSFX_Processor(host), instanceID: id)
+                // slotは新しい版に替わった。前の版はもう呼ばれない。
+                self.retirePredecessor(of: current)
                 ETJSFX_SetGFXMenuCallback(host, etJSFXMenuCallback,
                                           Unmanaged.passUnretained(current.menuGate).toOpaque())
                 current.host = host; current.parameters = Self.readParameters(host); current.error = nil
+                // 見回りは生きたhostが1つも無いと止まる（pollRuntimeChanges）。建てている間に
+                // 止まっていれば、ここで回し直す（置き換えでは前の版が表に居ないので止まりやすい）。
+                self.startLatencyTimerIfNeeded()
                 self.snapshotState(current)
                 current.ready?(.success(index)); current.ready = nil
                 self.revision &+= 1
@@ -914,6 +1088,9 @@ final class ETJSFXHost: ObservableObject {
         instance.ready?(.failure(error)); instance.ready = nil
         ETAUExternalBridge.shared.remove(instanceID: instance.id)
         instances.removeValue(forKey: instance.id)
+        // 置き換えた新しい版が建たなかった。slotは上で空いたので前の版も片付ける
+        // （前の版のファイルはもう無い。直した版をもう一度入れればadoptReplacementが拾う）。
+        retirePredecessor(of: instance)
         revision &+= 1
     }
 
@@ -1106,6 +1283,40 @@ final class ETJSFXHost: ObservableObject {
         }
     }
 
+    /// 置き換えた前の版のつまみを、建てたばかりの新しい版へ置く。
+    /// **数と範囲が全部同じときだけ**（JSFXReplace.carriedSliderValues）。合わなければ何もしない
+    /// ＝新しい版の既定から始まる。隠しつまみも数に入れる（readParametersは全部を返す）。
+    private static func carrySliders(_ previous: [Parameter], into host: OpaquePointer) {
+        let fresh = readParameters(host)
+        let values = JSFXReplace.carriedSliderValues(
+            from: previous.map { JSFXReplace.Slider(index: $0.id, minimum: $0.minimum,
+                                                    maximum: $0.maximum, value: $0.value) },
+            to: fresh.map { JSFXReplace.SliderRange(index: $0.id, minimum: $0.minimum,
+                                                    maximum: $0.maximum) })
+        for slider in values { ETJSFX_SetSlider(host, slider.index, slider.value) }
+    }
+
+    // MARK: - 置き換えた前の版の付け替え
+
+    /// 置き場（JSFX/Sources）の隣。**Sourcesの中には置かない。**あちらは中の`.jsfx`を
+    /// 全部一覧に出す場所で、名前で掃除しない。
+    private static func replacedAliasesURL() -> URL? {
+        (try? storageURL("JSFX"))?.appendingPathComponent("aliases.json")
+    }
+
+    /// 読めなければ空。壊れた表で起動を止めない（次に置き換えたときに書き直す）。
+    private static func loadReplacedAliases() -> JSFXReplace.Aliases {
+        guard let url = replacedAliasesURL(), let data = try? Data(contentsOf: url) else { return .init() }
+        return JSFXReplace.Aliases(data: data) ?? .init()
+    }
+
+    private func saveReplacedAliases() {
+        guard let url = Self.replacedAliasesURL() else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? replacedAliases.encoded().write(to: url, options: .atomic)
+    }
+
     private static func ownedEntries(at root: URL?, debug: Bool) -> [Entry] {
         guard let root,
               let files = try? FileManager.default.contentsOfDirectory(at: root,
@@ -1237,18 +1448,9 @@ final class ETJSFXHost: ObservableObject {
         }
     }
 
+    /// 読み方はJSFXReplace.metadataが持つ。置き換えの判定（desc:とauthor:）と一覧の名前を
+    /// 同じ読み方にするため（BOMと見えない字の扱いもあちら）。
     private static func metadata(_ source: String) -> (name: String?, author: String?) {
-        var name: String?, author: String?
-        for raw in source.split(whereSeparator: { $0.isNewline }).prefix(80) {
-            // **見えない字も落とす。**looksLikeJSFX と同じ扱いにしないと、
-            // BOM 付きの `.txt` は取り込めるのに 1 行目の `desc:` が読めず、
-            // 一覧に題ではなくファイル名が並ぶ。U+FEFF は空白ではないので
-            // .whitespaces だけでは落ちない。
-            let line = raw.trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}\u{200B}"))
-            if line.hasPrefix("desc:") { name = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
-            if line.hasPrefix("author:") { author = String(line.dropFirst(7)).trimmingCharacters(in: .whitespaces) }
-        }
-        return (name, author)
+        JSFXReplace.metadata(source)
     }
 }
