@@ -254,6 +254,21 @@ struct ETDragHandle: UIViewRepresentable {
             true
         }
 
+        /// **指を置いた所が触りを全部自分で受ける面なら、その指は掴みにも払いにも渡さない。**
+        ///
+        /// JSFXの@gfxやEQの印を掴む面は、SwiftUIのDragGestureで指を受けている。
+        /// SwiftUIのジェスチャはUIViewとして当たりの連なりに出てこないので、
+        /// ownsDragが遡っても「誰も居ない」になり、canvasの中で左へ引くと
+        /// スクリプトのつまみと一緒に行が払われて削除が出ていた（実機、2026-09-27）。
+        /// そういう面には`etOwnsDrag()`で印を敷き、ここで置いた点を見る。
+        ///
+        /// 見るのは**置いた瞬間の点**。引いているうちに面の外へ出ても、その指は面のもの。
+        /// 器そのものの縦の送りはここを通らないので、今のまま変わらない。
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let host = g.view else { return true }
+            return !ETDragOwnerMark.covers(touch, in: host)
+        }
+
         /// **払いは横向きのときだけ立てる。**
         ///
         /// 付けている先は鎖を載せている UIScrollView なので、向きを見ずに
@@ -353,5 +368,47 @@ struct ETDragHandle: UIViewRepresentable {
             super.layoutSubviews()
             if window != nil { onEnterHierarchy?() }
         }
+    }
+}
+
+extension View {
+    /// **指の触りを全部自分で受ける面**だと、行の掴みと払いに知らせる。
+    ///
+    /// SwiftUIのジェスチャで指を受ける面（JSFXのcanvas、EQの印を掴む面）と、
+    /// 中身が自前で触りを読むかもしれない面（AUのUI）に付ける。
+    /// UISliderのようなUIControlや入れ子のUIScrollViewはownsDragが自分で見つけるので要らない。
+    func etOwnsDrag() -> some View {
+        background(ETDragOwnerAnchor())
+    }
+}
+
+/// 場所を知らせるだけの面。当たりは取らない（HoleViewと同じ）。
+private struct ETDragOwnerAnchor: UIViewRepresentable {
+    func makeUIView(context: Context) -> ETDragOwnerMark { ETDragOwnerMark() }
+
+    func updateUIView(_ view: ETDragOwnerMark, context: Context) {}
+}
+
+/// 触りを全部自分で受ける面の場所。**windowに入っている間だけ数える。**
+private final class ETDragOwnerMark: UIView {
+    /// いまwindowに入っている印。弱く持つ（外れた面を引き留めない）。
+    private static let live = NSHashTable<ETDragOwnerMark>.weakObjects()
+
+    /// 指を置いた点がどれかの印の上か。
+    ///
+    /// **数えるのは認識器を付けた器の中の印だけ。**全画面のcanvasやシートの中の図は
+    /// 同じwindowに居ても鎖の指とは関係ない。
+    static func covers(_ touch: UITouch, in host: UIView) -> Bool {
+        live.allObjects.contains { mark in
+            mark.window != nil && !mark.isHidden && mark.isDescendant(of: host)
+                && mark.bounds.contains(touch.location(in: mark))
+        }
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { Self.live.add(self) } else { Self.live.remove(self) }
     }
 }

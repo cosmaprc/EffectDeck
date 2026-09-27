@@ -537,6 +537,8 @@ struct PhaseSelectEqView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(dragGesture(in: plot))
+                        // 取っ手を横へ引いたときに行が払われないように。
+                        .etOwnsDrag()
                 }
             })
     }

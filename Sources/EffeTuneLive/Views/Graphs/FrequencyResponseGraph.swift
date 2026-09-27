@@ -213,6 +213,8 @@ struct FrequencyResponseGraph: View {
                         Color.clear
                             .contentShape(Rectangle())
                             .gesture(drag(in: plot))
+                            // 印を横へ引いたときに行が払われないように。
+                            .etOwnsDrag()
                     }
 
                     ForEach(graphOnly ? [] : markers) { marker in

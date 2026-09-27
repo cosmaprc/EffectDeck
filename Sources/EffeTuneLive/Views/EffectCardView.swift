@@ -524,6 +524,8 @@ private struct ExternalProcessorView: View {
                 } else {
                     ETAUViewControllerHost(controller: controller)
                         .frame(minHeight: 260, idealHeight: 360, maxHeight: 520)
+                        // 触りをtouchesBeganで直に読むAUは、ownsDragから見えない。
+                        .etOwnsDrag()
                 }
                 Button {
                     movingToFullScreen = true
@@ -782,6 +784,8 @@ private struct JSFXGFXView: View {
                                     : nil,
                                 fullScreen: fullScreen))
         .clipped()
+        // 横へ引いてもスクリプトのもの。行の払い（削除）と長押しの掴みには渡さない。
+        .etOwnsDrag()
         .onDisappear {
             jsfx.updateGFXWindow(instanceID: instanceID, owner: windowOwner,
                                  focused: false, visible: false)
