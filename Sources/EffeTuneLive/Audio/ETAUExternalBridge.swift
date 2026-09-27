@@ -251,7 +251,7 @@ final class ETAUExternalBridge {
                 guard let samples = rendered[channel].mData?.assumingMemoryBound(to: Float.self) else {
                     return 0
                 }
-                planar.advanced(by: channel * frameCount).assign(from: samples, count: frameCount)
+                planar.advanced(by: channel * frameCount).update(from: samples, count: frameCount)
             }
             return 0
         }

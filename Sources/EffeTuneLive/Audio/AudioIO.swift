@@ -14,7 +14,9 @@
 //
 //  **値だけで決まる判断はここに置かない。** 実機なしで測れるよう、別のファイルにある:
 //    本数・レート・帰還ループの名前・鳴らし始め   AudioSessionRules.swift
+//    中断と、最後に start() を試みた時刻           AudioLifecycle.swift
 //    レートや本数が食い違ったときの組み直し       RouteRebuildRule.swift
+//    ロック画面へ出す中身と、出すかどうか         NowPlayingMode.swift
 //    音のスレッドの並べ替えと書き出し             AudioBufferOps.swift
 //    無音で休む                                   PowerPolicy.swift
 //    仮想デバイスからの引き剥がし                 RouteEscape.swift
@@ -146,11 +148,11 @@ final class AudioIO: ObservableObject {
 
     private var ticks = 0
 
-    /// 中断中は再開しない。中断中の setActive(true) は失敗するだけなので、
-    /// followPeer が 3.3Hz で叩き続けることになる。
-    private var interrupted = false
-    /// start() が失敗したとき、次を試すまでの間隔（秒）を稼ぐ。
-    private var lastStartAttempt: Double = 0
+    /// 中断中か（中断中は再開しない。setActive(true) が失敗するだけなので、
+    /// followPeer が 3.3Hz で叩き続けることになる）と、最後に start() を試みた時刻
+    /// （失敗したとき次を試すまで 1 秒空ける）。出入りの約束は AudioLifecycle.swift
+    /// （AudioLifecycleTests）。
+    private var lifecycle = ETAudioLifecycle()
     /// ハードウェアのレートが組んだときと食い違ったときの組み直し。
     /// 一瞬の食い違いで組み直すと音が切れ続けるので、続いたものだけを見る。
     private var rateRebuild = ETRouteRebuildRule()
@@ -246,21 +248,24 @@ final class AudioIO: ObservableObject {
     /// 受信側の timer は別系統なので recv だけが増え続ける。
     private func handleInterruption(raw: UInt, options: UInt) {
         guard let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        let event: ETAudioLifecycle.Interruption
         switch type {
         case .began:
-            interrupted = true
+            event = .began
             log.notice("interruption began")
-            if running { stop(keepListening: true) }
-            status = "Interrupted"
         case .ended:
-            interrupted = false
             let resume = AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume)
+            event = .ended(shouldResume: resume)
             log.notice("interruption ended resume=\(resume)")
-            // shouldResume が無いときは何もしない。拡張が繋がったままなら followPeer が拾う。
-            if resume { start() }
         @unknown default:
-            interrupted = false
+            event = .unknown
         }
+        // 何をするかは ETAudioLifecycle.interruption（AudioLifecycleTests）。
+        // shouldResume が無いときは何もしない。拡張が繋がったままなら followPeer が拾う。
+        let response = lifecycle.interruption(event, running: running)
+        if response.stop { stop(keepListening: true) }
+        if response.markInterrupted { status = "Interrupted" }
+        if response.start { start() }
     }
 
     /// メディアサービスが落ちて作り直されたとき。
@@ -268,13 +273,13 @@ final class AudioIO: ObservableObject {
     private func handleMediaServicesReset() {
         log.notice("media services were reset")
         stop(keepListening: true)
-        interrupted = false
+        // 中断を解き、次の followPeer ですぐ試せるよう lastStartAttempt も 0 に戻す。
+        lifecycle.mediaServicesReset()
         engine = AVAudioEngine()
         node = nil
         // ロック画面の割り当ても作り直す（wired が立っていれば有効化だけ）。
         NowPlaying.start { on in EffeTuneDSP.shared.bypass = !on }
-        // 拡張が繋がっていなければ鳴らし始めない。判断は followPeer に任せる。
-        lastStartAttempt = 0
+        // 鳴らし始めるかの判断は followPeer に任せる。
         followPeer()
     }
 
@@ -319,16 +324,14 @@ final class AudioIO: ObservableObject {
         //   stop() を通らないので running は true のまま残る。食い違いを直接見る。
         //   中断中は呼ばない。start() が失敗し続けるとき（中断中の setActive など）に
         //   3.3Hz で叩かないよう、1 秒は空ける。
-        guard ETAudioSessionRules.shouldStart(running: running, engineRunning: engine.isRunning,
-                                              interrupted: interrupted,
-                                              now: ProcessInfo.processInfo.systemUptime,
-                                              lastStartAttempt: lastStartAttempt) else { return }
+        guard lifecycle.shouldStart(running: running, engineRunning: engine.isRunning,
+                                    now: ProcessInfo.processInfo.systemUptime) else { return }
         start()
     }
 
     func start() {
         // 失敗しても次まで 1 秒空けるため、入口で押しておく（followPeer が見る）。
-        lastStartAttempt = ProcessInfo.processInfo.systemUptime
+        lifecycle.startAttempted(at: ProcessInfo.processInfo.systemUptime)
         stop(keepListening: true)
 
         if !ETLinkReceiver.shared.listening {
@@ -571,7 +574,7 @@ final class AudioIO: ObservableObject {
         }
 
         running = true
-        interrupted = false
+        lifecycle.started()
         sampleRate = sr
         processingRate = sr * Double(factor)
         outputChannels = channels
@@ -603,7 +606,7 @@ final class AudioIO: ObservableObject {
         // 覚えている値も捨てる。捨てないと stop→start で同じ組になったとき
         // updateNowPlaying() が「変わっていない」と見て、いま外したばかりの
         // ロック画面の割り当てを付け直さない（設定変更やレート組み直しで毎回起きる）。
-        lastNowPlaying = (false, false, -1)
+        nowPlayingThrottle.forget()
     }
 
     /// 描画用の値だけを速く取る。図が滑らかに動くのはこちらの速さで決まる。
@@ -721,7 +724,7 @@ final class AudioIO: ObservableObject {
         let rateOff = ETRouteRebuildRule.rateMismatch(running: running, built: built,
                                                       hardware: session.sampleRate)
         if rateRebuild.observe(mismatch: rateOff, now: ProcessInfo.processInfo.systemUptime,
-                               lastStart: lastStartAttempt) {
+                               lastStart: lifecycle.lastStartAttempt) {
             log.notice("hardware rate \(session.sampleRate) != built \(built ?? 0), rebuilding")
             rebuild()
             return
@@ -732,22 +735,21 @@ final class AudioIO: ObservableObject {
         let channelsOff = ETRouteRebuildRule.channelMismatch(running: running, built: render?.channels,
                                                              actual: actualChannels)
         if channelRebuild.observe(mismatch: channelsOff, now: ProcessInfo.processInfo.systemUptime,
-                                  lastStart: lastStartAttempt) {
+                                  lastStart: lifecycle.lastStartAttempt) {
             log.notice("hardware channels \(actualChannels) != built \(self.render?.channels ?? 0), rebuilding")
             rebuild()
         }
     }
 
-    private var lastNowPlaying: (Bool, Bool, Int) = (false, false, -1)
+    private var nowPlayingThrottle = ETNowPlayingThrottle()
 
-    /// 変わったときだけ出す。毎回書き換えるとロック画面がちらつく。
+    /// 変わったときだけ出す。毎回書き換えるとロック画面がちらつく
+    /// （ETNowPlayingThrottle / NowPlayingModeTests）。
     private func updateNowPlaying() {
-        let active = !EffeTuneDSP.shared.bypass && applied > 0
-        let count = applied
-        let now = (running, active, count)
-        guard now != lastNowPlaying else { return }
-        lastNowPlaying = now
-        NowPlaying.update(running: running, active: active, count: count)
+        let now = ETNowPlayingState(running: running, bypass: EffeTuneDSP.shared.bypass,
+                                    applied: applied)
+        guard nowPlayingThrottle.shouldPublish(now) else { return }
+        NowPlaying.update(running: now.running, active: now.active, count: now.count)
     }
 
     /// 自分の音が仮想デバイスへ戻らないようにする。

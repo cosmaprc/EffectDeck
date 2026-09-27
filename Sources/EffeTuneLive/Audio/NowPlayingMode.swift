@@ -1,6 +1,6 @@
 //  NowPlayingMode.swift
-//  NowPlaying のうち MediaPlayer に触らない部分: 測るための切り替えの決め方と、
-//  ロック画面に出す字（NowPlayingModeTests）。
+//  NowPlaying のうち MediaPlayer に触らない部分: 測るための切り替えの決め方、
+//  ロック画面に出す字と中身、変わったときだけ出す判断（NowPlayingModeTests）。
 //
 //  **焼き付けは Debug だけ。**`-ETNowPlaying` を UserDefaults の diag.nowPlaying へ
 //  残すのは、devicectl から 1 回渡せばアイコンから起動した次の回にも効かせるため
@@ -102,4 +102,38 @@ enum ETNowPlayingText {
         guard active else { return "Bypassed" }
         return count == 1 ? "1 effect" : "\(count) effects"
     }
+}
+
+/// ロック画面へ出す中身（NowPlaying.update に渡す 3 つ）。
+struct ETNowPlayingState: Equatable {
+    /// 音が来ていて処理の口が開いているか。
+    var running: Bool
+    /// 鎖を通しているか。素通し（bypass）か、効いているノードが 0 なら false。
+    var active: Bool
+    /// 通しているエフェクトの数（ETPipeline_ActiveNodes）。
+    var count: Int
+
+    init(running: Bool, bypass: Bool, applied: Int) {
+        self.running = running
+        active = !bypass && applied > 0
+        count = applied
+    }
+}
+
+/// 変わったときだけ出す。毎回書き換えるとロック画面がちらつく。
+///
+/// **stop() で forget() すること。** 覚えたままだと stop→start で同じ組になったとき
+/// 「変わっていない」と見て、stop() で外したばかりのロック画面の割り当てを付け直さない
+/// （設定変更やレートの組み直しで毎回起きる）。
+struct ETNowPlayingThrottle {
+    private var last: ETNowPlayingState?
+
+    /// いま出すべきなら true を返し、その値を覚える。
+    mutating func shouldPublish(_ state: ETNowPlayingState) -> Bool {
+        guard state != last else { return false }
+        last = state
+        return true
+    }
+
+    mutating func forget() { last = nil }
 }

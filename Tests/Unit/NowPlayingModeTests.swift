@@ -72,4 +72,42 @@ final class NowPlayingModeTests: XCTestCase {
         XCTAssertEqual(ETNowPlayingText.artist(active: false, count: 5), "Bypassed")
         XCTAssertEqual(ETNowPlayingText.title, "EffectDeck")
     }
+
+    // MARK: - ロック画面へ出す中身と、出すかどうか
+
+    /// 効いているのは「素通しでなく、通ったノードが 1 つ以上」のときだけ。
+    func testStateIsActiveOnlyWithoutBypassAndWithNodes() {
+        let on = ETNowPlayingState(running: true, bypass: false, applied: 3)
+        XCTAssertTrue(on.active)
+        XCTAssertEqual(on.count, 3)
+        XCTAssertFalse(ETNowPlayingState(running: true, bypass: true, applied: 3).active)
+        XCTAssertEqual(ETNowPlayingState(running: true, bypass: true, applied: 3).count, 3)
+        XCTAssertFalse(ETNowPlayingState(running: true, bypass: false, applied: 0).active)
+        XCTAssertFalse(ETNowPlayingState(running: false, bypass: false, applied: 3).running)
+    }
+
+    /// 最初の 1 回は必ず出し、同じ中身は 2 度出さない。変わったら出す。
+    func testThrottlePublishesChangesOnly() {
+        var throttle = ETNowPlayingThrottle()
+        let idle = ETNowPlayingState(running: false, bypass: false, applied: 0)
+        let two = ETNowPlayingState(running: true, bypass: false, applied: 2)
+        XCTAssertTrue(throttle.shouldPublish(idle), "最初の 1 回（止まっている形でも）")
+        XCTAssertFalse(throttle.shouldPublish(idle))
+        XCTAssertTrue(throttle.shouldPublish(two))
+        XCTAssertFalse(throttle.shouldPublish(two))
+        XCTAssertTrue(throttle.shouldPublish(ETNowPlayingState(running: true, bypass: true, applied: 2)))
+        XCTAssertTrue(throttle.shouldPublish(two))
+    }
+
+    /// **stop() の後は同じ中身でも出し直す。** stop() はロック画面の割り当てを外すので、
+    /// 覚えたままだと stop→start で同じ組になったとき付け直さない（設定変更やレートの
+    /// 組み直しで毎回起きていた）。
+    func testForgetRepublishesTheSameState() {
+        var throttle = ETNowPlayingThrottle()
+        let two = ETNowPlayingState(running: true, bypass: false, applied: 2)
+        XCTAssertTrue(throttle.shouldPublish(two))
+        throttle.forget()
+        XCTAssertTrue(throttle.shouldPublish(two))
+        XCTAssertFalse(throttle.shouldPublish(two))
+    }
 }
