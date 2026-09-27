@@ -350,7 +350,9 @@ final class AssetPayloadTests: XCTestCase {
     }
 
     /// 経路か入力が0になる組み合わせでは畳み込み器の見積りは0（上流はTypeErrorを投げる）。
-    /// makePayloadとbeginRequestがその組み合わせを先に弾くので、ここは今の振る舞いを留めるだけ。
+    /// makePayloadとbeginInfoから来る値ではその組み合わせにならない。beginRequestは
+    /// BeginInfoのpathCountとinputCountをそのまま使うので、手で組んだ0は通って見積りが小さくなる。
+    /// ここは今の振る舞いを留めるだけ。
     func testConvolverZeroWithoutPathOrInput() {
         XCTAssertEqual(AssetUpload.estimateConvolverBytes(frames: 1000, assetChannels: 2, topology: .matrix,
                                                           processingChannels: 2, pathCount: 0, inputCount: 2), 0)
