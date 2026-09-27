@@ -84,8 +84,11 @@ BASE = 0x100000000
 
 
 def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), locals_count=0, classes=(),
-                methnames=(), entitlements=None, simulated=None, chained=True, pointer_format=6, cputype=None):
-    """薄い arm64 の MH_EXECUTE。classes は ObjC の実行時の名前。"""
+                methnames=(), entitlements=None, simulated=None, chained=True, pointer_format=6, cputype=None,
+                import_format=1, nlist_imports=True):
+    """薄い arm64 の MH_EXECUTE。classes は ObjC の実行時の名前。
+    import_format は chained fixups の取り込み表の形（1 = IMPORT、2 = ADDEND、3 = ADDEND64）。
+    nlist_imports=False なら取り込む名前を nlist に置かない（chained fixups の表にだけ在る）。"""
     text_secs = [("__text", b"\x1f\x20\x03\xd5", 0x80000400),
                  ("__cstring", b"".join(s + b"\0" for s in cstrings), 2),
                  ("__objc_methname", b"".join(s.encode() + b"\0" for s in methnames), 2),
@@ -166,10 +169,15 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
         imps = b""
         name_off = 0
         for x in imp_names:
-            imps += struct.pack("<I", (1 & 0xFF) | (name_off << 9))
+            if import_format == 1:     # lib_ordinal:8 weak:1 name_offset:23
+                imps += struct.pack("<I", 1 | (name_off << 9))
+            elif import_format == 2:   # 同じ 32 ビット + int32 addend
+                imps += struct.pack("<Ii", 1 | (name_off << 9), 0)
+            else:                      # lib_ordinal:16 weak:1 reserved:15 name_offset:32 + uint64 addend
+                imps += struct.pack("<QQ", 1 | (name_off << 32), 0)
             name_off += len(x.encode()) + 1
         symbols_off = imports_off + len(imps)
-        header = struct.pack("<7I", 0, starts_off, imports_off, symbols_off, len(imp_names), 1, 0)
+        header = struct.pack("<7I", 0, starts_off, imports_off, symbols_off, len(imp_names), import_format, 0)
         blob = header + b"\0" * (starts_off - len(header)) + starts + imps + pool
         chained_range = put(blob)
         exports_range = put(export_trie(exports))
@@ -187,7 +195,7 @@ def build_macho(cstrings=(), exports=("__mh_execute_header",), imports=(), local
         sym("_local_%d" % i, 0x0E, 1, BASE + 0x1000 + i)
     for name in exports:
         sym(name, 0x0F, 1, BASE)
-    for name in imports:
+    for name in imports if nlist_imports else ():
         sym(name, 0x01, 0, 0)
     symoff, _ = put(b"".join(syms))
     stroff, strsize = put(bytes(strtab))
@@ -479,6 +487,15 @@ class ReaderTests(unittest.TestCase):
         self.assertIn(b"hello world, long enough", m.cstrings())
         self.assertEqual(m.pointer_formats(), {1: 6, 2: 6})
 
+    def test_imports_from_the_chained_fixups_table_alone(self):
+        """nlist に未定義のシンボルを置かないリンカもある。取り込みは chained fixups の表から読めること。"""
+        for fmt in (1, 2, 3):
+            with self.subTest(import_format=fmt):
+                m = CRB.MachO("x", build_macho(imports=["_dlsym", "_vDSP_fft_zip", "_objc_msgSend"],
+                                               import_format=fmt, nlist_imports=False))
+                self.assertFalse([s for s in m.symbols() if (s[1] & CRB.N_TYPE) == CRB.N_UNDF], "nlist が空でない")
+                self.assertEqual(m.imports(), {"_dlsym", "_vDSP_fft_zip", "_objc_msgSend"})
+
     def test_objc_classes_through_every_pointer_encoding(self):
         names = ["ETRootProbe", SHARE_CLASS]
         for chained, fmt in ((True, 6), (True, 2), (False, None)):
@@ -660,6 +677,53 @@ class SourceTests(unittest.TestCase):
             self.assertNotIn("short", got)                             # 15 バイトまでは __cstring に出ない
             self.assertEqual(got["Reorder · mixed heights"][0], "Sources/EffeTuneLive/DSP/DebugPresets.swift")
 
+    def test_debug_only_callers_outside_debug(self):
+        """DebugPresets.swift はファイルごと囲っていない。呼ぶ側が 1 か所でも囲い忘れれば字は出荷物に残る。"""
+        with TempDir() as d:
+            repo = make_repo(d)
+            self.assertEqual(CRB.debug_only_callers(repo), [])
+            write(repo / "Sources/EffeTuneLive/Views/Picker.swift", "\n".join([
+                "import SwiftUI",                                         # 1
+                "struct Picker {",                                        # 2
+                "    func rows() {",                                      # 3
+                "        #if DEBUG",                                      # 4
+                "        _ = ETDebugPresets.all",                         # 5 囲ってある
+                "        #endif",                                         # 6
+                "        // ETDebugPresets.all は注釈なので数えない",          # 7
+                '        let s = "ETDebugPresets.all"',                   # 8 字も数えない
+                "        let n = MyETDebugPresetsLike.count",             # 9 別の名前
+                "        _ = ETDebugPresets.all.count",                   # 10 囲っていない
+                "        #if DEBUG || ET_BETA",                           # 11
+                "        _ = ETDebugPresets.all",                         # 12 TestFlight（Release）でも建つ
+                "        #endif",                                         # 13
+                "    }",
+                "}",
+                ""]))
+            owner = "Sources/EffeTuneLive/DSP/DebugPresets.swift"
+            self.assertEqual(CRB.debug_only_callers(repo), [
+                ("Sources/EffeTuneLive/Views/Picker.swift", 10, "ETDebugPresets", owner),
+                ("Sources/EffeTuneLive/Views/Picker.swift", 12, "ETDebugPresets", owner),
+            ])
+            # Debug だけのファイルの中で自分を使うのは数えない。宣言は一番上の段のものだけ拾う。
+            code = CRB._blank_swift_strings(CRB.strip_comments(DEBUG_PRESETS, True))
+            self.assertEqual(CRB._top_level_names(code), ["ETDebugPresets"])
+
+    def test_covers_signed_values_against_repo_entitlements(self):
+        cover = CRB._covers
+        kvs = "$(TeamIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)"
+        self.assertTrue(cover("C82ST8T9MN.ai.nemut.effetune", kvs, "ai.nemut.effetune"))
+        self.assertFalse(cover("C82ST8T9MN.ai.nemut.effetune.share", kvs, "ai.nemut.effetune"))
+        self.assertFalse(cover("c82st8t9mn.ai.nemut.effetune", kvs, "ai.nemut.effetune"))
+        self.assertFalse(cover(kvs, kvs, "ai.nemut.effetune"))   # 展開されずに残ったもの
+        self.assertTrue(cover(["group.a", "group.b"], ["group.a"], "x"))
+        self.assertFalse(cover(["group.a"], ["group.a", "group.b"], "x"))
+        self.assertFalse(cover("group.a", ["group.a"], "x"))
+        self.assertTrue(cover([], [], "x"))
+        self.assertTrue(cover({"a": [1], "b": True}, {"a": [1]}, "x"))
+        self.assertFalse(cover({"b": True}, {"a": [1]}, "x"))
+        self.assertTrue(cover(True, True, "x"))
+        self.assertFalse(cover(False, True, "x"))
+
 
 # ---------------------------------------------------------------------------
 # 束ごと
@@ -697,6 +761,43 @@ class BundleTests(unittest.TestCase):
             write(repo / "Sources/EffeTuneLive/DSP/AssetUpload.swift", ASSET_UPLOAD_AFTER)
             code, text = check(make_app(d / "after"), repo)
             self.assertEqual(code, 0, text)
+
+    def test_lookup_resolution_by_kind(self):
+        """系の関数は取り込み（chained fixups の表だけに在っても）で、Selector("…") はメソッド名で引ける。"""
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            write(repo / "Sources/EffeTuneLive/Probe.swift",
+                  'import Foundation\n'
+                  'let fft = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "vDSP_fft_zip")\n'
+                  'let sel = Selector("probeMethod:")\n')
+
+            def app_bin(imports=("_vDSP_fft_zip",), methnames=("probeMethod:",)):
+                return build_macho(imports=list(imports), nlist_imports=False, methnames=list(methnames))
+            code, text = check(make_app(d / "ok", app_bin=app_bin()), repo)
+            self.assertEqual(code, 0, text)
+            self.assertIn('Probe.swift:2 dlsym("vDSP_fft_zip") → EffectDeck: 外の dylib から取り込んでいる', text)
+            self.assertIn('Probe.swift:3 Selector("probeMethod:") → EffectDeck: __objc_methname に在る', text)
+
+            code, text = check(make_app(d / "nosel", app_bin=app_bin(methnames=("otherMethod:",))), repo)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(len(fails(text)), 1, text)
+            self.assertIn('Selector("probeMethod:") → EffectDeck: この実行ファイルのメソッド名に無い',
+                          fails(text, "lookup")[0])
+
+            code, text = check(make_app(d / "nosym", app_bin=app_bin(imports=())), repo)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(len(fails(text)), 1, text)
+            self.assertIn('dlsym("vDSP_fft_zip") → EffectDeck: export されていない', fails(text, "lookup")[0])
+
+    def test_non_literal_lookup_argument_fails_the_run(self):
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            write(repo / "Sources/Shared/Loader.c",
+                  'void *f(const char *n) { void *p = dlsym(RTLD_DEFAULT, n); return p; }\n')
+            code, text = check(make_app(d, app_bin=build_macho(imports=["_dlsym"])), repo)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(len(fails(text)), 1, text)
+            self.assertIn("Sources/Shared/Loader.c:1: dlsym の引数が字でない", fails(text, "lookup")[0])
 
     def test_unstripped_binary_fails_unless_allowed(self):
         with TempDir() as d:
@@ -780,6 +881,31 @@ class BundleTests(unittest.TestCase):
                     self.assertEqual(code, 1, text)
                     self.assertTrue(any(needle in ln for ln in fails(text, "entitle")), text)
 
+    def test_signed_bundle_must_keep_every_repo_entitlement(self):
+        """.entitlements に書いた鍵が profile に無いと、書き出しで黙って落ちる。他の決まりが見ない鍵で確かめる。"""
+        wifi = "com.apple.developer.networking.wifi-info"
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            groups = ["group.ai.nemut.effetune", "group.ai.nemut.effetune.more"]
+            (repo / "Sources/EffeTuneLive/EffeTuneLive.entitlements").write_bytes(
+                plistlib.dumps(dict(APP_ENTS, **{wifi: True, "com.apple.security.application-groups": groups})))
+            good = dict(signed(APP_ENTS, "app"), **{wifi: True, "com.apple.security.application-groups": groups})
+            code, text = check(make_app(d / "good", sign=True, ents={"app": good}), repo)
+            self.assertEqual(code, 0, text)
+            cases = {
+                "鍵が無い": ({k: v for k, v in good.items() if k != wifi}, wifi),
+                "値が違う": (dict(good, **{wifi: False}), wifi),
+                "配列の一部が無い": (dict(good, **{"com.apple.security.application-groups": groups[:1]}),
+                                   "com.apple.security.application-groups"),
+            }
+            for i, (name, (ents, key)) in enumerate(sorted(cases.items())):
+                with self.subTest(name):
+                    code, text = check(make_app(d / ("c%d" % i), sign=True, ents={"app": ents}), repo)
+                    self.assertEqual(code, 1, text)
+                    self.assertEqual(len(fails(text)), 1, text)
+                    line = fails(text, "entitle")[0]
+                    self.assertIn("EffeTuneLive.entitlements に在る %s が署名に無いか値が違う" % key, line)
+
     def test_signed_bundle_without_entitlements_blob_fails(self):
         with TempDir() as d:
             repo = make_repo(d / "repo")
@@ -813,7 +939,8 @@ class BundleTests(unittest.TestCase):
             self.assertIn("ITMS-90473", fails(text, "plist")[0])
             code, text = check(make_app(d / "u", app_info={"CFBundleShortVersionString": "$(MARKETING_VERSION)"}),
                                repo)
-            self.assertTrue(any("$(MARKETING_VERSION)" in ln for ln in fails(text, "plist")), text)
+            self.assertTrue(any("展開されていないビルド変数 $(MARKETING_VERSION)" in ln
+                                for ln in fails(text, "plist")), text)
             code, text = check(make_app(d / "p", share_bin=build_macho(classes=["_TtC15EffectDeckShare5Other"])),
                                repo)
             self.assertTrue(any("NSExtensionPrincipalClass" in ln and SHARE_CLASS in ln
@@ -832,6 +959,41 @@ class BundleTests(unittest.TestCase):
             code, text = check(make_app(d / "e", app_info={"ITSAppUsesNonExemptEncryption": None}), repo)
             self.assertTrue(any("ITSAppUsesNonExemptEncryption" in ln for ln in fails(text, "plist")), text)
 
+    def test_unexpanded_build_variable_on_a_key_nothing_else_reads(self):
+        """版の食い違いなど他の決まりに頼らず、$(…) が残っていること自体で落ちる。入れ子の中でも。"""
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            for i, (kw, needle) in enumerate((
+                    ({"share_info": {"CFBundleDisplayName": "$(PRODUCT_NAME)"}}, "$(PRODUCT_NAME)"),
+                    ({"app_info": {"CFBundleURLTypes": [{"CFBundleURLSchemes": ["$(ET_URL_SCHEME)"]}]}},
+                     "$(ET_URL_SCHEME)"))):
+                with self.subTest(needle):
+                    code, text = check(make_app(d / ("v%d" % i), **kw), repo)
+                    self.assertEqual(code, 1, text)
+                    self.assertEqual(len(fails(text)), 1, text)
+                    self.assertIn("展開されていないビルド変数 " + needle, fails(text, "plist")[0])
+
+    def test_appex_in_the_wrong_directory(self):
+        """ExtensionKit の拡張は Extensions/、NSExtension の拡張は PlugIns/。逆だと系が読まない。"""
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            app = make_app(d / "a")
+            (app / "PlugIns").mkdir(exist_ok=True)
+            shutil.move(str(app / "Extensions/EffeTuneLiveExtension.appex"),
+                        str(app / "PlugIns/EffeTuneLiveExtension.appex"))
+            code, text = check(app, repo)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(len(fails(text)), 1, text)
+            self.assertIn("EffeTuneLiveExtension.appex が Extensions/ でなく PlugIns/ に入っている",
+                          fails(text, "plist")[0])
+            app = make_app(d / "b")
+            (app / "Extensions").mkdir(exist_ok=True)
+            shutil.move(str(app / "PlugIns/EffectDeckShare.appex"), str(app / "Extensions/EffectDeckShare.appex"))
+            code, text = check(app, repo)
+            self.assertEqual(len(fails(text)), 1, text)
+            self.assertIn("EffectDeckShare.appex が PlugIns/ でなく Extensions/ に入っている",
+                          fails(text, "plist")[0])
+
     def test_debug_only_literal_in_binary_fails(self):
         with TempDir() as d:
             repo = make_repo(d / "repo")
@@ -839,6 +1001,27 @@ class BundleTests(unittest.TestCase):
             code, text = check(make_app(d, app_bin=leaked), repo)
             self.assertEqual(code, 1)
             self.assertIn("DebugPresets.swift:5", fails(text, "debugonly")[0])
+
+    def test_ungated_debug_caller_fails_before_any_binary_is_read(self):
+        """EffectPickerView の形。ETDebugPresets を #if DEBUG の外で使えば、字の無い書庫でも落とす。"""
+        with TempDir() as d:
+            repo = make_repo(d / "repo")
+            view = repo / "Sources/EffeTuneLive/Views/Picker.swift"
+            write(view, "struct Picker {\n    var names: [String] { ETDebugPresets.all.map { $0.name } }\n}\n")
+            code, text = check(make_app(d / "a"), repo)
+            self.assertEqual(code, 1, text)
+            self.assertEqual(len(fails(text)), 1, text)
+            line = fails(text, "debugonly")[0]
+            self.assertIn("Sources/EffeTuneLive/Views/Picker.swift:2: ETDebugPresets", line)
+            self.assertIn("#if DEBUG の外で使っている", line)
+            # 呼ぶ側が直るまでの CI の逃げ道。
+            code, text = check(make_app(d / "b"), repo, "--skip", "debugonly")
+            self.assertEqual(code, 0, text)
+            # 呼ぶ側を囲えば通る。
+            write(view, "struct Picker {\n    #if DEBUG\n    var names: [String] { ETDebugPresets.all.map { $0.name } }\n"
+                        "    #endif\n}\n")
+            code, text = check(make_app(d / "c"), repo)
+            self.assertEqual(code, 0, text)
 
     def test_flavor_detection_and_input_errors(self):
         with TempDir() as d:

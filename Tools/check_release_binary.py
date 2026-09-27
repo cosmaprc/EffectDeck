@@ -27,7 +27,8 @@ Release の書庫では実行ファイルのシンボルが strip されるの�
   samples    Debug/JSFXFactory の見本。店の版（青）には無い。TestFlight（紫・ET_BETA）には追跡している
              ものだけが中身ごと同じで在る。Local/DebugJSFXFactory（第三者の実物）はどちらにも無い
   debugonly  #if DEBUG の中にだけある字（Sources/EffeTuneLive/DSP/DebugPresets.swift の鎖など）が
-             実行ファイルに無い
+             実行ファイルに無い。DebugPresets.swift はファイルごと囲っていない（呼ぶ側が囲う）ので、
+             そこで宣言した名前を #if DEBUG の外で使う所があればソースの段で落とし、その場所を出す
   crosscheck Mac の nm・codesign があれば、ここでの読み取り（export trie・entitlements）と突き合わせる
 
 署名の無い書庫（CI の CODE_SIGNING_ALLOWED=NO）では entitlements をリポジトリの .entitlements から読み、
@@ -147,6 +148,7 @@ ABI_DECL = re.compile(r"\b((?:ET[A-Z][A-Za-z0-9]*(?:_[A-Za-z0-9_]+)?)|et_[A-Za-z
 ABI_STRING_ALLOW = set()
 
 # #if DEBUG で囲わずに、呼ぶ側が囲っているもの。ファイルの字は全部 Debug だけのもの。
+# 呼ぶ側が囲っていることも debug_only_callers で確かめる（囲っていなければ字は必ず残る）。
 DEBUG_ONLY_FILES = ("Sources/EffeTuneLive/DSP/DebugPresets.swift",)
 # Swift の字のうち 15 バイトまでは命令に埋め込まれて __cstring に出ない。見るのは 16 バイトから。
 DEBUG_LITERAL_MIN_BYTES = 16
@@ -984,6 +986,60 @@ def debug_only_literals(repo, files=None):
     return {b: w for b, w in debug.items() if b not in released}
 
 
+_TOP_DECL = re.compile(r"(?:\b(?:public|internal|fileprivate|private|final|static|nonisolated|indirect)\s+)*"
+                       r"\b(?:enum|struct|class|actor|protocol|typealias|func|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _blank_swift_strings(clean):
+    """字の中身を空白にする（行は保つ）。字に書いた名前を使っていると数えないため。"""
+    out, i, n = [], 0, len(clean)
+    while i < n:
+        j = clean.find('"', i)
+        if j < 0:
+            out.append(clean[i:])
+            break
+        out.append(clean[i:j])
+        end = _skip_string(clean, j, True)
+        out.append(re.sub(r"[^\n]", " ", clean[j:end]))
+        i = end
+    return "".join(out)
+
+
+def _top_level_names(text):
+    """括弧の外（ファイルの一番上の段）で宣言した名前。"""
+    names, depth = [], 0
+    for line in text.split("\n"):
+        if depth == 0:
+            names.extend(m.group(1) for m in _TOP_DECL.finditer(line.split("{", 1)[0]))
+        depth += line.count("{") - line.count("}")
+    return names
+
+
+def debug_only_callers(repo, files=None):
+    """[(パス, 行, 名前, DEBUG_ONLY_FILES のどれか)]。Debug だけのファイルが宣言した名前を
+    #if DEBUG の外で使っている所。そこは Release でも建つので、そのファイルの字は出荷物に残る。"""
+    files = source_files(repo) if files is None else files
+    owners = {}
+    for rel in DEBUG_ONLY_FILES:
+        if (repo / rel).is_file():
+            code = _blank_swift_strings(strip_comments(read_text(repo / rel), True))
+            for name in _top_level_names(code):
+                owners.setdefault(name, rel)
+    if not owners:
+        return []
+    pattern = re.compile(r"\b(%s)\b" % "|".join(re.escape(n) for n in sorted(owners)))
+    out = []
+    for rel in sorted(f for f in files if f.endswith(".swift") and f not in DEBUG_ONLY_FILES):
+        clean = strip_comments(read_text(repo / rel), True)
+        flags = debug_line_flags(clean)
+        for number, line in enumerate(_blank_swift_strings(clean).split("\n")):
+            if number < len(flags) and flags[number]:
+                continue
+            for m in pattern.finditer(line):
+                out.append((rel, number + 1, m.group(1), owners[m.group(1)]))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 束を読む
 # ---------------------------------------------------------------------------
@@ -1540,6 +1596,11 @@ def check_samples(rep, repo, app_dir, flavor):
 
 
 def check_debug_only(rep, repo, bundles, files):
+    # 先にソースで。呼ぶ側が 1 か所でも囲っていなければ、下の字は Release でも必ず残る。
+    for rel, line, name, owner in debug_only_callers(repo, files):
+        rep.fail("debugonly", "%s:%d: %s（%s）を #if DEBUG の外で使っている。Release でも建つので %s の字が"
+                              "出荷物に残る。呼ぶ側を #if DEBUG で囲う（%s だけを囲うと Release が建たない）"
+                 % (rel, line, name, owner, pathlib.PurePosixPath(owner).name, pathlib.PurePosixPath(owner).name))
     literals = debug_only_literals(repo, files)
     for rel in DEBUG_ONLY_FILES:
         if (repo / rel).is_file() and not any(w[0] == rel for w in literals.values()):
