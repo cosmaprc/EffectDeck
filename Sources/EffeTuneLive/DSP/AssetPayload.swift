@@ -404,8 +404,10 @@ enum AssetUpload {
     }
 
     /// ir-plugin-contract.js:75-103 (estimateIrConvolverMemoryUpperBound)。
-    /// 経路か入力が0になる組み合わせでは0を返す（上流はTypeErrorを投げる。
-    /// makePayloadとbeginRequestがその組み合わせを先に弾くので、ここへは来ない）。
+    /// 経路か入力が0になる組み合わせでは0を返す（上流はTypeErrorを投げる）。
+    /// makePayloadとbeginInfoから来る値ではその組み合わせにならない。beginRequestは
+    /// BeginInfoのpathCountとinputCountをそのまま使うので、手で組んだ0が来ると
+    /// 見積りが小さくなり、カーネルがbeginで断る（beginRejected）。
     static func estimateConvolverBytes(frames: Int,
                                        assetChannels: Int,
                                        topology: ETAssetTopology,

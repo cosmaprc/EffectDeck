@@ -511,6 +511,10 @@ final class AssetPayloadTests: XCTestCase {
         info.footprintBytes = UInt32(payload.count)
         XCTAssertEqual(try AssetUpload.beginRequest(engine: 1, instance: 1, payload: payload, info: info).footprintBytes,
                        UInt32(payload.count))
+        // ちょうど32MiBは通る（maximumFramesも<=で数える）。
+        info.footprintBytes = UInt32(AssetUpload.capacityBytes)
+        XCTAssertEqual(try AssetUpload.beginRequest(engine: 1, instance: 1, payload: payload, info: info).footprintBytes,
+                       UInt32(AssetUpload.capacityBytes))
         info.footprintBytes = UInt32(AssetUpload.capacityBytes + 1)
         assertThrows("tooLarge") { try AssetUpload.beginRequest(engine: 1, instance: 1, payload: payload, info: info) }
 

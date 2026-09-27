@@ -294,12 +294,17 @@ enum FIRDesign {
     /// 振幅から最小位相の位相（bin ごと、ラジアン）を出す。実ケプストラムを因果側へ折り返し、
     /// その FFT の虚部を取る（Hilbert 変換）。
     /// fir-crossover/design-core.js:108-120、five-band-fir-peq/design-core.js:198-214、
-    /// room-eq/design-core.js:692-703 の minimumPhaseForMagnitude。3 本とも同じ手順。
+    /// room-eq/design-core.js:692-703 の minimumPhaseForMagnitude。3 本とも同じ手順
+    /// （NaN の扱いだけ違う。floor の説明を見ること）。
     ///
     /// - Parameters:
     ///   - magnitudes: 0〜fftSize/2 の fftSize/2+1 個。それより後ろは見ない。足りない bin は
     ///     対数振幅 0（振幅 1）として扱う（fir-crossover・five-band と同じ）
-    ///   - floor: 対数を取る前の床。3 本とも 1e-8。床以下と NaN は床にする
+    ///   - floor: 対数を取る前の床。3 本とも 1e-8。床以下と NaN は床にする。
+    ///     NaN を床にするのは five-band-fir-peq と同じで、fir-crossover と room-eq とは違う。
+    ///     その 2 本は Math.max(1e-8, NaN) が NaN のまま残り、utils/measurement-dsp/fft.js:179 の
+    ///     `realHalf[index] || 0` で対数振幅 0（振幅 1）になる。ここは床に揃える
+    ///     （Swift の設計側の写しも 3 本とも床にしている）
     /// - Returns: fftSize/2+1 個。fftSize が 4 以上の 2 の冪でなければ 0 を並べて返す
     ///
     /// 折り返しで index == fftSize/2 だけは 2 倍にも 0 にもしない。

@@ -394,6 +394,8 @@ final class FIRDesignTests: XCTestCase {
     }
 
     /// 平らな振幅の最小位相は0。床より小さい値とNaNは床として扱う。大きさが合わなければ0を並べる。
+    /// NaNを床にするのはfive-band-fir-peqと同じ。fir-crossoverとroom-eqは振幅1として扱うので、
+    /// 上流の見本（NaNを入れていない）ではこの違いは見えない。
     func testMinimumPhaseEdges() throws {
         let flat = FIRDesign.minimumPhase(magnitudes: [Double](repeating: 1, count: 33), fftSize: 64)
         XCTAssertEqual(flat.count, 33)
