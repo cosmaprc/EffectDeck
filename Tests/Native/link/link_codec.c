@@ -375,7 +375,6 @@ ET_CASE(stream_roundtrip_random_splits) {
     uint8_t *wire = malloc((size_t)FRAMES * 2 * sizeof(float) * 2);
     uint8_t *chunk = malloc(ET_LINK_CHUNK_BYTES);
     CHECK(sendRing && recvRing && wire && chunk);
-    if (!sendRing || !recvRing || !wire || !chunk) goto done;
 
     // 送り手: 音のコールバックが 256 フレームずつ積み、ポンプが 700 フレームごとに吐く。
     uint64_t w = 0, r = 0;
@@ -423,7 +422,6 @@ ET_CASE(stream_roundtrip_random_splits) {
     for (int i = 0; i < FRAMES * 2; i++) if (recvRing[i] != src[i]) mismatches++;
     CHECK_EQ(mismatches, 0);
 
-done:
     free(sendRing);
     free(recvRing);
     free(wire);
@@ -431,7 +429,7 @@ done:
 }
 
 int main(int argc, char **argv) {
-    static const et_case_t cases[] = {
+    static const et_case cases[] = {
         ET_ENTRY(encoder_header_layout),
         ET_ENTRY(encoder_even_and_capped),
         ET_ENTRY(encoder_nothing_when_caught_up),
@@ -449,5 +447,5 @@ int main(int argc, char **argv) {
         ET_ENTRY(consume_short_buffer_untouched),
         ET_ENTRY(stream_roundtrip_random_splits),
     };
-    return et_run(argc, argv, cases, sizeof(cases) / sizeof(cases[0]));
+    return et_run(argc, argv, cases, ET_COUNT(cases));
 }

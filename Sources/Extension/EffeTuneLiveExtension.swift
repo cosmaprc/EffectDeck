@@ -9,9 +9,12 @@
 //      違うと登録が kAudioHardwareIllegalOperationError で失敗する
 //    - デバイスの UID は MediaOutputDevice.id と一致していること
 //
-//  未確認: MediaOutputDevice.init? は requiredNetworkEndpoints が必須引数で
+//  MediaOutputDevice.init? は requiredNetworkEndpoints が必須引数で
 //  デフォルト値が無く、init 自体が failable。ネットワーク上の受信機を前提にした
-//  設計なので、ローカル完結のデバイスで何を渡せば nil にならないかは実機で詰める。
+//  設計だが、ローカル完結のここでは本体の受け口 127.0.0.1:47101 を渡していて、
+//  それで nil にならず一覧に出て選べる（実機。TestFlight の build 26 もこの形。
+//  渡す口の理由は linkEndpoint と localDevice の説明）。nil のときは
+//  startDeviceDiscovery が discoveryFailed を返す。
 
 import Foundation
 import MediaDevice
@@ -194,10 +197,12 @@ final class EffeTuneLiveExtension: MediaDeviceExtension, RealtimeSampleHandling 
             volumeControl: .none,
             canMute: false,
             requiredNetworkEndpoints: eps,
-            // **空のまま。**
-            // コントロールセンターの行は 2 行とも displayName が出る。
-            // 2 行目をこちらから変える口は無い（2026-09-17 に 3 つとも実機で外した。
-            // 手元のログ docs/connect-log.md の「2 行目は選べない」。リポジトリには入っていない）。
+            // **空のまま。**コントロールセンターの字はここを通らない。
+            // 一覧の 1 行目は displayName（ET_ROUTE_NAME）、タップして出る 2 行目は
+            // Info.plist の UTTypeDescription（2026-09-17 に実機で確認。model と
+            // manufacturer をここに入れても 2 行目は変わらなかった。手元のログ
+            // docs/connect-log.md の「コントロールセンターの 2 行目は UTTypeDescription」。
+            // リポジトリには入っていない）。
             txtRecords: [],
             supportsSimultaneousSessions: false
         )

@@ -80,11 +80,28 @@ ET_CASE(first_read_anchors_target_behind) {
     Rx *x = rx_new();
     rx_feed(x, 3000);
     // 読み位置 0 は「まだ貼っていない」。書き位置から狙いのぶん下げて置く。
+    // （3000 フレームは切り詰めの線＝狙いの 2 倍も越えている。線より下は次の件）
     CHECK_EQ(rx_read(x, 256, true, 3000, NULL), 256);
     CHECK_FEQ(x->out[0], value_of(6000 - BEHIND));
     CHECK_FEQ(x->out[511], value_of(6000 - BEHIND + 511));
     CHECK_EQ(x->r, 6000 - BEHIND + 512);
     // 初回の貼り直しは切り詰めとして数えない。
+    CHECK_EQ(atomic_load(&x->j.trimCount), 0);
+    rx_free(x);
+}
+
+ET_CASE(first_read_anchors_below_trim_line) {
+    // 狙いより多く、切り詰めの線（狙いの 2 倍）には届かない量で初めて読む。
+    // ここで貼らないと頭から読み始め、狙いの 2 倍近い遅れを抱えたまま
+    // 切り詰めにも届かないので、その遅れが戻らない。
+    Rx *x = rx_new();
+    rx_feed(x, 1500);
+    CHECK(x->w > BEHIND);
+    CHECK(x->w <= 2 * BEHIND);
+    CHECK_EQ(rx_read(x, 256, true, 1500, NULL), 256);
+    CHECK_FEQ(x->out[0], value_of(3000 - BEHIND));
+    CHECK_FEQ(x->out[511], value_of(3000 - BEHIND + 511));
+    CHECK_EQ(x->r, 3000 - BEHIND + 512);
     CHECK_EQ(atomic_load(&x->j.trimCount), 0);
     rx_free(x);
 }
@@ -332,8 +349,9 @@ ET_CASE(reset_returns_to_1024) {
 }
 
 int main(int argc, char **argv) {
-    static const et_case_t cases[] = {
+    static const et_case cases[] = {
         ET_ENTRY(first_read_anchors_target_behind),
+        ET_ENTRY(first_read_anchors_below_trim_line),
         ET_ENTRY(first_read_short_buffer_starts_at_zero),
         ET_ENTRY(trim_at_twice_target),
         ET_ENTRY(overrun_reanchors),
@@ -347,5 +365,5 @@ int main(int argc, char **argv) {
         ET_ENTRY(no_fallback_when_starves_spread),
         ET_ENTRY(reset_returns_to_1024),
     };
-    return et_run(argc, argv, cases, sizeof(cases) / sizeof(cases[0]));
+    return et_run(argc, argv, cases, ET_COUNT(cases));
 }

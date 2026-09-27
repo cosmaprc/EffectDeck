@@ -40,11 +40,12 @@ uint32_t ETLinkEncodeNext(uint8_t *dst, size_t *outBytes,
     uint32_t count = n;
     memcpy(dst, &magic, sizeof(magic));
     memcpy(dst + 8, &count, sizeof(count));
-    // dst は malloc 由来で先頭が 16 バイト境界。ヘッダ 12 の直後なので float も 4 で揃う。
-    float *payload = (float *)(void *)(dst + ET_LINK_HDR_BYTES);
+    // dst の境界は決めつけない（呼ぶ側が 4 バイト境界の器を渡すとは限らない）。
+    // 1 サンプルずつ memcpy で置く。書かれるバイトは float の代入と同じ。
+    uint8_t *payload = dst + ET_LINK_HDR_BYTES;
     uint64_t at = rr % ringSamples;
     for (uint32_t i = 0; i < n; i++) {
-        payload[i] = ring[at];
+        memcpy(payload + (size_t)i * sizeof(float), &ring[at], sizeof(float));
         if (++at == ringSamples) at = 0;
     }
     if (outBytes) *outBytes = ET_LINK_HDR_BYTES + (size_t)n * sizeof(float);

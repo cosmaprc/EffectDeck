@@ -210,7 +210,7 @@ ET_CASE(null_outputs_ok) {
 }
 
 int main(int argc, char **argv) {
-    static const et_case_t cases[] = {
+    static const et_case cases[] = {
         ET_ENTRY(ticks_per_frame_from_timebase),
         ET_ENTRY(first_get_anchors_at_now),
         ET_ENTRY(whole_periods_monotonic),
@@ -223,5 +223,5 @@ int main(int argc, char **argv) {
         ET_ENTRY(initialize_drops_anchor_keeps_seed),
         ET_ENTRY(null_outputs_ok),
     };
-    return et_run(argc, argv, cases, sizeof(cases) / sizeof(cases[0]));
+    return et_run(argc, argv, cases, ET_COUNT(cases));
 }

@@ -79,7 +79,7 @@ uint64_t ETLinkRingPush(float *ring, uint64_t ringSamples, uint64_t w,
 /// 返すのはチャンクのサンプル数。送るものが無ければ 0 で、dst も *r も触らない。
 /// w は書き位置の写し。1 回の送り出しのあいだは同じ値を渡し続けること。
 /// 書き手がリング 1 周より先へ行っていたら、古いぶんを捨てて *r を詰める。
-/// dst は ET_LINK_CHUNK_BYTES 以上。*outBytes にヘッダ込みのバイト数を書く。
+/// dst は ET_LINK_CHUNK_BYTES 以上（境界は問わない）。*outBytes にヘッダ込みのバイト数を書く。
 uint32_t ETLinkEncodeNext(uint8_t *dst, size_t *outBytes,
                           const float *ring, uint64_t ringSamples,
                           uint64_t w, uint64_t *r);
