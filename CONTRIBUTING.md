@@ -56,7 +56,7 @@ from a fresh run. The same goes for the golden files under `Tests/Fixtures` (see
 ```bash
 bash Scripts/test.sh                          # everything in Tests/Unit
 bash Scripts/test.sh PipelineRulesTests       # one class (several may follow)
-bash Scripts/test.sh ChainTextTests/testFoo   # one test
+bash Scripts/test.sh ChainTextTests/testWholeReplyWithFence   # one test
 SIM="iPhone 17 Pro" bash Scripts/test.sh      # another simulator, by exact name
 ```
 
@@ -115,7 +115,7 @@ C and C++ files and `JSFX*Tests`, which need ysfx and the Mac. `os`, `Accelerate
 cd Tests/Native
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan        # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan        # TSan, threaded tests only
-cmake --preset engine && cmake --build --preset engine --parallel && ctest --preset engine  # also the real engine
+cmake --preset engine && cmake --build --preset engine --parallel 4 && ctest --preset engine  # also the real engine
 ```
 
 These build the plain C files under `Sources/` with gcc or clang, without Xcode. The presets
@@ -129,7 +129,9 @@ MSVC. Build directories are `build/native-<preset>` at the top of the repository
   POSIX system. It unpacks the pinned revision with `Tools/golden/extract_pin.sh`, which
   reads the submodule's git objects, so it runs in a clone; elsewhere, pass an unpacked
   copy with `-DET_NATIVE_EFFETUNE_ROOT=<dir>` (the directory that contains `dsp/`). It
-  compiles all of upstream's DSP under ASan, so keep `--parallel`.
+  compiles all of upstream's DSP under ASan, up to about 300 MB per file, so give
+  `--parallel` a number. The preset uses Make on Linux, and a bare `--parallel` becomes
+  `make -j`, which starts every file at once and can run out of memory.
 - If a sanitizer dies at startup on a kernel with 32 bits of mmap randomization (Ubuntu
   24.04 does this), run `sudo sysctl -w vm.mmap_rnd_bits=28` first; CI does the same.
 

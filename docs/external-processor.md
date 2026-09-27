@@ -36,8 +36,11 @@ Since EffeTune 2.11.0 the engine's latency planner also gives external nodes inp
 delays for parallel-bus compensation (`Patches/effetune-external-latency.diff`). The
 patched engine aligns the node's routed channels (`align_input`) after the bus copy and
 before the callback, as it does for native nodes, so the adapter receives aligned input.
-This is covered only by a scratch native test; it has not been measured with an AU or
-JSFX processor.
+`external_latency_compensated_once` in `Tests/Native/pipeline_engine.c` (the `engine`
+preset, and `dsp.yml` in CI) checks this against the patched engine: an external node's
+latency is counted once, and the dry parallel bus is delayed to match. Two things are not
+measured yet: `align_input` lining up an external node's input channels when they arrive
+with different latencies, and an AU or JSFX processor on a device.
 
 The patches are kept in this repository until the corresponding upstream EffeTune change
 is available at the pinned submodule revision.

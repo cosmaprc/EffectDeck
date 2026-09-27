@@ -249,9 +249,9 @@ XCUITest `launchArguments`. The icon on the home screen passes none.
 | `-ETMock 1` | Feeds a generated test signal, so meters and graphs move without the extension |
 | `-ETWidth <pt>` | With `-ETSeed`, the width of the one-column chain, so screenshots taken on iPad look like a phone. Default 393; `0` keeps the device width |
 | `-ETLayout wide` | With `-ETSeed`, keeps the two-column iPad layout instead of one column |
-| `-ETCollapsed 1` | With `-ETSeed`, starts with every card folded |
+| `-ETCollapsed 1` | With `-ETSeed`, starts with every card closed. A card with a graph still shows the graph |
 | `-ETSheet <name>` | Opens a sheet at launch: `picker`, `settings`, `routing`, `presets`, `ir`, `tips` |
-| `-ETAutoExpand 1`, `-ETAutoExpandIndex <n>` | Opens an effect 4 seconds after launch, to record the animation. The first one by default; `n` counts from 0 and skips Sections |
+| `-ETAutoExpand 1`, `-ETAutoExpandIndex <n>` | Taps an effect once, 4 seconds after launch, to record the animation. A tap moves the card one step (open → graph only → folded → open), so it opens only a folded card, and a card that `-ETSeed` opened keeps only its graph. The first effect by default; `n` counts from 0 and skips Sections |
 | `-ETDebugBlocks 1` | Tints each Section block to check grouping |
 | `-ETDiag 1` | Adds a hidden `diag` text with the active node count and chain length, for UI tests |
 | `-ETConsole 1` | Also prints the diagnostic log to stdout, for `devicectl ... --console` |

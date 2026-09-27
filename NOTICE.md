@@ -62,7 +62,8 @@ zlib license. Full text in `Vendor/ysfx/thirdparty/WDL/LICENSE.txt`. Altered:
 ## DPF Base64
 
 ysfx compiles `Vendor/ysfx/sources/base64/Base64.hpp`, taken from the DISTRHO Plugin
-Framework (DPF). The license is in the file's header.
+Framework (DPF). The license is in the file's header. `Licenses/dpf-base64.LICENSE` is a
+copy of it, which `Tools/gen_licenses.py` reads and checks against the header.
 
 Copyright (C) 2012-2021 Filipe Coelho
 Copyright (C) 2022 Jean Pierre Cimalando
