@@ -174,6 +174,9 @@ final class StatusReadingsTests: XCTestCase {
         let table: [(Double, ETLoadReading.Level, Int)] = [
             (0, .normal, 0),
             (0.7499, .normal, 75),   // 字は 75 でも、色は閾値の手前
+            // ちょうど .5 は上へ（2 進で割り切れる値）。偶数への丸めなら 12 と 62。
+            (0.125, .normal, 13),
+            (0.625, .normal, 63),
             (0.75, .high, 75),
             (0.999, .high, 100),
             (1.0, .over, 100),
@@ -215,6 +218,9 @@ final class StatusReadingsTests: XCTestCase {
             (0.49, 0.49, 0, 1, 1),
             (48.5, 0.5, 49, 0, 49),
             (25, 0.5, 25, 1, 26),
+            // I/O を動かさず足すと合計になる代金。Fx の字は上にも下にも 1 ms 近くずれる。
+            (10.4, 0.2, 10, 1, 11),     // 0.2 が 1
+            (10.5, 20.998, 11, 20, 31), // 20.998 が 20
         ]
         for row in table {
             let d = ETDelaySplit(ioMs: row.io, fxMs: row.fx)
@@ -336,6 +342,26 @@ final class StatusReadingsTests: XCTestCase {
         }
         XCTAssertEqual(ETRateText.kHz(47_500), "48 kHz")
         XCTAssertEqual(ETRateText.kHz(0), "0 kHz")
+    }
+
+    /// 端末のレートが有限でないときは 0 と同じ「分からない」に読む。
+    /// inf は 0 より大きく 48000 から離れているので、以前は問題の行と Device rate で
+    /// Int(inf) に落ちていた。
+    func testDeviceRateNonFinite() {
+        var unknown = playing()
+        unknown.sampleRate = 0
+        let fallback = ETDelayReading(unknown)!
+        for hz in [Double.nan, .infinity, -.infinity] {
+            var s = playing()
+            s.sampleRate = hz
+            XCTAssertFalse(s.rateIsOff, "\(hz)")
+            XCTAssertEqual(s.deviceRate, 48000, "\(hz)")
+            XCTAssertNil(ETIssue.current(s).first { $0.id == "rate" }, "\(hz)")
+            XCTAssertFalse(ETStripReading(s).rateIsOff, "\(hz)")
+            let details = ETDiagnostics.make(s, version: "v", abi: "0", device: "d", settings: [])
+            XCTAssertEqual(details.lines.first { $0.label == "Device rate" }?.value, "—", "\(hz)")
+            XCTAssertEqual(ETDelayReading(s)?.totalMs, fallback.totalMs, "\(hz)")
+        }
     }
 
     // MARK: - 問題の行

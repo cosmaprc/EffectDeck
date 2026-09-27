@@ -7,12 +7,12 @@
 //  実機でそれを踏んだので、観測はこの小さなビューに閉じ込めてある。
 //
 //  **数字だけを並べるのをやめて、上流と同じく語を付けた。**
-//  上流は右下の #pipelineStats に 2 つだけ出している。
+//  上流は右下の #pipelineStats に 2 つだけ出している（行は固定した e200e515 のもの）。
 //
-//    effetune.html:312   <span id="pipelineCpuValue">CPU: Avg 0.0%</span>
-//    effetune.html:314   <div id="pipelineLatency">Total Delay: 0 samples</div>
-//    js/locales/en.json5:68  "ui.pipelineLatency": "Total Delay: {samples} samples"
-//    js/locales/en.json5:69  "ui.pipelineCpuUsage": "CPU: Avg {average}%"
+//    effetune.html:325   <span id="pipelineCpuValue">CPU: Avg 0.0%</span>
+//    effetune.html:327   <div id="pipelineLatency">Total Delay: 0 samples</div>
+//    js/locales/en.json5:73  "ui.pipelineLatency": "Total Delay: {samples} samples"
+//    js/locales/en.json5:74  "ui.pipelineCpuUsage": "CPU: Avg {average}%"
 //
 //  出しているのは「遅れ」と「CPU」の 2 つで、レートはここに無い。
 //  レートは鳴っている間ずっと同じ値で、live の代金ではなく設定の読み返しなので、
@@ -24,13 +24,13 @@
 //   - samples ではなく ms。ここに出るのは鎖の遅れではなく、
 //     link とブロックと FIR を足した「耳に届くまでの遅れ」で、
 //     数えるものではなく待つ時間だから。samples は Status に出してある。
-//   - 小数を落としたのは、上流の更新が 1 秒に 1 回（audio-processor.js:4501 で
-//     1 秒ぶん貯めてから post）なのに対し、こちらの tick() は 3.3Hz で、
-//     小数 1 桁を出すと末尾がバーの中で常に踊るため。
+//   - 小数を落としたのは、上流の更新が 1 秒に 1 回（plugins/audio-processor.js の
+//     finishPipelineCpuMeasurement が 1 秒ぶん貯めてから post する。e200e515 で 4828 行）
+//     なのに対し、こちらの tick() は 3.3Hz で、小数 1 桁を出すと末尾がバーの中で常に踊るため。
 //
 //  **色の閾値は上流を写した。**
-//    js/ui-manager.js:419  100 以上なら overload、75 以上なら high、ほかは normal
-//    effetune.css:691,695  high は --et-warning、overload は --et-danger
+//    js/ui-manager.js:426-428  updatePipelineCpuUsage。100 以上なら overload、75 以上なら high、ほかは normal
+//    effetune.css:694,698      high は --et-warning、overload は --et-danger
 //  上流が塗るのはメーターの棒で、文字の色は変えない。こちらは棒を置く幅が無いので
 //  （下の枠の話）、同じ閾値で数字そのものを .orange / .red にする。
 //  色は新しく作らず、この app が既に使っている semantic color を使う
@@ -152,8 +152,8 @@ struct LiveStatusStrip: View {
                 // 数字が動かなかった。I/O と足すと Settings の Total delay。
                 row("Fx", r.fxText, tint: AnyShapeStyle(.secondary))
             case .load:
-                // 上流の CPU と同じ量（経過時間 ÷ 音の長さ、
-                // audio-processor.js:4506）で、語も上流に合わせてある。
+                // 上流の CPU と同じ量（経過時間 ÷ 音の長さ、plugins/audio-processor.js の
+                // finishPipelineCpuMeasurement、e200e515 で 4830–4833 行）で、語も上流に合わせてある。
                 row("CPU", r.loadText, tint: loadTint(r.loadLevel))
                 // 効果を回しているレート（入口 × オーバーサンプリング倍率）。
                 // 入口が 48 kHz から外れているときだけ色を付ける。
@@ -197,7 +197,8 @@ struct LiveStatusStrip: View {
 
     // MARK: - CPU の色
 
-    /// 閾値は ETLoadReading（上流の data-level と同じ、ui-manager.js:419）。
+    /// 閾値は ETLoadReading（上流の data-level と同じ、js/ui-manager.js の
+    /// updatePipelineCpuUsage、e200e515 で 426–428 行）。
     /// 休んでいるあいだは nil で、たまたま 75 を跨いだ古い値で色を付けない。
     /// Settings の CPU 行は normal を .primary にしている（あちらは List の中）。
     private func loadTint(_ level: ETLoadReading.Level?) -> AnyShapeStyle {

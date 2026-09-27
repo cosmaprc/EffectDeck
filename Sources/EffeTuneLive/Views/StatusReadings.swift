@@ -63,15 +63,17 @@ struct ETAudioSnapshot: Equatable {
 
 extension ETAudioSnapshot {
     /// sampleRate は start() で `session.sampleRate > 0 ? ... : 48000` としか
-    /// 書かれないので 0 にも nan にもならないが、ここでも 0 と nan を避けておく。
-    var deviceRate: Double { sampleRate > 0 ? sampleRate : 48000 }
+    /// 書かれないので 0 にも nan にもならないが、ここでも 0 と nan と inf を避けておく。
+    /// **有限でない値は 0 と同じ「分からない」に読む。**inf を Int にすると落ちる。
+    var hasDeviceRate: Bool { sampleRate.isFinite && sampleRate > 0 }
+    var deviceRate: Double { hasDeviceRate ? sampleRate : 48000 }
 
     /// 効果を回しているレート。pipelineLatency はこちらで割る（sampleRate ではない）。
     var effectRate: Double { processingRate > 0 ? processingRate : deviceRate }
 
     /// 端末が 48 kHz を握れていない。速さと音程がずれている。
     /// 帯の Rate の色と、問題の行の "rate" が同じ条件を使う。
-    var rateIsOff: Bool { sampleRate > 0 && abs(sampleRate - 48000) >= 1 }
+    var rateIsOff: Bool { hasDeviceRate && abs(sampleRate - 48000) >= 1 }
 }
 
 // MARK: - 行の見た目の区別
@@ -282,7 +284,9 @@ struct ETLoadReading {
 /// 帯の 2 つは足すと必ずその合計になる:
 ///   - I/O はそれだけで丸める。設定で決まり、鎖では動かない数なので、
 ///     エフェクトを足しても動かないこと
-///   - Fx は合計から I/O を引いた残り。丸めのずれ（1 ms 未満）はこちらが持つ
+///   - Fx は合計から I/O を引いた残り。丸めのずれはこちらが持つ。上にも下にも
+///     1 ms 近くずれうる（I/O 10.4＋Fx 0.2 で Fx 1、I/O 10.5＋Fx 20.998 で Fx 20）。
+///     別々に丸めれば 0.5 ms 以内だが、それでは足しても合計にならない
 /// 以前は 2 つを別々に丸めていて、I/O 10.5 と Fx 0.5 を帯は 11＋1、
 /// Settings は合計 11 と出していた。
 struct ETDelaySplit: Equatable {
@@ -587,7 +591,7 @@ struct ETDiagnostics {
                              value: s.blockFrames > 0 ? samples(s.blockFrames, decimals: 1) : "—"),
             ETDiagnosticLine(label: "Processing rate", value: ETRateText.kHz(s.processingRate)),
             ETDiagnosticLine(label: "Device rate",
-                             value: s.sampleRate > 0
+                             value: s.hasDeviceRate
                                     ? "\(Int(s.sampleRate.rounded()).formatted()) Hz" : "—"),
             ETDiagnosticLine(label: "Oversampling filter",
                              value: s.resamplerLatency > 0
