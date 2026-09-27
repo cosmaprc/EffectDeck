@@ -9,7 +9,7 @@
 //    - 並べ替えはここだけ（ListのonMove。長押しで掴む）。右の長押しは2列では切ってある
 //    - ピッカーからつまんだものは行の間へ落とせる（onInsert）
 //    - 頭の電源はカードの電源と同じもの。別の入切を持たない
-//    - Level Meterの行だけ、行の右端に棒を出す（カードと同じテレメトリ）
+//    - Level Meterの行だけ、クリップしたときに行の右端へOVERLOADの札を出す（カードと同じ決め方）
 //
 //  行の並びは右と同じrowsから作る（PipelineView.minimapItems）。
 //  onMoveの数え方がそのままmove(_:to:)の数え方になる。
@@ -110,7 +110,7 @@ private struct ETMinimapFollow: View {
 
 private struct ETMinimapRow: View {
     /// 行の高さ。**全部の行で同じ。**Listの詰めた行の高さで、頭の電源の押し所と同じ。
-    /// Level Meterの棒もこの中に収める。
+    /// Level MeterのOVERLOADの札もこの中に収める。
     static let height = ETMetrics.hitTarget
 
     let item: ETMinimapItem
@@ -132,19 +132,25 @@ private struct ETMinimapRow: View {
             Button {
                 viewport.request(item.id)
             } label: {
-                HStack(spacing: 8) {
-                    if item.isSection {
-                        Text(item.name)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text(item.name)
-                            .font(.system(size: 15))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                // **名前を先に並べる。**札を右端へ寄せるのはSpacerでなく名前の枠で持つ。
+                // Spacerを挟むとHStackの間隔がその両側に付いて名前が16pt削られ、
+                // OVERLOADの間「Level M…」に縮んでいた（列260pt）。
+                // 札はfixedSizeなので、入らないときに切れるのは名前のほう。
+                HStack(spacing: 4) {
+                    Group {
+                        if item.isSection {
+                            Text(item.name)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(item.name)
+                                .font(.system(size: 15))
+                                .foregroundStyle(.primary)
+                        }
                     }
-                    Spacer(minLength: 0)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
                     // Level Meterの行はクリップしたときだけOVERLOADを出す。棒は出さない（オーナーの判断）。
                     if let tap = item.levelTap {
                         ETMinimapOverload(tap: tap)
@@ -178,6 +184,10 @@ private struct ETMinimapRow: View {
 /// Level Meterの行の札。クリップしてからLevelMeterView.overloadTimeの間だけ、
 /// カードと同じOVERLOADの札（GraphCanvasのbadge）を行の右端に出す。それ以外は何も出さない。
 ///
+/// **字はカードより一回り小さい（9pt、字間を足さない、左右4pt）。**カードと同じ10ptだと
+/// 札が74ptあり、Section配下の字下げした行では列260ptでも「Level Meter」（約80pt）が入らない。
+/// この大きさで札は約61pt、字下げした行でも名前との間に数ptの余りが出る。色と形はカードと同じ。
+///
 /// **テレメトリを観測するのはこのViewだけ。**一覧ぜんぶが枠ごとに組み直されないように。
 /// 決め方はカードと同じ（LevelMeterView.overloads）。
 private struct ETMinimapOverload: View {
@@ -190,12 +200,11 @@ private struct ETMinimapOverload: View {
         let reading = LevelMeterView.read(telemetry.frame(tap: tap, type: .level))
         ZStack {
             if let until, Date() < until {
-                // 字の大きさと色はGraphCanvasのbadgeと同じ。
+                // 色と形はGraphCanvasのbadgeと同じ。字と左右の余白だけ詰める（上の説明）。
                 Text("OVERLOAD")
-                    .font(.system(size: 10, weight: .heavy))
-                    .tracking(0.5)
+                    .font(.system(size: 9, weight: .heavy))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 4)
                     .padding(.vertical, 2)
                     .background(.tint, in: .capsule)
                     .fixedSize()
