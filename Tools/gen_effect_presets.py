@@ -87,6 +87,19 @@ def swift_quoted(s: str) -> str:
     return '"%s"' % s
 
 
+def raw_hashes(text: str) -> str:
+    """text を Swift の生文字列 #…#\"\"\"…\"\"\"#…# に書いたとき、書いたとおりに読まれる # の数。
+
+    \\ に同じ数の # が続けばエスケープ、\"\"\" に同じ数の # が続けばそこで閉じるので、
+    どちらも中身に出ない数まで増やす（params の "C:\\\\#x" は中身に \\# を持つ）。
+    Tools/gen_presets.py の raw_hashes と同じ。
+    """
+    hashes = "#"
+    while "\\" + hashes in text or '"""' + hashes in text:
+        hashes += "#"
+    return hashes
+
+
 def strict_mode(argv) -> bool:
     return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in argv
 
@@ -150,17 +163,17 @@ def main(argv=None) -> int:
             for preset in group["presets"]:
                 compact = json.dumps(preset["params"], ensure_ascii=False,
                                      separators=(",", ":"))
-                # 生文字列で囲む。中身に '"""#' が出ないことを確かめてから。
-                assert '"""#' not in compact, preset["id"]
+                # 生文字列で囲む。# の数は中身が書いたとおりに読まれる数（raw_hashes）。
+                hashes = raw_hashes(compact)
                 lines.append("    ETEffectPreset(")
                 lines.append("      effect: %s," % swift_quoted(effect))
                 lines.append("      presetId: %s," % swift_quoted(preset["id"]))
                 lines.append("      label: %s," % swift_quoted(preset["label"]))
                 lines.append("      group: %s," % swift_quoted(group["label"]))
                 # Swift の複数行文字列は、中身の行が閉じ記号より浅いとエラーになる。
-                lines.append('      json: #"""')
+                lines.append('      json: %s"""' % hashes)
                 lines.append("      " + compact)
-                lines.append('      """#),')
+                lines.append('      """%s),' % hashes)
                 count += 1
     lines.append(FOOTER)
 

@@ -516,12 +516,16 @@ def strip_comments(t):
     次の ' までが文字列になってその間のコメントが残り、そこから先が食い違う
     （コメントの中の ' で閉じた後ろのコードがコメント扱いで消える）。
     / が割り算か正規表現かは、直前の字（演算子や括弧の後ろなら正規表現）で決める。
+    ただし ++ と -- の後ろは割り算（count++ / 2）。++ の後ろに正規表現は来ない（リテラルは
+    増やせない）。+ や - が隙間なく続くときは 2 つずつ ++ / -- になるので、続いた数が偶数なら
+    最後は ++ / --、奇数なら最後は 1 つの + / -（a+++/x/ は a++ + /x/）。
     """
     out = []
     i, n = 0, len(t)
     quote = None
     esc = False
     last = ""      # コメントの外で最後に書いた空白でない字
+    run = 0        # last と同じ字が隙間なく続いた数（++ と -- を見分ける）
     word = ""      # last が語の終わりなら、その語
     gap = False    # last の後ろに空白かコメントを挟んだか（語が続いているか）
     while i < n:
@@ -534,7 +538,7 @@ def strip_comments(t):
                 esc = True
             elif c == quote:
                 quote = None
-                last, word, gap = c, "", False
+                last, run, word, gap = c, 1, "", False
             i += 1
             continue
         if c in "'\"`":
@@ -556,12 +560,14 @@ def strip_comments(t):
             i = j
             gap = True
             continue
-        if c == "/" and (last == "" or last in REGEX_AFTER or word in REGEX_AFTER_WORDS):
+        after_update = last in ("+", "-") and run % 2 == 0     # ++ か -- の後ろ（値の後ろ）
+        if c == "/" and not after_update and \
+                (last == "" or last in REGEX_AFTER or word in REGEX_AFTER_WORDS):
             j = regex_end(t, i)
             if j is not None:
                 out.append(t[i:j])
                 i = j
-                last, word, gap = ")", "", False    # リテラルの後ろは値。次の / は割り算
+                last, run, word, gap = ")", 1, "", False    # リテラルの後ろは値。次の / は割り算
                 continue
         out.append(c)
         if c.isspace():
@@ -571,6 +577,7 @@ def strip_comments(t):
                 word = word + c if word and not gap else c
             else:
                 word = ""
+            run = run + 1 if c == last and not gap else 1
             last, gap = c, False
         i += 1
     return "".join(out)

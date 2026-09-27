@@ -134,5 +134,20 @@ def run_main(func, *args):
     return code
 
 
+def swift_raw_text(hashes, body):
+    """#…#\"\"\"…\"\"\"#…# の 1 行の中身を Swift の読み方で読む（生成器が埋めた JSON を読み戻す）。
+
+    生文字列でも \\ に同じ数の # が続けばエスケープ（\\#n は改行、\\#( は埋め込み）で、
+    \"\"\" に同じ数の # が続けばそこで閉じる。どちらかが中身にあれば、Swift は書いた字の
+    とおりには読まない（コンパイルが通っても JSON が壊れる）ので、読み戻しを止める。
+    """
+    for bad in ("\\" + hashes, '"""' + hashes):
+        if bad in body:
+            raise AssertionError("%s\"\"\" の中に %s がある。Swift はそのまま読まない: %s"
+                                 % (hashes, bad, body[:80]))
+    return body
+
+
 __all__ = ["ROOT", "TOOLS", "load_tool", "TempDir", "write", "hermetic_git_env", "git",
-           "have_git", "have_node", "env_patch", "quiet", "run_main", "unittest", "sys"]
+           "have_git", "have_node", "env_patch", "quiet", "run_main", "swift_raw_text", "unittest",
+           "sys"]

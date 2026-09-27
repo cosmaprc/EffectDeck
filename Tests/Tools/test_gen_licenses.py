@@ -1,7 +1,7 @@
 """Tools/gen_licenses.py の試験。アプリに積んでいるコードのライセンスを全部出すこと。"""
 import re
 
-from tools_support import ROOT, TempDir, load_tool, quiet, run_main, unittest, write
+from tools_support import ROOT, TempDir, load_tool, quiet, run_main, swift_raw_text, unittest, write
 
 
 class GenLicensesTests(unittest.TestCase):
@@ -19,9 +19,30 @@ class GenLicensesTests(unittest.TestCase):
         self.assertIn("René Nyffenegger", text)
         self.assertIn("permission notice appear in all copies", text)
 
-    @unittest.skipUnless((ROOT / "Vendor/ysfx/sources/base64/Base64.hpp").is_file(), "Vendor/ysfx が無い")
+    # Base64.hpp でなく木の LICENSE で見る。上流が Base64.hpp を動かしたら、飛ばさずに落ちる。
+    @unittest.skipUnless((ROOT / "Vendor/ysfx/LICENSE").is_file(), "Vendor/ysfx が無い")
     def test_base64_copy_matches_vendor_header(self):
         self.assertEqual(self.gl.check_copies(), [])
+
+    def test_copy_source_moved_is_reported(self):
+        # 元の木（Vendor/ysfx）は在るのに元のファイルが無い＝上流が動かした。黙って確かめるのを
+        # やめず、止める。木ごと無い（submodule を取っていない、空のフォルダ）ときだけ飛ばす。
+        with TempDir() as tmp:
+            write(tmp / "copy.LICENSE", "Copyright (C) 2020 Someone\n")
+            self.gl.ROOT = tmp
+            self.gl.COPIES = {"copy.LICENSE": "Vendor/lib/src/a.hpp"}
+            self.assertEqual(self.gl.check_copies(), [])
+            (tmp / "Vendor/lib").mkdir(parents=True)
+            self.assertEqual(self.gl.check_copies(), [])
+            write(tmp / "Vendor/lib/LICENSE", "x\n")
+            bad = self.gl.check_copies()
+            self.assertEqual(len(bad), 1, bad)
+            self.assertIn("Vendor/lib/src/a.hpp", bad[0])
+            self.gl.OUT = tmp / "Licenses.swift"
+            self.gl.ITEMS = [("Copy", "MIT", "x", "copy.LICENSE")]
+            with quiet():
+                self.assertNotEqual(run_main(self.gl.main), 0)
+            self.assertFalse((tmp / "Licenses.swift").exists())
 
     def test_copy_drift_detected(self):
         with TempDir() as tmp:
@@ -42,6 +63,25 @@ class GenLicensesTests(unittest.TestCase):
             with quiet():
                 self.assertNotEqual(run_main(self.gl.main), 0)
             self.assertFalse((tmp / "Licenses.swift").exists())
+
+    def test_backslash_hash_survives_swift_raw_string(self):
+        # 本文に \# か """# があれば、#"""…"""# の中では Swift が別の字に読む（閉じる）。
+        # 中身に出ない数まで # を増やし、本文は書いたとおりに読まれる。
+        body = 'Copyright (C) 2020 Someone\n\nSee C:\\#docs and the """# marker.'
+        with TempDir() as tmp:
+            write(tmp / "odd.LICENSE", body + "\n")
+            self.gl.ROOT = tmp
+            self.gl.OUT = tmp / "Licenses.swift"
+            self.gl.COPIES = {}
+            self.gl.ITEMS = [("Odd", "MIT", "x", "odd.LICENSE")]
+            with quiet():
+                self.assertEqual(run_main(self.gl.main), 0)
+            text = (tmp / "Licenses.swift").read_text("utf-8")
+        m = re.search(r'      text: (#+)"""\n(.*?)\n      """\1\),', text, re.S)
+        self.assertIsNotNone(m, text)
+        self.assertEqual(m.group(1), "##")
+        lines = [ln[6:] if ln else "" for ln in m.group(2).split("\n")]
+        self.assertEqual(swift_raw_text(m.group(1), "\n".join(lines)), body)
 
     def test_committed_file_lists_every_item(self):
         text = (ROOT / "Sources/EffeTuneLive/Generated/Licenses.swift").read_text("utf-8")

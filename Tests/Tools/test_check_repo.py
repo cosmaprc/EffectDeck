@@ -302,6 +302,30 @@ class CheckRepoTests(unittest.TestCase):
                   "// docs/shot-${name}.png と Sources/.../EffectSpec.swift\n")
             self.assertEqual(self.run_check(tmp, "--only", "paths")[0], 0)
 
+    def test_dead_path_suffix_only_for_generated(self):
+        # 末尾一致で在ると見なすのは Generated/…（Sources/EffeTuneLive/Generated の略し書き）だけ。
+        # Tools/x を Tests/Tools/x で在ると取ると、消えたファイルを見逃し、試験が作った
+        # Tests/Tools/__pycache__ の有る無しで結果が変わる（clone したての木で落ちた）。
+        with TempDir() as tmp:
+            build(tmp)
+            write(tmp / "Tests/Tools/helper.py", "# test helper\n")
+            write(tmp / "Tests/Tools/__pycache__/helper.cpython-312.pyc", "")
+            write(tmp / "docs/c.md", "See `Tools/helper.py` and `Tools/__pycache__`.\n")
+            code, out = self.run_check(tmp, "--only", "paths")
+        self.assertEqual(code, 1, out)
+        self.assertIn("Tools/helper.py が無い（docs/c.md:1）", out)
+        self.assertIn("Tools/__pycache__ が無い（docs/c.md:1）", out)
+
+    def test_dead_path_glued_to_japanese(self):
+        # 日本語に続けて書いたパス（字の間に空白を入れない書き方）も拾う。
+        with TempDir() as tmp:
+            build(tmp)
+            write(tmp / "docs/c.md", "手順はScripts/gone.shにある。README はTools/gen_catalog.pyを指す。\n")
+            code, out = self.run_check(tmp, "--only", "paths")
+        self.assertEqual(code, 1, out)
+        self.assertIn("Scripts/gone.sh が無い（docs/c.md:1）", out)
+        self.assertNotIn("gen_catalog.py が無い", out)
+
     def test_dead_path_allowlist_needs_reason(self):
         with TempDir() as tmp:
             build(tmp)

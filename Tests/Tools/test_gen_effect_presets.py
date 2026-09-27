@@ -1,11 +1,12 @@
 """Tools/gen_effect_presets.py の試験。ET_STRICT=1 では飛ばさずに止まること。"""
 import json
+import re
 import shutil
 import subprocess
 from unittest import mock
 
 from tools_support import (ROOT, TempDir, env_patch, have_node, load_tool, quiet, run_main,
-                           unittest, write)
+                           swift_raw_text, unittest, write)
 
 PLUGINS_TXT = """\
 [core]
@@ -110,6 +111,29 @@ class GenEffectPresetsTests(unittest.TestCase):
             text = self.ge.OUT.read_text("utf-8")
         self.assertIn('presetId: "soft"', text)
         self.assertIn('      {"sg":1}', text)
+
+    def test_backslash_hash_survives_swift_raw_string(self):
+        # params の "C:\\#x" は中身に \# を持つ。#"""…"""# の中では \# がエスケープで、
+        # Swift は \#x を読めずに止まるか別の字にする。中身に出ない数まで # を増やす。
+        params = {"path": "C:\\#x", "plain": 1}
+        dumped = json.dumps([{"name": "Power Amp Sag", "groups": [
+            {"label": "", "presets": [{"id": "odd", "label": "Odd", "params": params}]}]}]).encode()
+        with TempDir() as tmp:
+            vendor = self.vendor(tmp)
+            with mock.patch.object(self.ge.shutil, "which", return_value="node"), \
+                    mock.patch.object(self.ge.subprocess, "run", fake_run(dumped)):
+                code, out, err = self.run_gen(vendor, strict="1")
+            self.assertEqual(code, 0, err)
+            text = self.ge.OUT.read_text("utf-8")
+        m = re.search(r'      json: (#+)"""\n      (.*)\n      """\1\),', text)
+        self.assertIsNotNone(m, text)
+        self.assertEqual(m.group(1), "##")
+        self.assertEqual(json.loads(swift_raw_text(m.group(1), m.group(2))), params)
+
+    def test_raw_hashes(self):
+        self.assertEqual(self.ge.raw_hashes('{"sg":1}'), "#")
+        self.assertEqual(self.ge.raw_hashes('{"p":"C:\\\\#x"}'), "##")
+        self.assertEqual(self.ge.raw_hashes('a\\##b"""#'), "###")
 
     @unittest.skipUnless(have_node(), "node が無い")
     def test_end_to_end_with_node(self):

@@ -43,13 +43,35 @@ def squash(text: str) -> str:
     return re.sub(r"[\s*/]+", "", text)
 
 
+def raw_hashes(text: str) -> str:
+    """text を Swift の生文字列 #…#\"\"\"…\"\"\"#…# に書いたとき、書いたとおりに読まれる # の数。
+
+    \\ に同じ数の # が続けばエスケープ、\"\"\" に同じ数の # が続けばそこで閉じるので、
+    どちらも中身に出ない数まで増やす。Tools/gen_presets.py の raw_hashes と同じ。
+    """
+    hashes = "#"
+    while "\\" + hashes in text or '"""' + hashes in text:
+        hashes += "#"
+    return hashes
+
+
+def source_tree(source: str) -> pathlib.Path:
+    """元のソースが入っている木（Vendor/ysfx）。submodule を取っていなければ空のフォルダか無い。"""
+    return ROOT.joinpath(*pathlib.PurePosixPath(source).parts[:2])
+
+
 def check_copies():
     """写しの文面が元のソースの頭のコメントにそのまま在るか。ずれていれば説明の列を返す。"""
     bad = []
     for copy, source in COPIES.items():
         src = ROOT / source
         if not src.is_file():
-            continue    # 元の無い木（Vendor/ysfx を取っていない）では確かめられない
+            tree = source_tree(source)
+            if tree.is_dir() and any(tree.iterdir()):
+                # 木は在るのに元が無い＝上流が動かした。黙って確かめるのをやめない。
+                bad.append("%s の元の %s が無い（上流で動いた？ COPIES を直す）" % (copy, source))
+            # 木ごと無い（Vendor/ysfx を取っていない）ときは確かめられない
+            continue
         whole = squash(src.read_text(encoding="utf-8"))
         # 写しは段落ごとに元のどこかに在ればよい（元は 2 つのコメントの間に #include がある）。
         for para in re.split(r"\n\s*\n", (ROOT / copy).read_text(encoding="utf-8")):
@@ -89,16 +111,16 @@ def main() -> int:
             print("!! 無い", rel, file=sys.stderr)
             return 1
         text = path.read_text(encoding="utf-8").strip()
-        assert '"""' not in text, rel
+        hashes = raw_hashes(text)
         lines += [
             "    ETLicense(",
             '      name: "%s",' % name,
             '      license: "%s",' % lic,
             '      author: "%s",' % author,
-            '      text: #"""',
+            '      text: %s"""' % hashes,
             # Swift の複数行文字列は、中身の行が閉じ記号より浅いとエラーになる。
             *['      ' + ln if ln else '' for ln in text.splitlines()],
-            '      """#),',
+            '      """%s),' % hashes,
         ]
     lines += ["]", ""]
     OUT.parent.mkdir(parents=True, exist_ok=True)

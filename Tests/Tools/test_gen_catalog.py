@@ -232,13 +232,34 @@ class JsReadingTests(unittest.TestCase):
             found = self.gc.read_ui(self.js(tmp, src), {"gn"})
         self.assertEqual(found["gn"]["label"], "Gain")
 
+    def test_strip_comments_postfix_increment_then_divide(self):
+        # count++ / 2 の / は割り算（++ も -- も値の後ろ）。正規表現の始まりと取ると、
+        # コメントの中の ' が文字列を開き、次の行の // からがコメントとして消える。
+        # a+++/'/g は a++ + /'/g で、3つ目の + の後ろは正規表現。
+        src = ("const mid = count++ / 2; // don't round\n"
+               "const lo = count-- / 2; // don't either\n"
+               "const n = a+++/'/g.lastIndex;\n"
+               "const u = 'https://x'; c.appendChild(this.createParameterControl('Gain', -6, 6, 0.1, this.gn, f, 'dB', 'gn'));\n")
+        out = self.gc.strip_comments(src)
+        self.assertEqual(out.count("\n"), src.count("\n"))
+        self.assertNotIn("round", out)
+        self.assertNotIn("either", out)
+        self.assertIn("a+++/'/g.lastIndex", out)
+        self.assertIn("'https://x'", out)
+        self.assertIn("createParameterControl('Gain'", out)
+        with TempDir() as tmp:
+            found = self.gc.read_ui(self.js(tmp, src), {"gn"})
+        self.assertEqual(found["gn"]["label"], "Gain")
+
 
 class MainTests(unittest.TestCase):
     def setUp(self):
         self.gc = load_tool("gen_catalog")
 
-    def run_gen(self, mv, strict=None):
+    def run_gen(self, mv, strict=None, unsupported=None):
         mv.bind(self.gc)
+        if unsupported is not None:
+            self.gc.CHAIN_UNSUPPORTED = unsupported
         with env_patch(ET_STRICT=strict), quiet() as (out, err):
             code = run_main(self.gc.main)
         return code, out.getvalue(), err.getvalue()
@@ -316,6 +337,18 @@ class MainTests(unittest.TestCase):
             self.assertFalse((tmp / "Sources/EffeTuneLive/Generated/EffectCatalog.swift").exists())
             self.assertFalse((tmp / "chain").exists())
             self.assertIn("LostPlugin", out + err)
+
+    def test_chain_unsupported_checked_before_writing(self):
+        # CHAIN_UNSUPPORTED の表にカタログに無い型があれば、カタログも chain/ も書かずに止める
+        # （ET_STRICT の有る無しに関係なく）。書いた後で止めると、半端な生成物が木に残る。
+        with TempDir() as tmp:
+            mv = MiniVendor(tmp)
+            mv.plugin("basics", "gain", "GainPlugin", GAIN_FIELDS, [("volume", 1)], js=GAIN_JS)
+            code, out, err = self.run_gen(mv, unsupported={"GhostPlugin": "renamed upstream"})
+            self.assertNotEqual(code, 0)
+            self.assertIn("GhostPlugin", out + err)
+            self.assertFalse((tmp / "Sources/EffeTuneLive/Generated/EffectCatalog.swift").exists())
+            self.assertFalse((tmp / "chain").exists())
 
     def test_skip_without_strict_still_writes_and_warns(self):
         with TempDir() as tmp:

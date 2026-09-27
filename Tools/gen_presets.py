@@ -44,12 +44,19 @@ def strict_mode() -> bool:
     return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in sys.argv[1:]
 
 
-def swift_raw(compact: str) -> str:
-    # Swift の #"""…"""# の生文字列に入れる字。閉じ記号 """# を含むものは入れられないので止める。
-    # （生文字列なので \" や \\ は JSON のまま残る。見るのは閉じ記号だけでよい）
-    if '"""#' in compact:
-        raise ValueError('生文字列の閉じ記号 """# を含む')
-    return compact
+def raw_hashes(text: str) -> str:
+    """text を Swift の生文字列 #…#\"\"\"…\"\"\"#…# に書いたとき、書いたとおりに読まれる # の数。
+
+    生文字列でも、\\ に同じ数の # が続けばエスケープ（\\#n は改行、\\#( は埋め込み）、
+    \"\"\" に同じ数の # が続けばそこで閉じる。JSON の "C:\\\\#x" は中身に \\# を持つので、
+    # 1 つでは Swift が別の字に読んで JSON が壊れる（プリセットが黙って読めなくなる）。
+    どちらも中身に出ない数まで増やす。要らなければ 1 つ（今の生成物と同じ字）。
+    Tools/gen_effect_presets.py に同じものがある。
+    """
+    hashes = "#"
+    while "\\" + hashes in text or '"""' + hashes in text:
+        hashes += "#"
+    return hashes
 
 
 def main() -> int:
@@ -71,11 +78,6 @@ def main() -> int:
             continue
         # 余分な空白を落として埋める。往復はしないので整形は不要。
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        try:
-            compact = swift_raw(compact)
-        except ValueError as e:
-            broken.append("%s: %s" % (path.relative_to(SRC).as_posix(), e))
-            continue
         items.append((LABEL.get(category, category), title(path.stem), compact,
                       len(data["pipeline"])))
 
@@ -111,9 +113,10 @@ def main() -> int:
         lines.append('      name: "%s",' % name)
         lines.append("      effectCount: %d," % count)
         # Swift の複数行文字列は、中身の行が閉じ記号より浅いとエラーになる。
-        lines.append('      json: #"""')
+        hashes = raw_hashes(compact)
+        lines.append('      json: %s"""' % hashes)
         lines.append('      ' + compact)
-        lines.append('      """#),')
+        lines.append('      """%s),' % hashes)
     lines.append("]")
     lines.append("")
 

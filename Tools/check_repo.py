@@ -46,7 +46,13 @@ STORE_TEXTS = [
 # ドキュメントとコメントが挙げるパスの頭。Vendor/ は上流の木なので見ない。
 PATH_HEADS = ("Sources", "Scripts", "Tools", "Tests", "docs", "Patches", "Generated", "chain", "site",
               "Licenses")
-CITED_PATH = re.compile(r"(?<![\w/.-])((?:%s)/[A-Za-z0-9_./-]*[A-Za-z0-9_])" % "|".join(PATH_HEADS))
+# 前の字は ASCII だけで見る。\w は日本語にも当たるので、空白を挟まず日本語に続けたパス
+# （このリポジトリの書き方）を拾えない。
+CITED_PATH = re.compile(r"(?<![A-Za-z0-9_/.-])((?:%s)/[A-Za-z0-9_./-]*[A-Za-z0-9_])" % "|".join(PATH_HEADS))
+# 途中を略して書く頭。Generated/<名前> は Sources/EffeTuneLive/Generated/<名前> のこと。
+# これだけ末尾の一致で在ると見なす。ほかの頭まで許すと、Tools の下で消えたファイルを
+# Tests/Tools の下の同じ名前で在ると取って見逃す。
+SHORT_HEADS = ("Generated",)
 SCANNED_SUFFIXES = (".md", ".sh", ".py", ".yml", ".yaml", ".swift", ".m", ".mm", ".h", ".c", ".cpp",
                     ".mjs", ".js", ".toml", ".plist", ".txt", ".json", ".entitlements")
 # 見ないところ。上流の写し・生成物・試験の材料・この検査自身の試験（わざと死んだパスを書く）。
@@ -466,7 +472,7 @@ def load_license_items(repo):
     import importlib.util
     spec = importlib.util.spec_from_file_location("check_repo_gen_licenses", path)
     mod = importlib.util.module_from_spec(spec)
-    # 読むだけの検査なので、Tools/__pycache__ を木に残さない。
+    # 読むだけの検査なので、生成器の横に .pyc を残さない。
     keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
         spec.loader.exec_module(mod)
@@ -513,6 +519,8 @@ def check_paths(repo, args):
         rel = os.path.normpath(os.path.join(os.path.dirname(citing), cited)).replace(os.sep, "/")
         if rel in fileset or rel in dirs:
             return True
+        if cited.split("/", 1)[0] not in SHORT_HEADS:
+            return False
         tail = "/" + cited
         return any(f.endswith(tail) for f in files) or any(d.endswith(tail) for d in dirs)
 

@@ -2,15 +2,16 @@
 import json
 import re
 
-from tools_support import ROOT, TempDir, env_patch, load_tool, quiet, run_main, unittest, write
+from tools_support import (ROOT, TempDir, env_patch, load_tool, quiet, run_main, swift_raw_text,
+                           unittest, write)
 
 RAW = re.compile(r'      category: "([^"]*)",\n      name: "([^"]*)",\n      effectCount: (\d+),\n'
-                 r'      json: #"""\n      (.*)\n      """#\),')
+                 r'      json: (#+)"""\n      (.*)\n      """\4\),')
 
 
 def embedded(swift_text):
     """SystemPresets.swift に埋めた (分類, 名前, 段数, JSON) を読み戻す。"""
-    return [(m.group(1), m.group(2), int(m.group(3)), json.loads(m.group(4)))
+    return [(m.group(1), m.group(2), int(m.group(3)), json.loads(swift_raw_text(m.group(4), m.group(5))))
             for m in RAW.finditer(swift_text)]
 
 
@@ -57,16 +58,37 @@ class GenPresetsTests(unittest.TestCase):
             self.assertEqual(len(embedded((tmp / "SystemPresets.swift").read_text("utf-8"))), 1)
 
     def test_embedded_json_roundtrip(self):
-        # 埋めた字を JSON として読み戻すと元のファイルと同じ。生文字列の終わり（"""#）を含む中身は止める。
+        # 埋めた字を Swift の生文字列の読み方で JSON に読み戻すと元のファイルと同じ。
         data = {"pipeline": [{"name": "Section", "cm": "引用\"符 \\ と #"}, {"name": "Gain", "vl": -3.5}]}
         with TempDir() as tmp:
             self.preset(tmp, "utils/tricky.effetune_preset", data)
             code, out, err = self.run_gen(tmp)
             self.assertEqual(code, 0, err)
-            items = embedded((tmp / "SystemPresets.swift").read_text("utf-8"))
+            text = (tmp / "SystemPresets.swift").read_text("utf-8")
+            items = embedded(text)
         self.assertEqual(items[0][3], data)
-        with self.assertRaises(ValueError):
-            self.gp.swift_raw('{"a":"x"}"""#')
+        self.assertIn('json: #"""', text)    # 要らなければ # は 1 つのまま（今の生成物と同じ字）
+
+    def test_backslash_hash_survives_swift_raw_string(self):
+        # JSON の "C:\\#name" は中身に \# を持つ。#"""…"""# の中では \# がエスケープなので、
+        # Swift は \#n を改行と読み JSON が壊れる（プリセットが黙って読めなくなる）。
+        # 中身に出ない数まで # を増やす。
+        data = {"pipeline": [{"name": "Section", "cm": "C:\\#name \\##x"}]}
+        with TempDir() as tmp:
+            self.preset(tmp, "utils/hash.effetune_preset", data)
+            code, out, err = self.run_gen(tmp, strict="1")
+            self.assertEqual(code, 0, err)
+            text = (tmp / "SystemPresets.swift").read_text("utf-8")
+            items = embedded(text)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0][3], data)
+        self.assertIn('json: ###"""', text)
+
+    def test_raw_hashes(self):
+        self.assertEqual(self.gp.raw_hashes('{"a":"x"}'), "#")
+        self.assertEqual(self.gp.raw_hashes('{"a":"x\\\\#y"}'), "##")
+        self.assertEqual(self.gp.raw_hashes('a"""#b'), "##")
+        self.assertEqual(self.gp.raw_hashes('a\\##b"""#'), "###")
 
     @unittest.skipUnless((ROOT / "Vendor/effetune/presets").is_dir(), "Vendor/effetune が無い")
     def test_committed_file_matches_vendor(self):
