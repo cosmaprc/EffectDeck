@@ -7,8 +7,15 @@ Vendor/effetune/presets/<category>/<name>.effetune_preset をそのまま持ち�
 
 リソースとして同梱しないのは、.xcassets の外のファイルを束ねると
 名前の衝突で「Multiple commands produce」に当たるため。
+
+**読めないファイルは黙って落とさない。**いつもは stderr に !! で出して残りを書き、
+ET_STRICT=1（CI）か --strict では何も書かずに 1 で止める（17 本が 16 本になっても
+終了コードが 0 のままだった）。
+
+  python Tools/gen_presets.py [--strict]
 """
 import json
+import os
 import pathlib
 import sys
 
@@ -33,10 +40,16 @@ def title(stem: str) -> str:
     return " ".join(w.capitalize() if w.islower() else w for w in stem.split("_"))
 
 
-def swift_string(s: str) -> str:
-    # 生文字列で囲む。中身に "### が出ないことを確かめてから使う。
-    assert '"###' not in s
-    return '#"""#'.join([])  # 使わない
+def strict_mode() -> bool:
+    return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in sys.argv[1:]
+
+
+def swift_raw(compact: str) -> str:
+    # Swift の #"""…"""# の生文字列に入れる字。閉じ記号 """# を含むものは入れられないので止める。
+    # （生文字列なので \" や \\ は JSON のまま残る。見るのは閉じ記号だけでよい）
+    if '"""#' in compact:
+        raise ValueError('生文字列の閉じ記号 """# を含む')
+    return compact
 
 
 def main() -> int:
@@ -45,20 +58,33 @@ def main() -> int:
         return 1
 
     items = []
+    broken = []
     for path in sorted(SRC.rglob("*.effetune_preset")):
         category = path.parent.name
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:  # noqa: BLE001
-            print("!! 読めない", path, e, file=sys.stderr)
+            broken.append("読めない %s: %s" % (path.relative_to(SRC).as_posix(), e))
             continue
         if not isinstance(data, dict) or not isinstance(data.get("pipeline"), list):
-            print("!! 形が違う", path, file=sys.stderr)
+            broken.append("形が違う（pipeline の配列が無い） %s" % path.relative_to(SRC).as_posix())
             continue
         # 余分な空白を落として埋める。往復はしないので整形は不要。
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        try:
+            compact = swift_raw(compact)
+        except ValueError as e:
+            broken.append("%s: %s" % (path.relative_to(SRC).as_posix(), e))
+            continue
         items.append((LABEL.get(category, category), title(path.stem), compact,
                       len(data["pipeline"])))
+
+    for b in broken:
+        print("!! 落とした:", b, file=sys.stderr)
+    if broken and strict_mode():
+        print("!! 落としたプリセットが %d 本ある（ET_STRICT）。何も書いていない" % len(broken),
+              file=sys.stderr)
+        return 1
 
     lines = [
         "//  SystemPresets.swift",
@@ -93,7 +119,8 @@ def main() -> int:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    print("presets: %d 本 / %d カテゴリ" % (len(items), len({i[0] for i in items})))
+    print("presets: %d 本 / %d カテゴリ%s" % (len(items), len({i[0] for i in items}),
+                                             "（%d 本を落とした）" % len(broken) if broken else ""))
     return 0
 
 

@@ -13,6 +13,7 @@
 
   python3 Tools/gen_version.py            UpstreamVersion.swift を書くだけ
   python3 Tools/gen_version.py --today    版も今日の日付にする
+  python3 Tools/gen_version.py --strict   浅い submodule でも止める（ET_STRICT=1 と同じ）
 
 **同じ日に 2 回は出せない。**版の番号は使い回せず、区切りは 3 つまでなので
 4 つ目を足すこともできない。同じ日に出し直すなら、ビルド番号だけ上げる
@@ -20,8 +21,13 @@
 
 ビルド番号（CURRENT_PROJECT_VERSION）はこちらの都合なので触らない。
 「どの EffeTune を積んだか」は UpstreamVersion.swift に別の事実として残る。
+
+**浅い submodule の版は信用しない（ET_STRICT=1 のとき）。**actions/checkout の既定の
+submodule は深さ 1 でタグが付いてこない。describe が落ちるか、辿れた古いタグを答える。
+CI では Vendor/effetune を --filter=blob:none で取る（履歴とタグは全部、中身は要る分だけ）。
 """
 import datetime
+import os
 import pathlib
 import re
 import subprocess
@@ -30,6 +36,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DSP = ROOT / "Vendor" / "effetune"
 DST = ROOT / "project.yml"
+README = ROOT / "README.md"
 # 上流の版を Swift からも読めるようにする。
 # **アプリの版とは別の事実。**あちらは「このアプリを出した日」で、
 # こちらは「積んでいる dsp/ 自体の版」。
@@ -41,24 +48,62 @@ DST = ROOT / "project.yml"
 SWIFT = ROOT / "Sources" / "EffeTuneLive" / "Generated" / "UpstreamVersion.swift"
 
 
+def strict_mode(argv) -> bool:
+    return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in argv
+
+
+def parse_describe(out: str) -> str:
+    """`git describe` の答えから版を取る。
+
+    dsp-v0.10.0 か、タグから外れていれば dsp-v0.10.0-3-gabca7ff9 のような形。
+    後者はコミットのぶら下がりまで版に含めると README のバッジが荒れるので、
+    タグそのものの数字だけ使う。
+    """
+    return out.strip().removeprefix("dsp-v").split("-")[0]
+
+
 def dsp_version() -> str:
     """`dsp/` の版。直近の dsp-v* タグから取る。"""
     out = subprocess.run(
         ["git", "-C", str(DSP), "describe", "--tags", "--match", "dsp-v*"],
-        capture_output=True, text=True, check=True).stdout.strip()
-    # dsp-v0.10.0 か、タグから外れていれば dsp-v0.10.0-3-gabca7ff9 のような形。
-    # 後者はコミットのぶら下がりまで版に含めると README のバッジが荒れるので、
-    # タグそのものの数字だけ使う。
-    return out.removeprefix("dsp-v").split("-")[0]
+        capture_output=True, text=True, check=True).stdout
+    return parse_describe(out)
 
 
-def main() -> int:
+def is_shallow() -> bool:
+    r = subprocess.run(["git", "-C", str(DSP), "rev-parse", "--is-shallow-repository"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
+def replace_badge(text: str, version: str):
+    """README のバッジ（最初の1つ）を版に替える。shields.io では - を -- と書く。"""
+    return re.subn(r"(badge/EffeTune%20DSP-)[^-]+(-)",
+                   r"\g<1>%s\g<2>" % version.replace("-", "--"), text, count=1)
+
+
+def set_marketing_version(text: str, today: str):
+    """project.yml の最初の MARKETING_VERSION を today にする。(新しい中身, 前の版, 後の版)。"""
+    found = re.search(r'MARKETING_VERSION: "([^"]*)"', text)
+    if not found:
+        raise ValueError("MARKETING_VERSION が見つからない")
+    return text[:found.start(1)] + today + text[found.end(1):], found.group(1), today
+
+
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    strict = strict_mode(argv)
     if not DSP.is_dir():
         print("!! Vendor/effetune が無い", DSP, file=sys.stderr)
         return 1
+    if strict and is_shallow():
+        print("!! Vendor/effetune が浅い clone（shallow）で、dsp-v* のタグを信用できない。"
+              "git submodule update --init --filter=blob:none Vendor/effetune で取り直す",
+              file=sys.stderr)
+        return 1
     try:
         version = dsp_version()
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, OSError) as e:
         print("!! dsp-v* タグが見つからない（Vendor/effetune の submodule を確かめる）",
               e, file=sys.stderr)
         return 1
@@ -73,10 +118,10 @@ def main() -> int:
         return 1
     app = found.group(1)
 
-    if "--today" in sys.argv:
+    if "--today" in argv:
         today = datetime.date.today().strftime("%Y.%m.%d")
         if today != app:
-            s = s[:found.start(1)] + today + s[found.end(1):]
+            s, _, _ = set_marketing_version(s, today)
             DST.write_text(s, encoding="utf-8", newline="\n")
             print("版を %s から %s へ" % (app, today))
             app = today
@@ -97,14 +142,11 @@ def main() -> int:
     SWIFT.write_text(chr(10).join(header), encoding="utf-8", newline=chr(10))
 
     # README のバッジは上流の版を出す。手で書くと古くなる。
-    readme = ROOT / "README.md"
-    if readme.is_file():
-        text = readme.read_text(encoding="utf-8")
-        fixed, hits = re.subn(r"(badge/EffeTune%20DSP-)[^-]+(-)",
-                              r"\g<1>%s\g<2>" % version.replace("-", "--"),
-                              text, count=1)
+    if README.is_file():
+        text = README.read_text(encoding="utf-8")
+        fixed, hits = replace_badge(text, version)
         if hits == 1 and fixed != text:
-            readme.write_text(fixed, encoding="utf-8", newline="\n")
+            README.write_text(fixed, encoding="utf-8", newline="\n")
             print("README のバッジを直した")
     print("version: app %s / upstream %s" % (app, version))
     return 0

@@ -3,8 +3,13 @@
 
 外へリンクを張るのではなく、本文をアプリに同梱する。
 配布物の中身と表示が食い違わないよう、置き場のファイルをそのまま読む。
+
+ライセンスが別ファイルでなくソースの頭のコメントにしか無いもの（DPF の Base64.hpp）は、
+その文面を Licenses/ に写して読む。写しが元のコメントとずれていれば止める（COPIES）。
+Tools/check_repo.py は、ここの ITEMS が全部 NOTICE.md に書いてあるかも見る。
 """
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -16,6 +21,10 @@ ITEMS = [
     ("PFFFT", "BSD-3-Clause", "Julien Pommier", "Vendor/effetune/dsp/vendor/pffft/LICENSE.txt"),
     ("ysfx", "Apache-2.0", "Jean Pierre Cimalando, Joep Vanlier and contributors", "Vendor/ysfx/LICENSE"),
     ("WDL / LICE", "zlib-style", "Cockos Incorporated and contributors", "Vendor/ysfx/thirdparty/WDL/LICENSE.txt"),
+    # ysfx_utils.cpp が #include して base64 の出し入れに使う（JSFX の状態の保存）。
+    # 注意書きは DPF の ISC と、元になった René Nyffenegger のコードの zlib 形式の 2 つ。
+    ("DPF Base64", "ISC, zlib-style", "Filipe Coelho, Jean Pierre Cimalando, René Nyffenegger",
+     "Licenses/dpf-base64.LICENSE"),
     # Synthetic Binaural Room（MIT、M0Rf30/easyeffects-presets）は外してある。使うのは
     # Virtual Room（feature/brir）で、まだアプリに入っていない。入れるときに、
     # 142c217で足したLicenses/easyeffects-presets.LICENSEとNOTICE.mdの節と一緒に戻す。
@@ -23,7 +32,38 @@ ITEMS = [
 ]
 
 
+# Licenses/ の写し -> 元のソース。元がある木（Vendor/ysfx を取ってある）では文面を突き合わせる。
+COPIES = {
+    "Licenses/dpf-base64.LICENSE": "Vendor/ysfx/sources/base64/Base64.hpp",
+}
+
+
+def squash(text: str) -> str:
+    """コメントの印（/* * //）・改行・空白の違いを無視して比べるための形。"""
+    return re.sub(r"[\s*/]+", "", text)
+
+
+def check_copies():
+    """写しの文面が元のソースの頭のコメントにそのまま在るか。ずれていれば説明の列を返す。"""
+    bad = []
+    for copy, source in COPIES.items():
+        src = ROOT / source
+        if not src.is_file():
+            continue    # 元の無い木（Vendor/ysfx を取っていない）では確かめられない
+        whole = squash(src.read_text(encoding="utf-8"))
+        # 写しは段落ごとに元のどこかに在ればよい（元は 2 つのコメントの間に #include がある）。
+        for para in re.split(r"\n\s*\n", (ROOT / copy).read_text(encoding="utf-8")):
+            if squash(para) and squash(para) not in whole:
+                bad.append("%s の段落が %s に無い: %s…" % (copy, source, para.strip()[:40]))
+    return bad
+
+
 def main() -> int:
+    drift = check_copies()
+    if drift:
+        for d in drift:
+            print("!!", d, file=sys.stderr)
+        return 1
     lines = [
         "//  Licenses.swift",
         "//  Tools/gen_licenses.py が作る。手で直さないこと。",

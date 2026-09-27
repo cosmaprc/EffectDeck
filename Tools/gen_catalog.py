@@ -23,7 +23,11 @@ createUI で見つからなかったパラメータだけ params.json の値を�
 **古い版のフォルダは消さない。**古いビルドの依頼文は古い版を名指しする。
 **別のパラメータで同じ版のフォルダを上書きしない。**effects.jsonのdspParamsで確かめる。
 
-  python Tools/gen_catalog.py
+**外した型があれば黙らない。**生成ヘッダが無い・読めない・詰め幅が合わない型はカタログから
+落ちる（アプリからそのエフェクトが消える）。いつもは stderr に !! で出して続け、
+ET_STRICT=1（CI）か --strict では何も書かずに 1 で止める。
+
+  python Tools/gen_catalog.py [--strict]
 """
 
 import hashlib
@@ -55,6 +59,11 @@ SUPER = re.compile(r"super\(\s*(%s)\s*,\s*(%s)\s*[,)]" % (JS_CAT, JS_CAT), re.S)
 JS_PART = re.compile(r"""'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)\"""")
 
 BS = chr(92)
+
+
+def strict_mode():
+    """ET_STRICT=1（CI）か --strict。外した型を警告で済ませず止める。"""
+    return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in sys.argv[1:]
 
 
 # 保存している値と画面に出す値がずれるもの。(type, メンバ名) -> ETParamScale。
@@ -99,7 +108,8 @@ def check_array_shape(meta, type_name, category, folder):
         if is_flat_array(type_name, f):
             continue
         k = f.get("key") or f["name"]
-        indexed = re.search(r"\[\s*['\"]%s['\"]\s*\+" % re.escape(k), src) or                   re.search(r"`%s\$\{" % re.escape(k), src)
+        indexed = (re.search(r"\[\s*['\"]%s['\"]\s*\+" % re.escape(k), src)
+                   or re.search(r"`%s\$\{" % re.escape(k), src))
         if not indexed:
             raise SystemExit(
                 "!! %s の配列 %s が object でも indexed でもない。"
@@ -343,12 +353,17 @@ def md_default(p):
     return ", ".join(md_value(x) for x in d)
 
 
-def write_chain(specs, version, fingerprint):
-    """chain/v<版>/に語彙を書く。**書くのはその版のフォルダだけ。**"""
+def check_chain_unsupported(specs):
+    """CHAIN_UNSUPPORTEDの表の型が全部カタログに居るか。**何か書く前に呼ぶ。**"""
     types = {s["type"] for s in specs}
     missing = sorted(set(CHAIN_UNSUPPORTED) - types)
     if missing:
         raise SystemExit("!! CHAIN_UNSUPPORTEDにカタログに無い型がある: %s" % ", ".join(missing))
+
+
+def write_chain(specs, version, fingerprint):
+    """chain/v<版>/に語彙を書く。**書くのはその版のフォルダだけ。**"""
+    check_chain_unsupported(specs)
 
     effects = []
     for s in sorted(specs, key=lambda x: (x["category"], x["name"])):
@@ -464,12 +479,51 @@ def parse_header(path):
 
 # ---------------------------------------------------------------- JS を読む
 
+# この字や語の後ろの / は割り算ではなく正規表現リテラルの始まり。
+REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+REGEX_AFTER_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete",
+                     "void", "throw", "yield", "await", "of"}
+
+
+def regex_end(t, i):
+    """t[i] の / から始まる正規表現リテラルの終わり（フラグの後ろ）。同じ行で閉じなければ None。"""
+    j, n = i + 1, len(t)
+    in_class = False
+    while j < n:
+        c = t[j]
+        if c == "\n":
+            return None
+        if c == BS:
+            j += 2
+            continue
+        if c == "[":
+            in_class = True
+        elif c == "]":
+            in_class = False
+        elif c == "/" and not in_class:
+            j += 1
+            while j < n and (t[j].isalnum() or t[j] in "_$"):
+                j += 1
+            return j
+        j += 1
+    return None
+
+
 def strip_comments(t):
-    """// と /* */ を空白に潰す。文字列の中は触らない。行数は変えない。"""
+    """// と /* */ を空白に潰す。文字列と正規表現リテラルの中は触らない。行数は変えない。
+
+    **正規表現リテラルを飛ばす。**`s.replace(/'/g, '')` の ' を文字列の始まりと取ると、
+    次の ' までが文字列になってその間のコメントが残り、そこから先が食い違う
+    （コメントの中の ' で閉じた後ろのコードがコメント扱いで消える）。
+    / が割り算か正規表現かは、直前の字（演算子や括弧の後ろなら正規表現）で決める。
+    """
     out = []
     i, n = 0, len(t)
     quote = None
     esc = False
+    last = ""      # コメントの外で最後に書いた空白でない字
+    word = ""      # last が語の終わりなら、その語
+    gap = False    # last の後ろに空白かコメントを挟んだか（語が続いているか）
     while i < n:
         c = t[i]
         if quote:
@@ -480,6 +534,7 @@ def strip_comments(t):
                 esc = True
             elif c == quote:
                 quote = None
+                last, word, gap = c, "", False
             i += 1
             continue
         if c in "'\"`":
@@ -492,14 +547,31 @@ def strip_comments(t):
             j = n if j < 0 else j
             out.append(" " * (j - i))
             i = j
+            gap = True
             continue
         if c == "/" and t[i + 1:i + 2] == "*":
             j = t.find("*/", i + 2)
             j = n if j < 0 else j + 2
             out.append("".join(ch if ch == "\n" else " " for ch in t[i:j]))
             i = j
+            gap = True
             continue
+        if c == "/" and (last == "" or last in REGEX_AFTER or word in REGEX_AFTER_WORDS):
+            j = regex_end(t, i)
+            if j is not None:
+                out.append(t[i:j])
+                i = j
+                last, word, gap = ")", "", False    # リテラルの後ろは値。次の / は割り算
+                continue
         out.append(c)
+        if c.isspace():
+            gap = True
+        else:
+            if c.isalnum() or c in "_$":
+                word = word + c if word and not gap else c
+            else:
+                word = ""
+            last, gap = c, False
         i += 1
     return "".join(out)
 
@@ -893,7 +965,7 @@ def main():
             # 上流がオブジェクト配列で書くもの。
             #   "bs": [{"en": …, "ft": …}, …]
             # 平らな "en": [...] にすると段の en と衝突して潰れ、web 版も
-            # 同梱プリセットも読めない（Sources/.../EffectSpec.swift の
+            # 同梱プリセットも読めない（Sources/EffeTuneLive/DSP/EffectSpec.swift の
             # objectArrayKey のコメントに経緯）。
             extra = ""
             if is_flat_array(type_name, f):
@@ -982,6 +1054,43 @@ def main():
             "chain": [params[i][2] for i in order],
         })
 
+    # **外した型は黙らない。**そのエフェクトはアプリから消える。CI（ET_STRICT=1）では何も書かずに止める。
+    if skipped:
+        print("!! 外したもの（カタログに入らない＝アプリから消える）:", file=sys.stderr)
+        for t, why in skipped:
+            print("!!   %-34s %s" % (t, why), file=sys.stderr)
+        if strict_mode():
+            sys.exit("!! 外した型が %d ある（ET_STRICT）。何も書いていない" % len(skipped))
+
+    text = render_catalog(specs)
+
+    # 語彙のフォルダと表を確かめてからカタログを書く。止まるならどちらも書かない。
+    fingerprint = dsp_params_fingerprint(specs)
+    check_chain_folder(version, fingerprint)
+    check_chain_unsupported(specs)
+
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(text, encoding="utf-8", newline="\n")
+
+    folder = write_chain(specs, version, fingerprint)
+
+    print("書いた: %s" % OUT.relative_to(ROOT))
+    print("書いた: %s/（鎖の語彙）" % folder.relative_to(ROOT).as_posix())
+    print("エフェクト %d 種 / パラメータ %d 個"
+          % (len(specs), sum(len(s["params"]) for s in specs)))
+    print("createUI から: 名前 %d / 単位 %d / 範囲 %d / 並べ替えた型 %d"
+          % (stat["label"], stat["unit"], stat["range"], stat["order"]))
+    print("createUI に出てこないパラメータ %d 個は params.json のまま" % stat["miss"])
+    if skipped:
+        print("外したもの %d 型（上の !! を見る）" % len(skipped))
+
+
+def render_catalog(specs):
+    """EffectCatalog.swift の中身。分類・名前の順に1つの配列リテラルへ並べる。
+
+    Tests/Linux/make_package.py の split_catalog はこの形（`let ETCatalog: [ETEffect] = [` の下に
+    `    ETEffect(` の塊が並ぶ）を前提に1件ずつの定数へ分けて写す。形を変えるならあちらも一緒に。
+    """
     lines = [
         "//  EffectCatalog.swift",
         "//  Tools/gen_catalog.py が作る。手で直さないこと。",
@@ -1008,27 +1117,7 @@ def main():
         lines.append("      ]),")
     lines.append("]")
     lines.append("")
-
-    # 語彙のフォルダを確かめてからカタログを書く。止まるならどちらも書かない。
-    fingerprint = dsp_params_fingerprint(specs)
-    check_chain_folder(version, fingerprint)
-
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-
-    folder = write_chain(specs, version, fingerprint)
-
-    print("書いた: %s" % OUT.relative_to(ROOT))
-    print("書いた: %s/（鎖の語彙）" % folder.relative_to(ROOT).as_posix())
-    print("エフェクト %d 種 / パラメータ %d 個"
-          % (len(specs), sum(len(s["params"]) for s in specs)))
-    print("createUI から: 名前 %d / 単位 %d / 範囲 %d / 並べ替えた型 %d"
-          % (stat["label"], stat["unit"], stat["range"], stat["order"]))
-    print("createUI に出てこないパラメータ %d 個は params.json のまま" % stat["miss"])
-    if skipped:
-        print("外したもの:")
-        for t, why in skipped:
-            print("  %-34s %s" % (t, why))
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

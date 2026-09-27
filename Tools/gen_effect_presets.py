@@ -9,12 +9,17 @@ spread と filter で組み立てる（plugins/saturation/tube_simulator.js:483-
 そこは Tools/effect_presets_dump.mjs に任せて、ここは Swift を書くだけ。
 
 node が無いとき・Vendor/effetune が無いときは**生成せずに 0 で戻る**。
-生成物は追跡しているので、そのときは既にあるものがそのまま正になる
-（gen_presets.py と同じ）。
+生成物は追跡しているので、そのときは既にあるものがそのまま正になる。
 
-    python3 Tools/gen_effect_presets.py [Vendor/effetune のパス]
+**ET_STRICT=1（CI）か --strict では飛ばさずに 1 で止める。**node が無い・Vendor が無い・
+dump の出力が JSON として読めない・dump が評価できなかったプラグインを !! で報せた
+（そのプラグインのプリセットが黙って消える。146 件 / 28 種が 143 / 27 になっても 0 だった）。
+どれも何も書かない。
+
+    python3 Tools/gen_effect_presets.py [--strict] [Vendor/effetune のパス]
 """
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -82,26 +87,47 @@ def swift_quoted(s: str) -> str:
     return '"%s"' % s
 
 
-def main() -> int:
-    vendor = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 \
-        else ROOT / "Vendor" / "effetune"
+def strict_mode(argv) -> bool:
+    return os.environ.get("ET_STRICT", "") not in ("", "0") or "--strict" in argv
+
+
+def skip(message: str, strict: bool) -> int:
+    """飛ばす。strict なら止める。"""
+    if strict:
+        print("!! %s（ET_STRICT）。何も書いていない" % message, file=sys.stderr)
+        return 1
+    print("effect presets: %s。飛ばす（既存の Generated を使う）" % message)
+    return 0
+
+
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    strict = strict_mode(argv)
+    paths = [a for a in argv if a != "--strict"]
+    vendor = pathlib.Path(paths[0]).resolve() if paths else ROOT / "Vendor" / "effetune"
     plugins = vendor / "plugins"
 
     if not (plugins / "plugins.txt").is_file():
-        print("effect presets: %s が無いので飛ばす" % plugins)
-        return 0
+        return skip("%s が無い" % plugins, strict)
     if shutil.which("node") is None:
-        print("effect presets: node が無いので飛ばす（既存の Generated を使う）")
-        return 0
+        return skip("node が無い", strict)
 
     try:
         raw = subprocess.run(["node", str(DUMP), str(plugins)],
                              check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        print("!! dump に失敗", e.stderr.decode("utf-8", "replace"), file=sys.stderr)
+        print("!! dump に失敗", (e.stderr or b"").decode("utf-8", "replace"), file=sys.stderr)
         return 1
+    warnings = ""
     if raw.stderr:
-        sys.stderr.write(raw.stderr.decode("utf-8", "replace"))
+        warnings = raw.stderr.decode("utf-8", "replace")
+        sys.stderr.write(warnings)
+    # dump は評価できなかったプラグインを !! で報せて飛ばす（そのプリセットは消える）。
+    dropped = [ln for ln in warnings.splitlines() if ln.startswith("!!")]
+    if dropped and strict:
+        print("!! dump が評価できなかったプラグインが %d ある（ET_STRICT）。何も書いていない"
+              % len(dropped), file=sys.stderr)
+        return 1
 
     # **読めなければ既存を残す。**Mac 側で出力が 65536 バイトで切れたことがある。
     # node の版のせいではなく、dump が process.exit() で終わっていたため。
@@ -111,10 +137,10 @@ def main() -> int:
     # 既存を残すほうがましなので、警告だけ出して飛ばす。
     try:
         data = json.loads(raw.stdout.decode("utf-8"))
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         print("!! dump の出力が読めない（%s）。既存の Generated を使う" % e,
               file=sys.stderr)
-        return 0
+        return 1 if strict else 0
 
     lines = [HEADER.rstrip("\n")]
     count = 0

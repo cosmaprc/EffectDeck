@@ -6,7 +6,12 @@
 // 入力は決まった乱数で作り、入力と上流の答えの両方をTests/Fixtures/IR/prepare-golden.jsonへ書く。
 // Swift側は入力を読んでprepareに通し、答えと照合する（Tests/Unit/IRPreparationTests.swift）。
 //
-//   node Tools/ir_prepare_golden.mjs
+//   root=$(bash Tools/golden/extract_pin.sh)
+//   EFFETUNE_ROOT="$root" node Tools/ir_prepare_golden.mjs
+//
+// 上流の木は EFFETUNE_ROOT（Tools/golden/*.mjs と同じ）。無ければ Vendor/effetune を読む。
+// 作業ツリーの Vendor/effetune は setup.sh のパッチや別の版が混ざることがあるので、見本は
+// extract_pin.sh で指している版を展開したものから作る。
 //
 // 面はfloat32のリトルエンディアンをbase64で入れる。数字で書くより4分の1ほどの大きさで済み、
 // ビットも落ちない。同じ入力を使い回す見本が多いので、入力はinputsにまとめて名前で引く。
@@ -18,8 +23,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
-const preparationFile = path.join(root, 'Vendor', 'effetune', 'js', 'ir-library', 'ir-preparation.js');
-const onsetFile = path.join(root, 'Vendor', 'effetune', 'js', 'utils', 'measurement-dsp', 'onset.js');
+const effetune = path.resolve(process.env.EFFETUNE_ROOT || path.join(root, 'Vendor', 'effetune'));
+const preparationFile = path.join(effetune, 'js', 'ir-library', 'ir-preparation.js');
+const onsetFile = path.join(effetune, 'js', 'utils', 'measurement-dsp', 'onset.js');
 const outFile = path.join(root, 'Tests', 'Fixtures', 'IR', 'prepare-golden.json');
 
 const { prepareIr } = await import(pathToFileURL(preparationFile).href);
