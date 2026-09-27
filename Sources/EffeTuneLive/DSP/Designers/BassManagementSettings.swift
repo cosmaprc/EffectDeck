@@ -164,11 +164,6 @@ struct BassManagementSettings: Equatable, Sendable {
         (0..<Self.clampWidth(width)).filter { subs & (1 << $0) != 0 }
     }
 
-    /// 低域の FIR が要る入力（bass_management.js:255-261）。
-    func linearInputs(width: Int) -> [Int] {
-        (0..<Self.clampWidth(width)).filter { filter(for: $0) != nil }
-    }
-
     /// この入力に掛かる LP/HP の (cutoff, slope)。掛からなければ nil。
     /// Managed は自分の fc / sl、LFE は LFE Low-pass が入っているときだけ lf / ls
     /// （design-core.js:69-72、kernel.cpp:38-40 の needsLowpass）。
