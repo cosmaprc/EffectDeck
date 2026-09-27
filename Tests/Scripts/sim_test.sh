@@ -85,6 +85,11 @@ case "$*" in
     code="${STUB_INSTALL_EXIT:-0}"
     if [ "$code" = 0 ]; then echo "App installed:"; else echo "ERROR: install failed"; fi
     exit "$code" ;;
+  "simctl bootstatus "*) exit "${STUB_BOOTSTATUS_EXIT:-0}" ;;
+  "altool "*)
+    code="${STUB_ALTOOL_EXIT:-0}"
+    if [ "$code" = 0 ]; then echo "UPLOAD SUCCEEDED"; else echo "ERROR: upload failed"; fi
+    exit "$code" ;;
 esac
 exit 0
 EOF
@@ -101,6 +106,8 @@ exit "${STUB_XCODEGEN_EXIT:-0}"
 EOF
 # 通ったときは成果物を置く: -exportPath に EffectDeck.ipa、archive の -archivePath に書庫、
 # CONFIGURATION_BUILD_DIR に EffectDeck.app（STUB_XCODEBUILD_NO_APP=1 なら置かない）。
+# 最後の引数が test なら、通ったテスト 1 件の行を出す（STUB_XCODEBUILD_NO_TESTS=1 なら出さない。
+# -only-testing の名前が外れて何も走らなかった回の形）。
 cat > "$STUB_DIR/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "xcodebuild $*" >> "$STUB_DIR/calls.log"
@@ -122,6 +129,10 @@ if [ "$code" != 0 ]; then echo "** TEST FAILED **"; exit "$code"; fi
 [ -z "$ipa" ] || { mkdir -p "$ipa" && : > "$ipa/EffectDeck.ipa"; }
 [ "$archive" = 0 ] || [ -z "$arch" ] || mkdir -p "$arch/Products/Applications/EffectDeck.app"
 [ -z "$app" ] || [ "${STUB_XCODEBUILD_NO_APP:-0}" = 1 ] || mkdir -p "$app/EffectDeck.app"
+if [ "$prev" = test ] && [ "${STUB_XCODEBUILD_NO_TESTS:-0}" != 1 ]; then
+  echo "Test Case '-[EffeTuneLiveUnitTests.StubTests testStub]' started."
+  echo "Test Case '-[EffeTuneLiveUnitTests.StubTests testStub]' passed (0.001 seconds)."
+fi
 echo "** TEST SUCCEEDED **"
 exit 0
 EOF
@@ -207,7 +218,8 @@ use_stubs() {
 }
 
 # 端末の一覧。状態は S_* で変える。名前の似た囮（前に何か付く・後ろに何か付く・11 インチ）と、
-# 使えない runtime に居る同じ名前の端末を混ぜてある。
+# 使えない runtime に居る同じ名前の端末を混ぜてある。後ろに何か付く囮は本物より後に置く
+# （部分一致で引くと、同じ名前が複数あるときの「一覧の最後」にそれが選ばれて落ちるように）。
 write_lists() {
   {
     echo "== Devices =="
@@ -217,8 +229,8 @@ write_lists() {
     echo "    iPhone 18 Pro ($P18) (${S_P18:-Booted}) "
     echo "    iPhone 17 Pro ($P17_27) (${S_P17_27:-Shutdown}) "
     echo "    Old iPad Pro 13-inch (M5) ($OLDIPAD) (Shutdown) "
-    echo "    iPad Pro 13-inch (M5) Clone ($CLONE) (Shutdown) "
     echo "    iPad Pro 13-inch (M5) ($IPAD13) (${S_IPAD13:-Shutdown}) "
+    echo "    iPad Pro 13-inch (M5) Clone ($CLONE) (Shutdown) "
     echo "    iPad Pro 11-inch (M5) ($IPAD11) (Shutdown) "
     echo "-- watchOS 27.0 --"
     echo "    Apple Watch Series 11 (46mm) ($WATCH) (${S_WATCH:-Booted}) "
@@ -276,7 +288,7 @@ one_phone() {
 # ---- Scripts/lib/sim.sh ------------------------------------------------------
 fresh
 run_lib 'sim_select && echo "UDID=$SIM_UDID NAME=$SIM_NAME"'
-if [ "$RC" = 0 ] && has "$OUTF" "UDID=$IPAD13 NAME=iPad Pro 13-inch (M5)"; then
+if [ "$RC" = 0 ] && has "$OUTF" "UDID=$IPAD13 NAME=iPad Pro 13-inch (M5)" && hasnt "$OUTF" "台ある"; then
   ok lib_default_is_ipad_pro_13_exact_name
 else ng lib_default_is_ipad_pro_13_exact_name "$(head -3 "$OUTF")"; fi
 
@@ -332,6 +344,13 @@ run_lib 'DRY_RUN=1; sim_select && sim_only'
 if [ "$RC" = 0 ] && only_reads && has "$OUTF" "+ xcrun simctl shutdown $P18"; then
   ok lib_dry_run_changes_nothing
 else ng lib_dry_run_changes_nothing "$(grep -v 'simctl list' "$CALLS" | tr '\n' ';')"; fi
+
+# 起こしても起動し終わらなければ止まる（テストも撮影も、起ききっていない端末で始めない）。
+fresh
+STUB_BOOTSTATUS_EXIT=1 run_lib 'sim_select && sim_only; echo "rc=$?"'
+if has "$OUTF" "rc=1" && has "$OUTF" "!! 起動し終わるのを待てない: iPad Pro 13-inch (M5) ($IPAD13)"; then
+  ok lib_sim_only_bootstatus_failure_stops
+else ng lib_sim_only_bootstatus_failure_stops "$(tail -2 "$OUTF" | tr '\n' ';')"; fi
 
 # 撮るためのアプリ。建てられても out-sim/EffectDeck.app が無ければ止まる（古いものを撮らない）。
 line="xcodebuild -project EffeTuneLiveSim.xcodeproj -scheme EffeTuneLive -configuration Debug -sdk iphonesimulator -arch arm64 -jobs 2 CONFIGURATION_BUILD_DIR=$ROOT/out-sim build"
@@ -417,6 +436,17 @@ STUB_XCODEBUILD_EXIT=65 run_script test.sh
 if [ "$RC" = 65 ] && has "$OUTF" "(exit=65)"; then ok test_xcodebuild_exit_code_propagates
 else ng test_xcodebuild_exit_code_propagates "rc=$RC"; fi
 
+# 1 件も走らなかった回は、xcodebuild が SUCCEEDED・0 で終わっても落ちにする。
+fresh
+run_script test.sh ChainTextTests
+a_ok=0; [ "$RC" = 0 ] && has "$OUTF" "通った: 1" && hasnt "$OUTF" "1 件も走っていない" && a_ok=1
+fresh
+STUB_XCODEBUILD_NO_TESTS=1 run_script test.sh ChainTextTsets
+b_ok=0; [ "$RC" = 1 ] && has "$OUTF" "(exit=1)" && has "$OUTF" "!! テストが 1 件も走っていない" \
+  && has "$ROOT/test.log" "** TEST SUCCEEDED **" && has "$ROOT/test.log" "!! テストが 1 件も走っていない" && b_ok=1
+if [ "$a_ok$b_ok" = 11 ]; then ok test_zero_tests_run_is_failure
+else ng test_zero_tests_run_is_failure "ran=$a_ok none=$b_ok rc=$RC"; fi
+
 # ---- Scripts/uitest.sh -------------------------------------------------------
 # DRY_RUN は台本の既定（名指しの /usr/bin/xcodebuild）のまま出させる。
 fresh
@@ -439,6 +469,16 @@ if [ "$RC" = 65 ] && has "$OUTF" "(exit=65)" && hasline "$CALLS" "$line" \
    && [ "$last" = "xcrun simctl terminate $IPAD13 ai.nemut.effetune" ]; then
   ok uitest_runs_the_same_command_and_returns_its_exit_code
 else ng uitest_runs_the_same_command_and_returns_its_exit_code "rc=$RC order=$order last=$last"; fi
+
+# 引数なしの SmokeTests がまだ無い回。何も走らなければ落ちにし、アプリは落とす。
+fresh
+STUB_XCODEBUILD_NO_TESTS=1 run_script uitest.sh
+last=$(grep -v 'simctl list' "$CALLS" | tail -1)
+if [ "$RC" = 1 ] && has "$OUTF" "(exit=1)" && has "$OUTF" "!! テストが 1 件も走っていない" \
+   && has "$CALLS" "-only-testing:EffeTuneLiveUITests/SmokeTests test" \
+   && [ "$last" = "xcrun simctl terminate $IPAD13 ai.nemut.effetune" ]; then
+  ok uitest_zero_tests_run_is_failure
+else ng uitest_zero_tests_run_is_failure "rc=$RC last=$last"; fi
 
 fresh
 STUB_PY_EXIT=1 run_script uitest.sh
@@ -468,7 +508,7 @@ else ng shoot_screens_ipad_default_width_by_device "ipad=$a_ok iphone=$b_ok layo
 fresh
 DRY_RUN=1 run_script shoot_store.sh chain:routing
 if [ "$RC" = 0 ] && has "$OUTF" "+ xcrun simctl launch $IPAD13 ai.nemut.effetune -ETSeed chain -ETWidth 440 -ETCollapsed 0 -ETMock 1 -ETSheet routing" \
-   && only_reads; then
+   && has "$OUTF" "+ xcrun simctl install $IPAD13 $ROOT/out-sim/EffectDeck.app" && only_reads; then
   ok shoot_store_default_ipad_sheet_spec
 else ng shoot_store_default_ipad_sheet_spec "rc=$RC $(grep 'simctl launch' "$OUTF" | head -1)"; fi
 
@@ -593,6 +633,16 @@ if [ "$RC" != 0 ] && has "$CALLS" "archive.sh EffeTuneLive EffectDeckPublicBeta"
    && hasnt "$CALLS" "altool" && has "$ROOT/ship.log" "=== SHIP FINISHED (exit=1) ==="; then
   ok ship_stops_when_archive_fails
 else ng ship_stops_when_archive_fails "rc=$RC"; fi
+
+# 上げるのに失敗したら、処理を待たず次の手も出さずに止まる（grep | tail の終了値で先へ進まない）。
+fresh
+mkdir -p "$WORK/arch/EffeTuneLive.xcarchive"
+STUB_ALTOOL_EXIT=1 SKIP_ARCHIVE=1 ARCHIVE_DIR="$WORK/arch" EXPORT_DIR="$WORK/ipa" STUB_BUILD_NUM=27 run_script ship.sh
+if [ "$RC" != 0 ] && has "$CALLS" "xcrun altool --upload-app" && has "$ROOT/ship.log" "!! 上げられなかった (exit 1)" \
+   && hasnt "$CALLS" "Tools/asc.py" && hasnt "$ROOT/ship.log" "次の手" \
+   && has "$ROOT/ship.log" "=== SHIP FINISHED (exit=1) ==="; then
+  ok ship_stops_when_upload_fails
+else ng ship_stops_when_upload_fails "rc=$RC $(grep '^!!' "$ROOT/ship.log" | head -1)"; fi
 
 # ---- Tools/asc.py の出力を読む台本（ship.sh / notarize.sh / adp_fetch.sh） ------------
 # asc.py は本物を走らせ、App Store Connect の返事だけ asc_api.json で決める。

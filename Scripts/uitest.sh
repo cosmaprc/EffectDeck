@@ -15,6 +15,8 @@
 #
 # 全出力は uitest.log、結果の束は build/UITest.xcresult。DerivedData は ./DerivedData。
 # 判定は uitest.log の "** TEST SUCCEEDED **" と、このスクリプトの終了値。
+# テストが 1 件も走らなかった回は、SUCCEEDED でも 1 で終わる（Tests/UI に SmokeTests が
+# 入るまでは、引数なしの回がこれになる）。
 set -u
 export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.." || exit 1
@@ -87,12 +89,5 @@ echo "--- xcodebuild test $(date) ---" >> "$LOG"
 CODE=$?
 sim_terminate_app
 
-echo "--- 落ちたもの ---"
-grep -E "error:|XCTAssert.*failed|failed -|TEST FAILED|BUILD FAILED" "$LOG" | head -40
-echo "--- 数 ---"
-grep -E "Test Suite .* (passed|failed)" "$LOG" | tail -3
-grep -cE "^Test Case .* passed" "$LOG" | sed 's/^/通った: /'
-grep -cE "^Test Case .* failed" "$LOG" | sed 's/^/落ちた: /'
-grep -E "\*\* TEST (SUCCEEDED|FAILED) \*\*" "$LOG" | tail -1
-echo "結果の束: $RESULT"
-finish "$CODE"
+et_test_summary "$LOG" "$CODE" "$RESULT"
+finish $?

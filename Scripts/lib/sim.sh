@@ -75,6 +75,31 @@ et_step() {
   return 0
 }
 
+# xcodebuild test の後の要約（落ちたもの・数・判定）を出し、呼ぶ側が返す終了値を返す。
+# **1 件も走っていなければ、xcodebuild が 0 で終わっても 1 を返す。**-only-testing に
+# 無いクラスや綴り違いを渡すと、何も走らせずに ** TEST SUCCEEDED ** で終わることがある。
+# 数えるのは "Test Case '...' passed (" と "... failed (" の行（-parallel-testing-enabled NO の形。
+# 並列のときの "Test case '...' passed on '...'" も拾う）。
+#   et_test_summary <ログ> <xcodebuild の終了値> <結果の束>
+et_test_summary() {
+  local log="$1" code="$2" result="$3" passed failed
+  echo "--- 落ちたもの ---"
+  grep -E "error:|XCTAssert.*failed|failed -|TEST FAILED|BUILD FAILED" "$log" | head -40
+  echo "--- 数 ---"
+  grep -E "Test Suite .* (passed|failed)" "$log" | tail -3
+  passed=$(grep -cE "^Test [Cc]ase '.*' passed " "$log")
+  failed=$(grep -cE "^Test [Cc]ase '.*' failed " "$log")
+  echo "通った: $passed"
+  echo "落ちた: $failed"
+  grep -E "\*\* TEST (SUCCEEDED|FAILED) \*\*" "$log" | tail -1
+  echo "結果の束: $result"
+  if [ "$code" -eq 0 ] && [ "$((passed + failed))" -eq 0 ]; then
+    echo "!! テストが 1 件も走っていない（-only-testing に渡した名前を確かめる）" | tee -a "$log"
+    return 1
+  fi
+  return "$code"
+}
+
 sim_is_udid() {
   printf '%s\n' "$1" | grep -Eq '^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$'
 }

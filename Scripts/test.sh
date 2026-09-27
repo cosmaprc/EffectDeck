@@ -24,6 +24,7 @@
 #
 # 全出力は test.log、結果の束は build/Logic.xcresult。
 # 判定は test.log の "** TEST SUCCEEDED **"（落ちたら "** TEST FAILED **"）と、このスクリプトの終了値。
+# テストが 1 件も走らなかった回（絞りの名前の綴り違いなど）は、SUCCEEDED でも 1 で終わる。
 set -u
 export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.." || exit 1
@@ -119,12 +120,5 @@ echo "--- xcodebuild test $(date) ---" >> "$LOG"
 "${CMD[@]}" >> "$LOG" 2>&1
 CODE=$?
 
-echo "--- 落ちたもの ---"
-grep -E "error:|XCTAssert.*failed|failed -|TEST FAILED|BUILD FAILED" "$LOG" | head -40
-echo "--- 数 ---"
-grep -E "Test Suite .* (passed|failed)" "$LOG" | tail -3
-grep -cE "^Test Case .* passed" "$LOG" | sed 's/^/通った: /'
-grep -cE "^Test Case .* failed" "$LOG" | sed 's/^/落ちた: /'
-grep -E "\*\* TEST (SUCCEEDED|FAILED) \*\*" "$LOG" | tail -1
-echo "結果の束: $RESULT"
-finish "$CODE"
+et_test_summary "$LOG" "$CODE" "$RESULT"
+finish $?
