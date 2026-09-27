@@ -538,7 +538,12 @@ final class EffeTuneDSP: ObservableObject {
                 .map { chain[$0].id })
             restoring = false
             publish()
-            reloadAssets()
+            // **IRの入れ直しは次の回に回す**（rebuildAllと同じ）。ここはAudioIOの初期化の中、
+            // 画面を作っている途中で走る。IRは畳み込みのレートへ伸縮して下ごしらえするので、
+            // 4chの長いIRを何本も同期で読むとDebugビルドでは数秒かかり、起動が詰まる。
+            Task { @MainActor [weak self] in
+                self?.reloadAssets()
+            }
             // 畳んだまま起動した Bass Management の Linear も設計させる（replaceChain と同じ）。
             ETAssetReattach.loaded(chain)
         } else if !PipelineStore.hasSaved {

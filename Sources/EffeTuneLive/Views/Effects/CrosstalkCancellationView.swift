@@ -88,7 +88,7 @@ struct CrosstalkCancellationView: View {
     /// 取り込みで転んだ理由。設計で転んだ理由は controller.phase が持つ。
     @State private var importFailure: String?
     /// 資産が本当に効き始めたか。commit の直後は preparing で、音が何ブロックか
-    /// 通るまで active にならない（DSP/AssetUpload.swift:563-565）。
+    /// 通るまで active にならない（DSP/AssetUpload.swift:543-545）。
     @State private var active = false
 
     // 設計の指示は session が持つ。既定は上流の初期値

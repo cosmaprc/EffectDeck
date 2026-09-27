@@ -229,11 +229,11 @@ struct RoomEQView: View {
     /// 入った内容の 1 行、あるいはいま何をしているか。
     ///
     /// **.sent は「鳴っている」ではない。** commit の直後は preparing で、
-    /// 音が何ブロックか通ってから active になる（AssetUpload.swift:561-565）。
+    /// 音が何ブロックか通ってから active になる（AssetUpload.swift:541-545）。
     /// 無音のあいだは preparing のまま進まないので、そう書く。
     private var headline: String {
         // 資産を staging へ写す口が無い build では何も始まらない
-        // （AssetUpload.swift:624-636 の stagingAddressUnavailable）。
+        // （AssetUpload.swift:458 の stagingAddressUnavailable）。
         guard AssetUpload.canStage else { return "This build cannot load correction assets" }
         guard !session.sources.isEmpty else { return "No correction curve" }
 

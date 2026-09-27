@@ -710,7 +710,7 @@ final class BandFIRPEQDesigner: ObservableObject {
     // この物が消えれば次の再開で自分から抜ける。
 
     /// 送り込める build かどうか。false のあいだは画面に出す前に諦められる。
-    /// 中身は AssetUpload.swift:576-621 の但し書きのとおり。
+    /// 中身は AssetUpload.swift:600-609 の但し書きのとおり。
     var canStage: Bool { AssetUpload.canStage }
 
     // MARK: 外からの合図

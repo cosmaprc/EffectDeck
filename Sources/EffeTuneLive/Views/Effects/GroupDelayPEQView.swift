@@ -228,7 +228,7 @@ private struct GroupDelayPEQBody: View {
     /// attach は即 start(debounce: 0) を回す（GroupDelayPEQDesigner.swift:810）。
     /// 遅延が 1 本も無ければ .flat の経路へ行って AssetUpload.clear を呼び
     /// （同 902-911）、clear は master bypass を上げて音のスレッドが 2 ブロック進むまで
-    /// 待つ（AssetUpload.swift:553-558, 676-692）。送るものが無いのに繋ぐと、
+    /// 待つ（AssetUpload.swift:533-538, 631-649）。送るものが無いのに繋ぐと、
     /// カードを出しただけで鎖全体の音が一瞬切れる。
     /// 中身は置き場が持っている（畳んだ状態からも呼ばれるので外に出してある）。
     private func connect() { GroupDelayPEQDesigners.shared.sync(node: node) }

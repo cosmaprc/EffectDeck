@@ -73,27 +73,7 @@ import os
 
 // MARK: - 資産の形
 
-/// ETA1 の topology。ir-asset-payload.js:5-11 と kernel.h の値が一致している。
-enum ETAssetTopology: UInt32 {
-    case unspecified = 0
-    case mono = 1
-    case independent = 2
-    case trueStereo = 3
-    case matrix = 4
-}
-
-/// matrix topology のときだけ要る経路。1 本 12 バイト。
-struct ETAssetPath {
-    var inputSlot: UInt32
-    var outputSlot: UInt32
-    var irChannel: UInt32
-
-    init(inputSlot: UInt32, outputSlot: UInt32, irChannel: UInt32) {
-        self.inputSlot = inputSlot
-        self.outputSlot = outputSlot
-        self.irChannel = irChannel
-    }
-}
+// ETAssetTopologyとETAssetPathはIRPreparation.swiftにある（単体テストのバンドルからも見えるように）。
 
 /// et_instance_asset_state の生値。abi.h:86-93 と各カーネルの assetState()。
 enum ETAssetState: UInt32 {

@@ -7,7 +7,7 @@
 //    1. parameterWriter を EffeTuneDSP.setValue（EffeTuneDSP.swift:507）へ向ける
 //    2. onAssetCommitted を EffeTuneDSP.republish（同 :721）へ向ける
 //    3. attach(Target) を呼ぶ。以後つまみは designer.update{} を通す
-//  designer も AssetUpload.send（AssetUpload.swift:420-421）も @MainActor なので、
+//  designer も AssetUpload.send（AssetUpload.swift:400-401）も @MainActor なので、
 //  ここから呼ぶぶんには「音のスレッドからは呼ばない」（同 :62）を満たしている。
 //
 //  --- designer をビューに持たせない理由 ---

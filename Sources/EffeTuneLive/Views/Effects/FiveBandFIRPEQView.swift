@@ -19,7 +19,7 @@
 //
 //  --- つまみを離すまで書かない理由 ---
 //  settings を 1 回書くたびに 150ms 後に staging が走り、そのあいだ鎖全体が素通しになる
-//  （AssetUpload.swift:678 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが連続して
+//  （AssetUpload.swift:634 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが連続して
 //  音が切れる。だから BandFIRPEQSliderRow は onEditingChanged で離したときだけ渡す。
 //
 //  --- 図 ---
@@ -126,7 +126,7 @@ struct FiveBandFIRPEQView: View {
         // engine が同じ番号を返したときに作り直しを見落として、資産の入っていない instance へ
         // 送ったつもりになる。
         .onChange(of: node.tapId) { _, _ in attach() }
-        // 担当するチャンネルが変わると begin へ渡す proc が変わる（AssetUpload.swift:209）。
+        // 担当するチャンネルが変わると begin へ渡す proc が変わる（AssetUpload.swift:189）。
         // 設計そのものは同じなので控えから戻るが、送り直しは要る。
         .onChange(of: node.channelSpec) { _, _ in designer?.refresh() }
     }
@@ -306,7 +306,7 @@ private struct FiveBandFIRPEQPanel: View {
                     in: .rect(cornerRadius: ETMetrics.innerRadius, style: .continuous))
     }
 
-    /// 入った内容の 1 行。IRLoader が返す行と同じ切り方（IRLoader.swift:297-299）。
+    /// 入った内容の 1 行。IRLoader が返す行と同じ切り方（IRLoader.swift:208-210）。
     /// レートは設計に使った処理レートで、これがヘッダ +12 に入る値と同じ
     /// （BandFIRPEQDesigner.swift:31 の但し書き）。
     ///
@@ -471,7 +471,7 @@ private struct FiveBandFIRPEQPanel: View {
 /// 名前・値・つまみ。**離すまで commit を呼ばない。**
 ///
 /// settings を 1 回書くたびに 150ms 後に staging が走り、そのあいだ鎖が素通しになる
-/// （AssetUpload.swift:678 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが
+/// （AssetUpload.swift:634 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが
 /// 連続して音が切れるので、指を離したときだけ渡す。
 private struct BandFIRPEQSliderRow: View {
 
