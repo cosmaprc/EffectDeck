@@ -11,6 +11,14 @@
 //
 //  DSP は入力より高いレートで回せる。EffeTune が AudioContext を 96kHz で開いて
 //  非線形エフェクトの折り返しを減らしているのと同じことを、両端のリサンプラでやる。
+//
+//  **値だけで決まる判断はここに置かない。** 実機なしで測れるよう、別のファイルにある:
+//    本数・レート・帰還ループの名前・鳴らし始め   AudioSessionRules.swift
+//    レートや本数が食い違ったときの組み直し       RouteRebuildRule.swift
+//    音のスレッドの並べ替えと書き出し             AudioBufferOps.swift
+//    無音で休む                                   PowerPolicy.swift
+//    仮想デバイスからの引き剥がし                 RouteEscape.swift
+//  ここに残すのは AVAudioSession と AVAudioEngine に触る部分だけ。
 
 import AVFoundation
 import Darwin
@@ -118,7 +126,7 @@ final class AudioIO: ObservableObject {
     private(set) var level: Float = 0
     @Published var applied: Int = 0
     /// このアプリの音がどこへ出ているか。
-    /// 仮想デバイス「EffeTune」を指していたら帰還ループ。
+    /// 仮想デバイス（名前に ET_NAME_STEM を含む）を指していたら帰還ループ。
     @Published var outputRoute: String = "—"
     /// 出力先が仮想デバイスのままなら true。鎖が自分に戻っている。
     @Published var loopback = false
@@ -143,22 +151,26 @@ final class AudioIO: ObservableObject {
     private var interrupted = false
     /// start() が失敗したとき、次を試すまでの間隔（秒）を稼ぐ。
     private var lastStartAttempt: Double = 0
-    /// ハードウェアのレートが組んだときと食い違っている目盛りの数。
+    /// ハードウェアのレートが組んだときと食い違ったときの組み直し。
     /// 一瞬の食い違いで組み直すと音が切れ続けるので、続いたものだけを見る。
-    private var rateMismatchTicks = 0
+    private var rateRebuild = ETRouteRebuildRule()
     /// 出力IFの抜き差しで本数が変わったときも、レートと同じく落ち着いてから組み直す。
-    private var channelMismatchTicks = 0
+    private var channelRebuild = ETRouteRebuildRule()
     /// NotificationCenter の購読。singleton なので外す機会は無いが、持っておく。
     private var observers: [NSObjectProtocol] = []
 
     private init() {
+        // 帰還ループの判定は Swift の写し（AudioSessionRules.swift）で見ている。
+        // ドライバが名乗る字（ETNames.h）と食い違うと、戻っていても気づけない。
+        assert(ETAudioSessionRules.nameStem == ET_NAME_STEM,
+               "ETAudioSessionRules.nameStem が ETNames.h の ET_NAME_STEM と違う")
         // 拡張はいつ繋いでくるか分からないので、起動と同時に待ち受ける。
         _ = ETLinkReceiver.shared.start()
         Preferences.shared.onAudioChange = { [weak self] in self?.rebuild() }
         // 組み直さずに差し替える。押しっぱなしでも音が切れない。
         Preferences.shared.onSilenceThresholdChange = { [weak self] in
             self?.render?.gate.thresholdLinear =
-                Float(pow(10.0, Preferences.shared.silenceThresholdDb / 20.0))
+                PowerGate.linearThreshold(decibels: Preferences.shared.silenceThresholdDb)
         }
         observeSession()
 
@@ -302,16 +314,15 @@ final class AudioIO: ObservableObject {
     /// 自分を起こす手が無く、起こせるのは tick だけで、その tick は中断されたら
     /// 回らない。詳しくは docs/battery-log.md の「直さなかったもの」。
     private func followPeer() {
-        // running だけを見ると取りこぼす。中断で OS が engine を止めても
-        // stop() を通らないので running は true のまま残る。食い違いを直接見る。
-        let alive = running && engine.isRunning
-        guard !alive else { return }
-
-        guard !interrupted else { return }
-        // start() が失敗し続けるとき（中断中の setActive など）に
-        // 3.3Hz で叩かないよう、1 秒は空ける。
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastStartAttempt >= 1 else { return }
+        // 判断は ETAudioSessionRules.shouldStart（PeerFollowTests）:
+        //   running だけを見ると取りこぼす。中断で OS が engine を止めても
+        //   stop() を通らないので running は true のまま残る。食い違いを直接見る。
+        //   中断中は呼ばない。start() が失敗し続けるとき（中断中の setActive など）に
+        //   3.3Hz で叩かないよう、1 秒は空ける。
+        guard ETAudioSessionRules.shouldStart(running: running, engineRunning: engine.isRunning,
+                                              interrupted: interrupted,
+                                              now: ProcessInfo.processInfo.systemUptime,
+                                              lastStartAttempt: lastStartAttempt) else { return }
         start()
     }
 
@@ -354,13 +365,13 @@ final class AudioIO: ObservableObject {
             //
             // **いま仮想デバイスを指しているときは触らない。**
             // followPeer() は engine が上がらない間 1 秒おきに start() を
-            // 呼び直す（下の 270-279）。ここで無条件に .none と reset() を撃つと
+            // 呼び直す（上の followPeer）。ここで無条件に .none と reset() を撃つと
             // escape.attempts が毎秒 0 に戻り、打ち止め（maxAttempts = 3）が
             // 一度も効かない。しかも経路の再計算は setCategory / setActive の側で
             // 起きるので、いちばん効かせたい瞬間に「システムの選択に従う」と
             // 宣言していることになる。
             let onVirtualNow = session.currentRoute.outputs.contains {
-                $0.portName.localizedCaseInsensitiveContains(ET_NAME_STEM)
+                ETAudioSessionRules.isOwnDevice(portName: $0.portName)
             }
             if !onVirtualNow {
                 try session.overrideOutputAudioPort(.none)
@@ -377,7 +388,7 @@ final class AudioIO: ObservableObject {
             // **経路が決まった直後の rsp を残す。**
             // routeSharingPolicy はこちらが一度も設定していないので、
             // 1 (LongFormAudio) が出たら系が SystemMusic へ移したということ。
-            // np は NowPlaying を止めているか（-ETNoNowPlaying 1）。
+            // np は NowPlaying.mode（-ETNowPlaying on / off / first。既定は off）。
             let line = "session out=\(outs) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue)"
             log.notice("\(line, privacy: .public)")
             ETLogTap.record(line)
@@ -390,7 +401,7 @@ final class AudioIO: ObservableObject {
             return
         }
 
-        let sr = session.sampleRate > 0 ? session.sampleRate : 48000
+        let sr = ETAudioSessionRules.effectiveSampleRate(session.sampleRate)
         // リンクは 48kHz 固定（LocalLink.h、EffeTuneDriver.m の kSampleRate）。
         // setPreferredSampleRate は要求でしかなく、.mixWithOthers なので
         // 先に鳴らしているアプリがハードウェアのレートを握っていれば通らない。
@@ -398,16 +409,17 @@ final class AudioIO: ObservableObject {
         // 音程と速さがずれて、受信の輪も溜まるか枯れるかする。
         // 止めると打つ手が無くなるので鳴らすが、黙って進めない
         // （status と log と Settings の Device に出る）。
-        let rateOK = abs(sr - 48000) < 1
+        let rateOK = ETAudioSessionRules.matchesLinkRate(sr)
         if !rateOK {
             log.notice("device rate \(sr) != 48000, link is fixed at 48k")
         }
         let factor = Int(prefs.processingRate.factor)
-        let channels = Self.processingChannels(for: session.outputNumberOfChannels)
+        let channels = ETAudioSessionRules.processingChannels(
+            forOutputChannels: session.outputNumberOfChannels)
         let state = RenderState(capacity: Self.capacity, sampleRate: sr, factor: factor,
                                 channels: channels)
         state.gate.idleSeconds = prefs.powerMode.idleSeconds
-        state.gate.thresholdLinear = Float(pow(10.0, prefs.silenceThresholdDb / 20.0))
+        state.gate.thresholdLinear = PowerGate.linearThreshold(decibels: prefs.silenceThresholdDb)
         render = state
 
         EffeTuneDSP.shared.prepare(sampleRate: sr * Double(factor), maxChannels: UInt32(channels),
@@ -422,8 +434,9 @@ final class AudioIO: ObservableObject {
         ETJSFXHost.shared.resume(sampleRate: sr * Double(factor),
                                  outputChannels: channels,
                                  maxFrames: Self.capacity * factor)
-        state.gate.idleSeconds = max(state.gate.idleSeconds,
-                                     ETPipeline_ExternalTailTime())
+        // 外部処理の尾（リバーブの残響など）が長ければ、休むのをそれまで待つ。
+        state.gate.idleSeconds = PowerGate.idleSeconds(mode: prefs.powerMode,
+                                                       externalTail: ETPipeline_ExternalTailTime())
 
         let fmt = AVAudioFormat(standardFormatWithSampleRate: sr,
                                 channels: AVAudioChannelCount(channels))!
@@ -452,11 +465,7 @@ final class AudioIO: ObservableObject {
             //    0 埋めとデインターリーブを先に払うことになる。入力は常に L/R の
             //    2ch なので、s の 2n サンプルから同じ値が出る。
             let s = state.interleaved
-            var inPeak: Float = 0
-            for i in 0..<(n * 2) {
-                let a = abs(s[i])
-                if a > inPeak { inPeak = a }
-            }
+            let inPeak = ETAudioBufferOps.peak(s, count: n * 2)
             // ゲートは毎回通す。silentFor を溜めているのがこれ。
             //
             // **トーンはゲートと論理和にする。**前はプレーナに足したあとで走査して
@@ -488,8 +497,8 @@ final class AudioIO: ObservableObject {
             //    そこまで上げた人にとって -20dB 以下の弱音は今は素通しで聴こえて
             //    いるので、ピークで抜けるとその弱音が丸ごと消える。
             //    相手が居ないときは readInterleaved が全域を 0 で埋めるので
-            //    （LocalLink.m:517 と :526）、待機中はここに必ず入る。
-            if !awake, inPeak == 0 {
+            //    （LocalLink.m の readInterleaved）、待機中はここに必ず入る。
+            if PowerGate.canSkipBlock(awake: awake, inputPeak: inPeak) {
                 for buffer in abl {
                     if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
                 }
@@ -503,11 +512,7 @@ final class AudioIO: ObservableObject {
             // 5. プレーナへ並べ替える。
             //    EffeTune のカーネルは offset = channel * frame_count で読む。
             let p = state.planar
-            p.update(repeating: 0, count: n * channels)
-            for i in 0..<n {
-                p[i]     = s[i * 2]
-                p[n + i] = s[i * 2 + 1]
-            }
+            ETAudioBufferOps.spreadStereo(s, frames: n, into: p, channels: channels)
 
             ETPreviewTone_Render(p, UInt32(n), UInt32(channels), state.sampleRate)
 
@@ -534,31 +539,17 @@ final class AudioIO: ObservableObject {
             }
             state.elapsed += Double(n) / state.sampleRate
 
-            // 7. 出力へ書く
-            var peak: Float = 0
-            var sourceChannel = 0
-            for buffer in abl {
-                guard let data = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let lanes = max(1, Int(buffer.mNumberChannels))
-                for i in 0..<Int(frameCount) {
-                    for lane in 0..<lanes {
-                        let value: Float
-                        if i < n, sourceChannel + lane < channels {
-                            value = p[(sourceChannel + lane) * n + i]
-                            peak = max(peak, abs(value))
-                        } else {
-                            value = 0
-                        }
-                        data[i * lanes + lane] = value
-                    }
+            // 7. 出力へ書く。インターリーブの口・本数の過不足・容量を超えたフレームは
+            //    ETAudioBufferOps.writeOutput が受け持つ（AudioBufferOpsTests）。
+            state.meter = ETAudioBufferOps.writeOutput(
+                planar: p, frames: n, channels: channels,
+                frameCount: Int(frameCount), bufferCount: abl.count) { k in
+                    (abl[k].mData?.assumingMemoryBound(to: Float.self), Int(abl[k].mNumberChannels))
                 }
-                sourceChannel += lanes
-            }
-            state.meter = peak
 
             let spent = state.now() - began
             let budget = Double(n) / state.sampleRate
-            state.load += (spent / max(budget, 1e-9) - state.load) * 0.1
+            state.load = ETAudioBufferOps.smoothedLoad(state.load, spent: spent, budget: budget)
             return noErr
         }
 
@@ -585,8 +576,7 @@ final class AudioIO: ObservableObject {
         processingRate = sr * Double(factor)
         outputChannels = channels
         resamplerLatency = Int(ETResampler_LatencySamples(state.resampler))
-        status = rateOK ? "Running"
-                        : String(format: "Running at %.0f Hz, input is 48000 Hz", sr)
+        status = ETAudioSessionRules.runningStatus(sampleRate: sr)
         refreshRoute()
         updateNowPlaying()
         log.notice("start sr=\(sr) x\(factor) ch=\(channels) route=\(self.route, privacy: .public)")
@@ -625,9 +615,10 @@ final class AudioIO: ObservableObject {
     /// 図は Telemetry を直接読んでいるので、ここは poll だけでよい。
     func pollTelemetry() {
         let session = AVAudioSession.sharedInstance()
-        let delay = Preferences.shared.syncVisualsToAudio
-            ? session.outputLatency + session.ioBufferDuration
-              + Double(resamplerLatency) / max(session.sampleRate, 1) : 0
+        let delay = ETAudioSessionRules.displayDelay(
+            sync: Preferences.shared.syncVisualsToAudio,
+            outputLatency: session.outputLatency, ioBufferDuration: session.ioBufferDuration,
+            resamplerLatency: resamplerLatency, sampleRate: session.sampleRate)
         Telemetry.shared.poll(engine: EffeTuneDSP.shared.engine, displayDelay: delay)
     }
 
@@ -649,7 +640,7 @@ final class AudioIO: ObservableObject {
             // どちらに居ても仮想デバイスを指す。ループバックに入る条件の判別に使う。
             let session = AVAudioSession.sharedInstance()
             let ports = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: "+")
-            let external = (0..<8).map {
+            let external = (0..<ET_EXTERNAL_MAX_PROCESSORS).map {
                 "\($0):\(ETPipeline_ExternalProcessCount(UInt32($0)))/\(ETPipeline_ExternalLastStatus(UInt32($0)))"
             }.joined(separator: ",")
             let line = "tick out=\(route) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue) ports=\(ports) ovr=\(overriding) applied=\(applied) active=\(ETPipeline_ActiveNodes()) chain=\(EffeTuneDSP.shared.chain.count) peer=\(hasPeer) recv=\(received) load=\(load) cfgStatus=\(ETPipeline_LastStatus()) proc=\(render?.pipeStatus ?? 0) ext=\(external) lat=\(ETPipeline_Latency()) rlat=\(resamplerLatency)"
@@ -714,7 +705,8 @@ final class AudioIO: ObservableObject {
         if bufferedFrames != nowBuffered { bufferedFrames = nowBuffered }
 
         let session = AVAudioSession.sharedInstance()
-        let nowBlock = Int((session.ioBufferDuration * session.sampleRate).rounded())
+        let nowBlock = ETAudioSessionRules.blockFrames(ioBufferDuration: session.ioBufferDuration,
+                                                       sampleRate: session.sampleRate)
         if blockFrames != nowBlock { blockFrames = nowBlock }
 
         // イヤホンを挿すとハードウェアのレートごと変わる。組んだときのレートと
@@ -723,31 +715,24 @@ final class AudioIO: ObservableObject {
         //
         // 1 回の食い違いでは組み直さない。engine.start() のあとにレートが落ち着く
         // ことがあり、そこで即座に組み直すと stop→start を毎秒繰り返して音が切れ続ける。
-        // 3 目盛り（約 0.9 秒）続いたものだけを本物として扱う。
+        // 3 目盛り（約 0.9 秒）続き、start() から 1 秒経ったものだけを本物として扱う
+        // （ETRouteRebuildRule / RouteRebuildRuleTests）。
         let built = render?.sampleRate
-        if running, let built, session.sampleRate > 0,
-           abs(session.sampleRate - built) >= 1 {
-            rateMismatchTicks += 1
-        } else {
-            rateMismatchTicks = 0
-        }
-        if rateMismatchTicks >= 3,
-           ProcessInfo.processInfo.systemUptime - lastStartAttempt >= 1 {
-            rateMismatchTicks = 0
+        let rateOff = ETRouteRebuildRule.rateMismatch(running: running, built: built,
+                                                      hardware: session.sampleRate)
+        if rateRebuild.observe(mismatch: rateOff, now: ProcessInfo.processInfo.systemUptime,
+                               lastStart: lastStartAttempt) {
             log.notice("hardware rate \(session.sampleRate) != built \(built ?? 0), rebuilding")
             rebuild()
             return
         }
 
-        let actualChannels = Self.processingChannels(for: session.outputNumberOfChannels)
-        if running, let builtChannels = render?.channels, actualChannels != builtChannels {
-            channelMismatchTicks += 1
-        } else {
-            channelMismatchTicks = 0
-        }
-        if channelMismatchTicks >= 3,
-           ProcessInfo.processInfo.systemUptime - lastStartAttempt >= 1 {
-            channelMismatchTicks = 0
+        let actualChannels = ETAudioSessionRules.processingChannels(
+            forOutputChannels: session.outputNumberOfChannels)
+        let channelsOff = ETRouteRebuildRule.channelMismatch(running: running, built: render?.channels,
+                                                             actual: actualChannels)
+        if channelRebuild.observe(mismatch: channelsOff, now: ProcessInfo.processInfo.systemUptime,
+                                  lastStart: lastStartAttempt) {
             log.notice("hardware channels \(actualChannels) != built \(self.render?.channels ?? 0), rebuilding")
             rebuild()
         }
@@ -767,9 +752,10 @@ final class AudioIO: ObservableObject {
 
     /// 自分の音が仮想デバイスへ戻らないようにする。
     ///
-    /// MediaDevice で「EffeTune」を選ぶと、それは**システム全体の出力先**になる。
-    /// このアプリも例外ではなく、何もしなければ出力先は EffeTune になる。
-    /// 実機のログで確かめた: `start sr=48000 x2 route=EffeTune`。
+    /// MediaDevice で仮想デバイス（いまの名前は ET_ROUTE_NAME の EffectDeck）を選ぶと、
+    /// それは**システム全体の出力先**になる。
+    /// このアプリも例外ではなく、何もしなければ出力先は仮想デバイスになる。
+    /// 実機のログで確かめた（当時の名前は EffeTune）: `start sr=48000 x2 route=EffeTune`。
     /// そうなると
     ///   出力 → ドライバ → TCP → 自分の入力 → 出力 …
     /// の環を float32 のまま回る。整数への丸めもクリップも起きないので、
@@ -777,7 +763,7 @@ final class AudioIO: ObservableObject {
     ///
     /// 普通のアプリに「自分だけの出力先」を選ぶ手段は無いが、
     /// overrideOutputAudioPort(.speaker) だけはこのセッションに限って効く。
-    /// 他のアプリの出力先（EffeTune）は変えない。
+    /// 他のアプリの出力先（仮想デバイス）は変えない。
     ///
     /// 代償として、イヤホンを繋いでいても本体のスピーカーから鳴る。
     /// 無音で暴走するよりはよいと判断している。
@@ -841,7 +827,8 @@ final class AudioIO: ObservableObject {
             log.notice("multichannel content flag failed code=\(ns.code) \(ns.domain, privacy: .public)")
         }
 
-        let requested = min(16, max(1, session.maximumOutputNumberOfChannels))
+        let requested = ETAudioSessionRules.requestedOutputChannels(
+            maximum: session.maximumOutputNumberOfChannels)
         do {
             try session.setPreferredOutputNumberOfChannels(requested)
         } catch {
@@ -851,18 +838,10 @@ final class AudioIO: ObservableObject {
         log.notice("output channels max=\(session.maximumOutputNumberOfChannels) requested=\(requested) actual=\(session.outputNumberOfChannels)")
     }
 
-    /// 入力は常に L/R なので、モノラル経路でもDSPまでは2chを保ち、ミキサーに
-    /// ダウンミックスさせる。EffeTune DSPの上限は16ch。
-    private static func processingChannels(for actualOutputChannels: Int) -> Int {
-        min(16, max(2, actualOutputChannels))
-    }
-
     private func escapeVirtualDevice(_ session: AVAudioSession,
                                      route: AVAudioSessionRouteDescription) {
         let outs = route.outputs
-        let onVirtual = outs.contains {
-            $0.portName.localizedCaseInsensitiveContains(ET_NAME_STEM)
-        }
+        let onVirtual = outs.contains { ETAudioSessionRules.isOwnDevice(portName: $0.portName) }
         let onSpeaker = outs.contains { $0.portType == .builtInSpeaker }
         let now = ProcessInfo.processInfo.systemUptime
 
@@ -915,7 +894,7 @@ final class AudioIO: ObservableObject {
     ///   通知以外から呼ぶときは 99（＝通知ではない）。
     private func refreshRoute(reason: UInt = 99) {
         // 走っている途中で出力先が仮想デバイスへ移ることがある。
-        // （他のアプリがルートピッカーで EffeTune を選んだときなど）
+        // （他のアプリがルートピッカーで仮想デバイスを選んだときなど）
         // そのときも当て直す。
         let sess = AVAudioSession.sharedInstance()
         // **経路の問い合わせは 1 回にまとめる。**前は escapeVirtualDevice と
@@ -954,16 +933,11 @@ final class AudioIO: ObservableObject {
         if outputRoute != nowOutput { outputRoute = nowOutput }
 
         // 仮想デバイスを指していたら、自分の音が自分へ戻る。
-        // 名前で見る。ドライバは kAudioDeviceTransportTypeRemoteStreaming で名乗るので
-        // portType は .airPlay になるが、本物の AirPlay スピーカーも同じ型で出る。
-        // 型だけで判ると、実際には鳴っている相手に「戻っている」と警告してしまう。
-        // ドライバが出す名前は "EffectDeck" 固定（EffeTuneDriver.m の
-        // kAudioObjectPropertyName）。**前方一致ではなく包含で見る。**
-        // ルートピッカーに出る名前（MediaOutputDevice.displayName）は
-        // どちらも ET_NAME_STEM を含む。別系統だが名前は同じ字にしてある。
-        let nowLoopback = outs.contains {
-            $0.portName.localizedCaseInsensitiveContains(ET_NAME_STEM)
-        }
+        // 名前で見る理由（型では本物の AirPlay と区別できない）と包含で見る理由は
+        // ETAudioSessionRules.isOwnDevice（FeedbackLoopTests）。
+        // ドライバが出す名前（EffeTuneDriver.m の kAudioObjectPropertyName）も
+        // ルートピッカーに出る名前（MediaOutputDevice.displayName）も ET_NAME_STEM を含む。
+        let nowLoopback = outs.contains { ETAudioSessionRules.isOwnDevice(portName: $0.portName) }
         if loopback != nowLoopback { loopback = nowLoopback }
 
     }
