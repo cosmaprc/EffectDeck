@@ -127,20 +127,29 @@ ET_CASE(destroy_2000)
     atomic_store(&gStop, 0);
     pthread_t t;
     ET_CHECK(pthread_create(&t, NULL, render_loop, NULL) == 0);
-    int ok = 0;
+    // 諦めるのは音のスレッドが 50 ms 中に居続けたときだけだが、混んだ機械では
+    // engine の中で CPU を取り上げられてそうなる。EffeTuneDSP.retire と同じく、
+    // 諦めたら間を置いて呼び直す。何度も諦め続けるのは止まっているので落とす。
+    int giveUps = 0;
     const uint32_t id = 1;
     for (int i = 0; i < 2000; i++) {
-        ok += ETPipeline_DestroyInstances(7, &id, 1);
+        int tries = 0;
+        while (!ETPipeline_DestroyInstances(7, &id, 1)) {
+            giveUps++;
+            if (++tries >= 100) break;
+            fake_sleep_us(1000);
+        }
+        if (tries >= 100) break;
         if (i % 50 == 0) ETPipeline_Publish(&n, 1);
     }
     atomic_store(&gStop, 1);
     ET_CHECK(pthread_join(t, NULL) == 0);
-    printf("   destroy_2000: %d/2000 destroyed, overlap=%d\n", ok, atomic_load(&fake_overlap));
+    printf("   destroy_2000: %d/2000 destroyed, %d give-ups retried, overlap=%d\n",
+           atomic_load(&fake_destroyed), giveUps, atomic_load(&fake_overlap));
     ET_CHECK(atomic_load(&fake_overlap) == 0);
-    ET_CHECK(atomic_load(&fake_destroyed) == ok);
-    // 諦めるのは音のスレッドが 50 ms 中に居続けたときだけ。この engine は止まらないので、
-    // ほぼ全部通る（ここで見たいのは重ならないことで、数は手がかり）。
-    ET_CHECK_MSG(ok >= 1990, "only %d of 2000 destroys went through", ok);
+    // 諦めた回は何も壊さないので、呼び直しを含めてちょうど 2000 回壊れる。
+    ET_CHECK_MSG(atomic_load(&fake_destroyed) == 2000, "%d of 2000 destroyed",
+                 atomic_load(&fake_destroyed));
 }
 
 ET_CASE(publish_storm)
