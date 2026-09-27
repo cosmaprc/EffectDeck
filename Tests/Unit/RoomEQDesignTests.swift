@@ -108,23 +108,22 @@ final class RoomEQDesignTests: XCTestCase {
                                                               processingChannels: 2)) {
             guard case RoomEQDesignError.noSources = $0 else { return XCTFail("\($0)") }
         }
-        let largest = try XCTUnwrap(RoomEQDesigner.largestUsableTaps(channelCount: 16, processingChannels: 16))
-        XCTAssertLessThan(largest, 131072, "16 チャンネルの 131072 は 32MiB に入らないはず")
+        // 16 チャンネル・headBlock 128 の枠は上流の maximumIrFramesForKernel で 86016 フレーム。
+        // 131072 は入らず、入る一番大きい taps は 65536（testLargestUsableTaps の表と同じ）。
         XCTAssertThrowsError(try RoomEQDesigner.checkCapacity(config: RoomEQConfig(taps: 131072),
                                                               channelCount: 16, processingChannels: 16)) {
             guard case RoomEQDesignError.tapsExceedAssetCapacity(let taps, let maximum) = $0 else {
                 return XCTFail("\($0)")
             }
             XCTAssertEqual(taps, 131072)
-            XCTAssertEqual(maximum, largest)
+            XCTAssertEqual(maximum, 65536)
             XCTAssertEqual(($0 as? LocalizedError)?.errorDescription,
-                           "131072 taps do not fit in the 32 MiB asset slot. Use \(largest) or fewer.")
+                           "131072 taps do not fit in the 32 MiB asset slot. Use 65536 or fewer.")
         }
-        // 12345 は許されないので 32768 として見る。
-        let normalizedFits = (RoomEQDesigner.largestUsableTaps(channelCount: 16, processingChannels: 16) ?? 0) >= 32768
-        XCTAssertEqual((try? RoomEQDesigner.checkCapacity(config: RoomEQConfig(taps: 12345),
-                                                          channelCount: 16, processingChannels: 16)) != nil,
-                       normalizedFits)
+        // 100000 は許されないので 32768 に倒してから見る。倒さずに見ると 86016 フレームの枠を
+        // 超えて落ちる。
+        XCTAssertNoThrow(try RoomEQDesigner.checkCapacity(config: RoomEQConfig(taps: 100000),
+                                                          channelCount: 16, processingChannels: 16))
     }
 
     // MARK: - 設定の倒し方
