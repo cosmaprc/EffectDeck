@@ -8,9 +8,9 @@
 # 前は gen_version と xcodegen しか走らせず、書庫が正しいかは、前のビルドが木を
 # 整えていたかどうか次第だった。
 #
-# 書庫は $ARCHIVE_DIR/<scheme>.xcarchive（既定 /tmp。Scripts/ship.sh と archive_install.sh が
-# そこを読む）。作る前に前の書庫を消す。残っていると、書庫に失敗しても古い書庫が
-# 書き出されたり実機に入ったりする。
+# 書庫は $ARCHIVE_DIR/<scheme>.xcarchive（既定 /tmp。Scripts/ship.sh と archive_install.sh、
+# Mac の ~/gui_ship.sh がそこを読む）。前の書庫は**真っ先に**消す（setup.sh より前）。
+# 残っていると、setup.sh や書庫で落ちても古い書庫が書き出されたり実機に入ったりする。
 #
 # 全部 archive.log へ。判定は "ARCHIVE SUCCEEDED" の行と、このスクリプトの終了値。
 set -u
@@ -41,9 +41,9 @@ ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
 
 main() {
   echo "=== start $(date) === icon=$APPICON"
+  rm -rf "$ARCHIVE"
   # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
   bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
-  rm -rf "$ARCHIVE"
   /usr/bin/xcodebuild -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
     -configuration Release -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
     ET_APPICON="$APPICON" \

@@ -9,8 +9,12 @@
 #
 # **Mac の GUI セッションの Terminal から走らせる。**ssh から codesign を叩くと
 # errSecInternalComponent で落ちる。キーチェーンを開けるのと検索リストを login だけに
-# 絞るのは、呼ぶ側（Mac の ~/gui_ship.sh のような台本）の仕事。ここではやらない。
+# 絞るのは、呼ぶ側（Mac の ~/gui_*.sh のような台本）の仕事。ここではやらない。
 # 画面のロックも解いておく（ロック中に最後まで通るかはまだ確かめていない）。
+#
+# いまの Mac の ~/gui_ship.sh はこれを呼ばず、archive.sh → 書き出し → altool を自前で
+# 書いている（2026-09-27 に読んだ。検索リストは絞っていない）。手順は同じなので、
+# 呼ぶ側は unlock と検索リストの後に `bash Scripts/ship.sh` だけにできる。
 #
 # 署名の準備は API キー（Scripts/asc_auth.sh）。書き出しの設定は ~/signing/export.plist
 # （/tmp は再起動で消えるので置かない）。**鍵を渡すと書き出しがビルド番号を上げる**

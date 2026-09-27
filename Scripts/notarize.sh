@@ -4,7 +4,7 @@
 #
 #   bash Scripts/notarize.sh 2026.09.27 31     版の文字列とビルド番号
 #
-# 先に書庫 → 書き出し → 上げるを済ませておくこと（Scripts/ship.sh）。
+# 先に書庫 → 書き出し → 上げるを済ませておくこと（Scripts/ship.sh か、Mac の ~/gui_ship.sh）。
 # ここは App Store Connect を叩くだけなので ssh から走らせてよい（鍵は Mac にしか無い）。
 # 手順の出どころは docs/altstore/README.md。
 #

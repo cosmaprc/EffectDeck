@@ -50,7 +50,14 @@ echo "xcrun $*" >> "$STUB_DIR/calls.log"
 case "$*" in
   "simctl list devices available") cat "$STUB_DIR/available.txt" ;;
   "simctl list devices") cat "$STUB_DIR/all.txt" ;;
+  "devicectl list devices") cat "$STUB_DIR/devices.txt" 2>/dev/null ;;
 esac
+exit 0
+EOF
+# archive_install.sh がキーチェーンを開ける。Mac で走らせても本物に触らない。
+cat > "$STUB_DIR/bin/security" <<'EOF'
+#!/bin/bash
+echo "security $1" >> "$STUB_DIR/calls.log"
 exit 0
 EOF
 cat > "$STUB_DIR/bin/xcodegen" <<'EOF'
@@ -102,7 +109,8 @@ fresh() {
   unset S_P17_26 S_P18 S_P17_27 S_IPAD13 S_WATCH
   write_lists
   : > "$CALLS"
-  rm -rf "$ROOT/Scripts" "$ROOT/build" "$ROOT"/*.log
+  rm -f "$STUB_DIR/devices.txt"
+  rm -rf "$ROOT/Scripts" "$ROOT/build" "$ROOT"/*.log "$WORK/arch"
   mkdir -p "$ROOT/Scripts"
   cp -R "$SRC/." "$ROOT/Scripts/"
   cat > "$ROOT/Scripts/setup.sh" <<'EOF'
@@ -318,6 +326,47 @@ else
     ok archive_removes_previous_archive
   else ng archive_removes_previous_archive "rc=$RC"; fi
 fi
+
+# setup.sh で落ちても前の書庫を残さない。残ると archive_install.sh がそれを実機に入れ、
+# ~/gui_ship.sh の書き出しもそれを読む。
+fresh
+mkdir -p "$WORK/arch/EffeTuneLive.xcarchive/Products/Applications/EffectDeck.app"
+STUB_SETUP_EXIT=1 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+if [ "$RC" != 0 ] && [ ! -e "$WORK/arch/EffeTuneLive.xcarchive" ]; then
+  ok archive_setup_failure_leaves_no_stale_archive
+else ng archive_setup_failure_leaves_no_stale_archive "rc=$RC"; fi
+
+# ---- Scripts/archive_install.sh ----------------------------------------------
+# archive.sh は偽物に差し替える（本物は /usr/bin/xcodebuild を名指しで叩くので）。
+# 偽物は書庫の .app を $ARCHIVE_DIR に置き、STUB_ARCHIVE_EXIT で終わる。
+fake_archive() {
+  cat > "$ROOT/Scripts/archive.sh" <<'EOF'
+#!/bin/bash
+echo "archive.sh $*" >> "$STUB_DIR/calls.log"
+mkdir -p "$ARCHIVE_DIR/EffeTuneLive.xcarchive/Products/Applications/EffectDeck.app"
+echo "** ARCHIVE SUCCEEDED **" > archive.log
+exit "${STUB_ARCHIVE_EXIT:-0}"
+EOF
+  echo "iPhone 16   iPhone-16.coredevice.local   00008140-000C094A2E32801C   available (paired)   iPhone 16 (iPhone17,3)   physical" \
+    > "$STUB_DIR/devices.txt"
+}
+
+fresh
+fake_archive
+ARCHIVE_DIR="$WORK/arch" run_script archive_install.sh
+if [ "$RC" = 0 ] && has "$CALLS" "security unlock-keychain" \
+   && has "$CALLS" "xcrun devicectl device install app --device 00008140-000C094A2E32801C $WORK/arch/EffeTuneLive.xcarchive/Products/Applications/EffectDeck.app" \
+   && has "$ROOT/archive-install.log" "ARCHIVE INSTALL FINISHED (exit=0)"; then
+  ok archive_install_reads_archive_dir
+else ng archive_install_reads_archive_dir "rc=$RC $(grep 'device install' "$CALLS" | head -1)"; fi
+
+fresh
+fake_archive
+STUB_ARCHIVE_EXIT=1 ARCHIVE_DIR="$WORK/arch" run_script archive_install.sh
+if [ "$RC" != 0 ] && has "$CALLS" "archive.sh EffeTuneLive" && hasnt "$CALLS" "device install" \
+   && has "$ROOT/archive-install.log" "!! 書庫に失敗した"; then
+  ok archive_install_stops_when_archive_fails
+else ng archive_install_stops_when_archive_fails "rc=$RC $(grep 'device install' "$CALLS" | head -1)"; fi
 
 # ---- 全体 --------------------------------------------------------------------
 if [ ! -e "$SRC/sim.sh" ] && [ ! -e "$SRC/shots.sh" ]; then ok dead_sim_and_shots_scripts_removed
