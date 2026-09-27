@@ -61,7 +61,8 @@ static bool refilling(Rx *x) { return atomic_load(&x->j.refilling); }
 
 /// 溜まりをちょうど狙いにしてから、狙いより多く読んで 1 回枯れさせる。
 /// 溜め直しの途中なら、狙いまで溜まったので溜め直しは明ける。
-static void starve_at(Rx *x, uint64_t received) {
+/// 返すのはその回のログ用の値。
+static ETLinkStarve starve_at(Rx *x, uint64_t received) {
     uint64_t behind = (uint64_t)target(x) * 2u;
     uint64_t have = x->w > x->r ? x->w - x->r : 0;
     if (x->r == 0) have = x->w;
@@ -70,6 +71,7 @@ static void starve_at(Rx *x, uint64_t received) {
     uint32_t got = rx_read(x, target(x) + 100, true, received, &s);
     CHECK(s.counted);
     CHECK_EQ(got, behind / 2);
+    return s;
 }
 
 // ---- 貼り直し ----
@@ -200,6 +202,24 @@ ET_CASE(starve_info_for_log) {
     rx_free(x);
 }
 
+ET_CASE(starve_info_after_trim_in_same_read) {
+    Rx *x = rx_new();
+    rx_feed(x, 4000);
+    rx_read(x, 0, true, 60000, NULL);           // 貼る: 溜まりは狙いちょうど
+    rx_feed(x, 2000);                           // 狙いの 2 倍を越える
+    CHECK_EQ(x->w - x->r, BEHIND + 4000);
+    // 同じ回で切り詰めてから枯れる。ログの溜まりは切り詰めた後、読む前の値。
+    ETLinkStarve s;
+    CHECK_EQ(rx_read(x, ET_LINK_TARGET_FRAMES + 10, true, 60000, &s), ET_LINK_TARGET_FRAMES);
+    CHECK_EQ(atomic_load(&x->j.trimCount), 1);
+    CHECK(s.counted);
+    CHECK_EQ(s.bufferedFrames, ET_LINK_TARGET_FRAMES);
+    CHECK_EQ(s.filledFrames, 10);
+    CHECK_EQ(s.target, ET_LINK_TARGET_FRAMES);
+    CHECK_EQ(s.runBefore, 0);
+    rx_free(x);
+}
+
 // ---- 溜め直し ----
 
 ET_CASE(refill_waits_until_target) {
@@ -254,7 +274,11 @@ ET_CASE(fallback_after_three_starves_within_5s) {
     starve_at(x, 60000);
     CHECK_EQ(target(x), ET_LINK_TARGET_FRAMES);
     CHECK_EQ(atomic_load(&x->j.starveRun), 2);
-    starve_at(x, 70000);
+    // 逃げを起こした回のログは、逃げる前の狙い（1024）と数える前の連（2）。
+    ETLinkStarve s = starve_at(x, 70000);
+    CHECK_EQ(s.target, ET_LINK_TARGET_FRAMES);
+    CHECK_EQ(s.runBefore, 2);
+    CHECK_EQ(s.bufferedFrames, ET_LINK_TARGET_FRAMES);
     CHECK_EQ(atomic_load(&x->j.starveRun), 3);
     CHECK_EQ(target(x), ET_LINK_TARGET_FALLBACK);
     // 逃げた先から貼り直す。
@@ -316,6 +340,7 @@ int main(int argc, char **argv) {
         ET_ENTRY(reads_across_ring_wrap),
         ET_ENTRY(starve_needs_peer_and_settle),
         ET_ENTRY(starve_info_for_log),
+        ET_ENTRY(starve_info_after_trim_in_same_read),
         ET_ENTRY(refill_waits_until_target),
         ET_ENTRY(refill_gives_up_after_200_waits),
         ET_ENTRY(fallback_after_three_starves_within_5s),
