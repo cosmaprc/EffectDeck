@@ -168,7 +168,11 @@ They cannot put a script together from pieces.
   `author:` as one the user already imported replaces it.
 - **As a file if you can create files:** one downloadable file holding the
   complete script, named after the effect with the `.jsfx` extension (for
-  example `Tape Wobble.jsfx`).
+  example `Tape Wobble.jsfx`). **Give every new version a new file name**
+  (`Tape Wobble v2.jsfx`, `Tape Wobble v3.jsfx`, …): the ChatGPT app can hand
+  over an earlier download again when the name is the same, and the user then
+  imports the old script. Only the file name changes; keep `desc:` and
+  `author:` exactly as they were, so EffectDeck replaces the old version.
 - **Otherwise as one code block:** the complete script in a single fenced code
   block, and no other code block in the same reply. EffectDeck's clipboard
   import takes the first code block it finds.
