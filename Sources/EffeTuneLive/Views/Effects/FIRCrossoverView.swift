@@ -4,21 +4,21 @@
 //  --- 何を繋いだか ---
 //  FIRCrossoverDesigner は在るのに呼び手が居なかった。ここがその呼び手。
 //  やることは 3 つで、designer の口に合わせてあるだけ。
-//    1. parameterWriter を EffeTuneDSP.setValue（EffeTuneDSP.swift:507）へ向ける
-//    2. onAssetCommitted を EffeTuneDSP.republish（同 :721）へ向ける
+//    1. parameterWriter を EffeTuneDSP.setValue へ向ける
+//    2. onAssetCommitted を EffeTuneDSP.republish へ向ける
 //    3. attach(Target) を呼ぶ。以後つまみは designer.update{} を通す
-//  designer も AssetUpload.send（AssetUpload.swift:400-401）も @MainActor なので、
-//  ここから呼ぶぶんには「音のスレッドからは呼ばない」（同 :62）を満たしている。
+//  designer も AssetUpload.send も @MainActor なので、ここから呼ぶぶんには
+//  「音のスレッドからは絶対に呼ばない」（AssetUpload.swift の頭）を満たしている。
 //
 //  --- designer をビューに持たせない理由 ---
-//  EffectCardView はこのビューを 2 か所で作る。畳んでいるとき（:54、図だけの形）と
-//  開いているとき（:65）で、位置が違うので @StateObject にすると別物が 2 つできる。
+//  EffectCardView はこのビューを 2 か所で作る。畳んでいるとき（図だけの形）と
+//  開いているときで、位置が違うので @StateObject にすると別物が 2 つできる。
 //  しかも畳む／開くたびに作り直されるので、そのたびに designer の既定へ戻って
 //  262144 点 FFT を 3 回やり直すことになる。
 //  周波数・傾き・位相・taps は ETParam に席が無く designer しか持っていないので、
 //  それも畳んだ瞬間に消える。
 //  だから段（Node.id）ごとの置き場に入れて、両方の位置から同じものを引く。
-//  Matrix の経路が同じ理由で MatrixRouting に入っている（MatrixView.swift:246-255）。
+//  Matrix の経路が同じ理由で MatrixRouting（MatrixView.swift）に入っている。
 //
 //  --- 出力IFの本数 ---
 //  帯ごとにステレオ 1 対を吐くので、出口が 4〜16 の偶数でないと成り立たない。
@@ -37,11 +37,11 @@
 //  （fir_crossover.js:86-92 の _packedParameters は lt / fd / bc の 3 つだけ）、
 //  係数の中に溶けて資産として流し込まれる。
 //  dsp/generated/cpp/FIRCrossoverPluginParams.h も float 3 つで、
-//  EffectCatalog.swift:115-127 はそれを写したもの。
+//  Generated/EffectCatalog.swift の FIRCrossoverPlugin はそれを写したもの。
 //
 //  Phase（pm、fir_crossover.js:635-638）と Taps（tp、同 639-645）も同じ。
 //  置き場に入れたので畳んでも消えなくなったが、PipelineStore が読み書きするのは
-//  spec.params だけで（:73 の encode と :132 の decode）、アプリを終うと既定へ戻る。
+//  spec.params だけで（PipelineForm の shortForm と parse）、アプリを終うと既定へ戻る。
 //  保存できない値を触らせると、戻ったときに音が変わった理由が分からなくなる。
 //  だから操作は出さず、designer の既定のまま使う。
 //
@@ -49,7 +49,7 @@
 //  上流は fir_crossover.js:90 の `fd: this.pm === 'min' ? 0 : this.tp / 2` で
 //  pm と tp から計算するだけで、createUI に操作は無い
 //  （getSerializableParameters も同 123-127 で fd を消している）。
-//  こちらでは designer が同じ式で書き戻す（FIRCrossoverDesigner.swift:860-865）。
+//  こちらでは designer が同じ式で書き戻す（FIRCrossoverDesigner.pushParameters）。
 //
 //  並びは上流と同じで、error → Latency → Band Count。
 //  error の場所には、出口が足りているときだけ designer の状態を出す。
@@ -96,7 +96,7 @@ private struct FIRCrossoverBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // .unavailable の文（FIRCrossoverDesigner.swift:572）は busError と
+            // FIRCrossoverDesigner の .unavailable の文は busError と
             // 同じことを言う。出口が足りないときは busError だけ出す。
             if maximumBandCount == 0 {
                 busError
@@ -107,7 +107,7 @@ private struct FIRCrossoverBody: View {
             bandCountRow
         }
         .onAppear { connect() }
-        // 鎖を組み直すと instance が変わる（EffeTuneDSP.swift:594-607 の rebuildAll）。
+        // 鎖を組み直すと instance が変わる（EffeTuneDSP.rebuildAll）。
         // 送り先が別物になっているので繋ぎ直す。
         .onChange(of: node.instance) { _, _ in connect() }
         // Routing を Stereo / All 間で切り替えたときも instance は同じなので、
@@ -118,7 +118,7 @@ private struct FIRCrossoverBody: View {
     // MARK: designer へ繋ぐ
 
     /// 何度呼んでもよい。attach は同じ Target なら何もしない
-    /// （FIRCrossoverDesigner.swift:649）。
+    /// （FIRCrossoverDesigner.attach）。
     private func connect() {
         FIRCrossoverDesigners.shared.prune(keeping: dsp.chain.map(\.id))
         FIRCrossoverDesigners.shared.sync(node: node)
@@ -184,7 +184,7 @@ private struct FIRCrossoverBody: View {
 
     // MARK: designer がどこまで進んだか
 
-    /// 状態と、入った内容の 1 行。IR Reverb の loaded 行（IRReverbView.swift:122-146）と同じ形。
+    /// 状態と、入った内容の 1 行。IR Reverb の loaded 行（IRReverbView の notice）と同じ形。
     private var progress: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(designer.status.message)
@@ -211,7 +211,7 @@ private struct FIRCrossoverBody: View {
     }
 
     /// 送り込んだものの中身。latencyInfo は stage が入った後にしか付かない
-    /// （FIRCrossoverDesigner.swift:805）ので、それを「入ったか」の印に使う。
+    /// （FIRCrossoverDesigner.stage）ので、それを「入ったか」の印に使う。
     private var designLine: String? {
         guard let info = designer.latencyInfo else { return nil }
         let settings = designer.settings
@@ -239,10 +239,10 @@ private struct FIRCrossoverBody: View {
     // MARK: 値の読み書き
 
     /// designer へ入れる。丸めと作り直しの間引きは designer が持っている
-    /// （FIRCrossoverDesigner.swift:672-685）。
+    /// （FIRCrossoverDesigner.update）。
     ///
     /// この後に set() で鎖へも書く。二度書きに見えるが、designer が値を書き戻すのは
-    /// 送り込みが通ったときだけ（同 :809 の pushParameters）で、出口が 2ch の
+    /// 送り込みが通ったときだけ（FIRCrossoverDesigner.pushParameters）で、出口が 2ch の
     /// あいだはそこまで行かない。designer だけに入れると、押した値が端末に残らない。
     private func apply(_ change: (inout FIRCrossoverSettings) -> Void) {
         designer.update(change)
@@ -317,13 +317,13 @@ private struct FIRCrossoverChoiceStrip: View {
 ///
 /// designer は周波数・傾き・位相・taps を持っていて、それらは float ではないので
 /// Node.values にも PipelineStore にも席が無い。ビューの @StateObject に置くと、
-/// EffectCardView が畳んだとき／開いたときで別のビューを作る（:54 と :65）ぶん
+/// EffectCardView が畳んだとき／開いたときで別のビューを作るぶん
 /// 別々の designer ができ、しかも畳むたびに設計からやり直しになる。
-/// 席ができるまでの仮置き。Matrix の経路も同じ形で逃がしてある
-/// （MatrixView.swift:246-255）。
+/// Node と PipelineStore に席ができるまでは、ここにしか無い（保存されず、アプリを終えると
+/// 既定へ戻る）。Matrix の経路も同じ形で逃がしてある（MatrixView.swift の MatrixRouting）。
 ///
 /// 鍵は Node.id。rebuildAll は instance を作り直すが id は据え置く
-/// （EffeTuneDSP.swift:594-607）ので、engine を組み直しても同じ designer が残る。
+/// （EffeTuneDSP.rebuildAll）ので、engine を組み直しても同じ designer が残る。
 @MainActor
 final class FIRCrossoverDesigners {
 
@@ -384,7 +384,7 @@ final class FIRCrossoverDesigners {
     }
 
     /// 鎖から外れた段のぶんを捨てる。
-    /// detach は走っている設計を打ち切り、資産も外す（FIRCrossoverDesigner.swift:655）。
+    /// detach は走っている設計を打ち切り、資産も外す（FIRCrossoverDesigner.detach）。
     /// 段が消えているなら instance ももう無いので、外すほうは空振りする
     /// （engine.cpp:524-529 の findInstance が nullptr）。打ち切りのほうが要る。
     func prune(keeping ids: [UUID]) {

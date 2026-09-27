@@ -1,6 +1,7 @@
 # EffeTune 2.10.0 integration
 
-Branch: `codex/effetune-2.10.0`, based on `bf1f6c9`.
+Branch: `codex/effetune-2.10.0`, based on `bf1f6c9`. Merged into main as `59a07b1`
+(2026-09-18). A record of that integration; main has since moved to 2.11.0.
 Upstream: release tag `v2.10.0` (`abca7ff`). App version/build numbering is unchanged.
 
 Correction (2026-09-26): preview now plays only in five analyzers, and the host prepares 2–16 channels; see `effetune-2.11.0.md`.

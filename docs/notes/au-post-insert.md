@@ -1,6 +1,12 @@
 # AUv3 post-insert
 
-Branch: `codex/au-post-insert`, based on `codex/multichannel-output`.
+**Status: superseded (2026-09-19).** This was the first AU host, written on the
+`codex/au-post-insert` branch. Main replaced it with ordered hosting (`3a80364`): AUv3
+and JSFX are nodes in the chain, placed anywhere through the external-node patch and
+`ETExternalProcessor`, and the AVAudioEngine graph stays Source → Mixer (see
+`../external-processor.md`). There is no post-insert screen any more. The text below is
+kept as it was written on the branch, including its mention of a future JSFX host and of
+the Windows checkout it was written in.
 
 The current render callback runs the EffeTune pipeline before it writes to the
 `AVAudioSourceNode`. Therefore this first AU host deliberately exposes only:

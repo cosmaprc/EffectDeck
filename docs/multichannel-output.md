@@ -1,6 +1,8 @@
 # Multichannel audio-interface output
 
-Branch: `codex/multichannel-output`, based on the EffeTune 2.10.0 integration.
+**Status: in main** since `e8ca793` (written on the `codex/multichannel-output` branch,
+based on the EffeTune 2.10.0 integration). The Bass Management section was added with
+EffeTune 2.11.0.
 
 ## Behavior
 

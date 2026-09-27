@@ -1,6 +1,6 @@
 # `modifyCurrentSelectionIfNecessary:isPlayingVideoOutput:` の判定木
 
-issue #3 / #4 の答え。課題文は `docs/mde-routing-question.md`。
+issue #3 / #4 の答え。課題文は `docs/notes/mde-routing-question.md`。
 
 **対象**: iOS 27.0 RC (24A435) / iPhone17,3 の `MediaExperience`、
 `-[MXCustomRoutingController modifyCurrentSelectionIfNecessary:isPlayingVideoOutput:]`
@@ -182,7 +182,7 @@ _vq_isConfiguredWithVideoOutput
 
 ## 付け足し: `Unable to Connect` は映像の枝とは限らない
 
-Apple の公式文書（`docs/apple/README.md` に写しの要点）:
+Apple の公式文書（`docs/apple/README.md` に写しの要点。写しは手元だけに置き、追跡していない）:
 
 > The audio device must appear promptly upon activation, or the system deactivates
 > your device and playback fails with an "Unable to Connect" message.
@@ -196,7 +196,7 @@ Apple の公式文書（`docs/apple/README.md` に写しの要点）:
 
 # 実際に効いているのは MusicVAD（2026-09-21 実測）
 
-判定木を起こしたあとに実機で撮った。**`docs/connect-log.md` の A-10 が
+判定木を起こしたあとに実機で撮った。**`docs/connect-log.md`（手元だけの記録で、追跡していない）の A-10 が
 9 月 16 日にほぼ同じ結論へ到達していた**（先に読むべきだった）。
 ただし A-10 の 1 点は逆アセンブルで訂正できる。
 

@@ -1,9 +1,10 @@
 //  ParamCodingTests.swift
 //  保存形式の相互変換。**実機もエンジンも要らない。**
 //
-//  ここが在る理由は docs/connect-log.md ではなく、静的解析が出した 2 件の所見:
-//    - upstream:PipelineStore.swift:38-48（shortForm が `en` を潰す）
-//    - upstream:gen_catalog.py:464-465（objectArrayKey を落としている）
+//  ここが在る理由は docs/connect-log.md（手元だけの記録で、追跡していない）ではなく、
+//  静的解析が出した 2 件の所見:
+//    - shortForm が `en` を潰していた（当時は PipelineStore.swift、いまは PipelineForm.shortForm）
+//    - Tools/gen_catalog.py が objectArrayKey を落としていた
 //  どちらも「触らずに壊れている」のに、コードを読むだけでは何度も見落とした。
 //  本物の ETCatalog に対して測る。
 

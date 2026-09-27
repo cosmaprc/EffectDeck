@@ -1,6 +1,7 @@
 # EffeTune 2.11.0 integration
 
-Branch: `feature/effetune-2.11.0`, based on `240e7c7`.
+Branch: `feature/effetune-2.11.0`, based on `240e7c7`. Merged into main as `cd1c15d`
+(2026-09-27).
 Upstream: release tag `v2.11.0` (`e200e51`, DSP 0.11.0). App version/build numbering is
 unchanged.
 
@@ -25,7 +26,7 @@ unchanged.
   designer and is sent as a matrix FIR asset. It is redesigned after a preset apply, a
   chain load and a route rebuild, also for collapsed cards. `ro`, `fc`, `sl`, `rt` and
   `ri` round-trip as upstream flat arrays, and decoding applies upstream's
-  `setParameters` checks. Routing is described in `multichannel-output.md`.
+  `setParameters` checks. Routing is described in `../multichannel-output.md`.
 - Chroma Spiral: dedicated card with the spiral (Normal, Normal 2, Note Colors), octave
   range, Frequency Tilt, Level Range and Display Floor, saved under upstream's keys.
 - Analyzer display settings: Color on Spectrum Analyzer and Pitch Meter (Normal, Heatmap,
@@ -45,7 +46,7 @@ unchanged.
   adds 64 samples) and resends designs whose inputs are parameters: IR Reverb
   `cm`/`lt`/`cr`, FIR Crossover and Bass Management.
 - Setup: the three external-node patches are rebased onto the 2.11.0 engine, and external
-  nodes now get its input alignment (`external-processor.md`). `setup.sh` stops when a
+  nodes now get its input alignment (`../external-processor.md`). `setup.sh` stops when a
   generator, `embed_models.py` or `xcodegen` fails instead of building with a stale
   catalog; `gen_version` stays non-fatal. `gen_catalog.py` keeps flat-array parameters
   (Spatial Mapper, Bass Management) in one table.
@@ -87,7 +88,7 @@ On macOS, copy the tree with `Vendor/effetune` at `v2.11.0` unpatched, run
 Xcode and run the `Logic` scheme. New Swift tests: `OversamplingTests`,
 `BassManagementTests` and the Bass Management cases in `ParamCodingTests`.
 
-The host prepares the output route's width, 2–16 channels (`multichannel-output.md`).
+The host prepares the output route's width, 2–16 channels (`../multichannel-output.md`).
 Bass Extender and Bass Management on an unsupported routing are published disabled.
 Upstream's bypass still copies the input to the output bus, so such a node whose input and
 output buses differ sounds different from web EffeTune. A failed Bass Management Linear

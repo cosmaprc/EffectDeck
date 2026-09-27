@@ -3,28 +3,28 @@
 //
 //  --- どこが繋がっているか ---
 //  5 本の帯域はカーネルのパラメータではない。カーネルが持っているのは lt（頭ブロック）と
-//  fd（足す遅延）の 2 つだけで（Generated/EffectCatalog.swift:446-457）、帯域から FIR を
+//  fd（足す遅延）の 2 つだけで（Generated/EffectCatalog.swift の FiveBandFIRPEQPlugin）、帯域から FIR を
 //  設計して係数を資産として送り込むのは呼び手の仕事。その設計と送り込みは
-//  BandFIRPEQDesigner が持っている（DSP/Designers/BandFIRPEQDesigner.swift:631-959）。
+//  BandFIRPEQDesigner が持っている（DSP/Designers/BandFIRPEQDesigner.swift）。
 //  このビューは designer を作って settings を書き換えるだけで、AssetUpload は直に叩かない。
-//  送る場所は designer の stage(:814-856) 1 か所しかない。
+//  送る場所は designer の stage() 1 か所しかない。
 //
 //  --- lt と fd をスライダーに出さない理由 ---
 //  fd は設計の結果から決まる値で、人が触る値ではない。最小位相なら 0、線形位相なら taps/2
-//  （BandFIRPEQDesigner.swift:497）。カーネルは beginAsset でこの値を見ている
+//  （BandFIRPEQDesign.filterDelaySamples を決めるところ）。カーネルは beginAsset でこの値を見ている
 //  （dsp/plugins/eq/five_band_fir_peq/kernel.cpp:274-275）ので、人が動かした値が入っていると
 //  次の送り込みが黙って弾かれる。lt のほうは designer が settings.latency から書く
-//  （BandFIRPEQDesigner.swift:877-888）ので、ParameterRow から二重に書かせない。
+//  （BandFIRPEQDesigner の pushKernelParameters）ので、ParameterRow から二重に書かせない。
 //  だから node.spec.params は 1 本も出していない。触る口は下の Latency の行。
 //
 //  --- つまみを離すまで書かない理由 ---
 //  settings を 1 回書くたびに 150ms 後に staging が走り、そのあいだ鎖全体が素通しになる
-//  （AssetUpload.swift:634 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが連続して
+//  （AssetUpload の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが連続して
 //  音が切れる。だから BandFIRPEQSliderRow は onEditingChanged で離したときだけ渡す。
 //
 //  --- 図 ---
-//  designer が応答の材料を持っている（BandFIRPEQDesign.Response、:225-246。
-//  10Hz〜40kHz を 512 点、BandFIRPEQDesigner.swift:571-586）。
+//  designer が応答の材料を持っている（BandFIRPEQDesign.Response。
+//  10Hz〜40kHz を 512 点、responseLowFrequency / responseHighFrequency / responsePoints）。
 //
 //  **狙いはその場で引く。**latestDesign の応答しか見ていなかったので、つまみを触っても
 //  設計が終わるまで図が動かなかった。狙いは BandFIRPEQCore.magnitude(of:at:sampleRate:)
@@ -42,11 +42,11 @@ import Foundation
 /// designer を段ごとに 1 個だけ持つ。
 ///
 /// ビューに @StateObject で持たせると 2 つの理由で壊れる。
-///   1. カードは畳むと専用ビューを作り直す。畳んだときの枝（EffectCardView.swift:49-60）と
-///      開いたときの枝（:61-77）は別物なので、開閉のたびに @State が捨てられる。
+///   1. カードは畳むと専用ビューを作り直す。EffectCardView の畳んだときの枝と
+///      開いたときの枝は別物なので、開閉のたびに @State が捨てられる。
 ///      帯域の設定が既定へ戻り、開くたびに設計と送り込みがやり直しになる。
-///   2. BandFIRPEQDesigner.instance は let（:679-680）。EffeTuneDSP.prepare は rebuildAll() で
-///      全段の instance を作り直す（EffeTuneDSP.swift:594-607）ので、持ち越すと死んだ番号へ
+///   2. BandFIRPEQDesigner.instance は let。EffeTuneDSP.prepare は rebuildAll() で
+///      全段の instance を作り直す（EffeTuneDSP.rebuildAll）ので、持ち越すと死んだ番号へ
 ///      送り続ける。
 ///
 /// 鍵は Node.id。鎖を組み直しても Node の値は残るので id は変わらず、段を消して入れ直せば
@@ -57,7 +57,7 @@ final class BandFIRPEQDesignerStore {
     static let shared = BandFIRPEQDesignerStore()
 
     /// 作ったときの tapId を控える。instance の番号は engine が使い回すことがあるが、
-    /// tapId は作るたびに増える（EffeTuneDSP.swift:556-559 の nextTap）ので、
+    /// tapId は作るたびに増える（EffeTuneDSP の nextTap）ので、
     /// 作り直しを見落とさない。
     private struct Entry {
         let tapId: UInt32
@@ -78,7 +78,7 @@ final class BandFIRPEQDesignerStore {
            entry.tapId == node.tapId,
            entry.designer.instance == node.instance {
             // レートやチャンネル数が変わっていれば設計からやり直す。同じなら何もしない
-            // （BandFIRPEQDesigner.swift:726-728 の guard）。
+            // （BandFIRPEQDesigner.update(sampleRate:outputChannelCount:) の guard）。
             entry.designer.update(sampleRate: sampleRate,
                                   outputChannelCount: outputChannelCount)
             return entry.designer
@@ -126,14 +126,16 @@ struct FiveBandFIRPEQView: View {
         // engine が同じ番号を返したときに作り直しを見落として、資産の入っていない instance へ
         // 送ったつもりになる。
         .onChange(of: node.tapId) { _, _ in attach() }
-        // 担当するチャンネルが変わると begin へ渡す proc が変わる（AssetUpload.swift:189）。
+        // 担当するチャンネルが変わると begin へ渡す proc が変わる（AssetUpload.BeginInfo.processingChannels）。
         // 設計そのものは同じなので控えから戻るが、送り直しは要る。
         .onChange(of: node.channelSpec) { _, _ in designer?.refresh() }
     }
 
-    /// engine を組むときに渡している幅。AudioIO.swift:157 と :383 のどちらも 2 の直値で、
-    /// engine 側の値を外に出している property は無い。段ごとの担当幅は designer が
-    /// chain の channelSpec から自分で引く（BandFIRPEQDesigner.swift:928-931）。
+    /// engine を組むときに渡している幅のつもりの値。**いまは食い違っている。**AudioIO は
+    /// engine を出力の幅（2〜16、EffeTuneDSP.prepare の maxChannels）で組み、
+    /// AssetReattach は EffeTuneDSP.maxChannels を渡すが、ここは 2 のまま。
+    /// 段ごとの担当幅は designer が chain の channelSpec から自分で引く
+    /// （BandFIRPEQDesigner.processingChannels）。
     private static let engineChannels = 2
 
     private func attach() {
@@ -148,7 +150,7 @@ struct FiveBandFIRPEQView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No filter loaded")
                 .font(.system(size: 12, weight: .semibold))
-            // 上の文は BandFIRPEQDesignError.instanceMissing（:259）と同じ言い方にしてある。
+            // 上の文は BandFIRPEQDesignError.instanceMissing と同じ言い方にしてある。
             Text(node.instance == 0
                  ? "The equalizer is not running."
                  : "Preparing the FIR filter…")
@@ -174,7 +176,7 @@ private struct FiveBandFIRPEQPanel: View {
     /// 畳んでも消えない選択の鍵。
     let nodeId: UUID
 
-    /// 図だけ見る指定。カードを畳むと立つ（EffectCardView.swift:55）。
+    /// 図だけ見る指定。カードを畳むと立つ（EffectCardView の畳んだ枝）。
     @Environment(\.etGraphOnly) private var graphOnly
 
     /// 下の一枚に出している帯域。
@@ -306,9 +308,9 @@ private struct FiveBandFIRPEQPanel: View {
                     in: .rect(cornerRadius: ETMetrics.innerRadius, style: .continuous))
     }
 
-    /// 入った内容の 1 行。IRLoader が返す行と同じ切り方（IRLoader.swift:208-210）。
+    /// 入った内容の 1 行。IRLoader が返す行と同じ切り方（IRLoader の `%dch %@ / %d Hz / %.2f s`）。
     /// レートは設計に使った処理レートで、これがヘッダ +12 に入る値と同じ
-    /// （BandFIRPEQDesigner.swift:31 の但し書き）。
+    /// （BandFIRPEQDesigner.swift の頭、ヘッダ +12 の但し書き）。
     ///
     /// 出すのは失敗していないときだけ。設計し直しているあいだも出すのは、
     /// そのあいだカーネルに入っているのが直前の設計だから（差し替わるのは commit の瞬間）。
@@ -357,7 +359,7 @@ private struct FiveBandFIRPEQPanel: View {
 
     // MARK: 帯域
 
-    /// どの帯域を触っているかを選ぶ帯。5Band PEQ と同じ形（FiveBandPEQView.swift:397-420）。
+    /// どの帯域を触っているかを選ぶ帯。5Band PEQ と同じ形（FiveBandPEQView の bandStrip）。
     private var bandStrip: some View {
         HStack(spacing: 6) {
             ForEach(Array(0..<BandFIRPEQSettings.bandCount), id: \.self) { i in
@@ -459,7 +461,7 @@ private struct FiveBandFIRPEQPanel: View {
     }
 
     /// 帯域 1 本を書き換える。**instance には触らない。** settings を書くだけで、
-    /// didSet が拾って設計し直す（BandFIRPEQDesigner.swift:686-688 と :751-762）。
+    /// didSet が拾って設計し直す（BandFIRPEQDesigner の settings の didSet と settingsChanged）。
     private func edit(_ slot: Int, _ change: (inout BandFIRPEQBand) -> Void) {
         guard designer.settings.bands.indices.contains(slot) else { return }
         change(&designer.settings.bands[slot])
@@ -471,11 +473,11 @@ private struct FiveBandFIRPEQPanel: View {
 /// 名前・値・つまみ。**離すまで commit を呼ばない。**
 ///
 /// settings を 1 回書くたびに 150ms 後に staging が走り、そのあいだ鎖が素通しになる
-/// （AssetUpload.swift:634 の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが
+/// （AssetUpload の holdOffAudioThread）。ドラッグ中に毎フレーム書くと素通しが
 /// 連続して音が切れるので、指を離したときだけ渡す。
 private struct BandFIRPEQSliderRow: View {
 
-    /// 単位は名前の側に付ける。数値欄には付けない（ParameterRow.swift:220-230 と同じ）。
+    /// 単位は名前の側に付ける。数値欄には付けない（ParameterRow と同じ）。
     let label: String
     /// designer が持っている値。触っていないあいだはこれをそのまま出す。
     let value: Double
@@ -489,7 +491,7 @@ private struct BandFIRPEQSliderRow: View {
 
     /// ドラッグ中の値。離したら nil に戻して designer の値へ戻る。
     @State private var draft: Double?
-    /// 数値欄に打ち込み中。形は FiveBandPEQView.swift:251-271 と同じ。
+    /// 数値欄に打ち込み中。形は FiveBandPEQView の PEQ5SliderRow と同じ。
     @State private var typing = false
     @State private var typed = ""
 

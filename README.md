@@ -132,10 +132,14 @@ screen, or tap the link ChatGPT gives when it can run code.
 ## Building
 
 ```bash
-git clone --recurse-submodules https://github.com/satomasahiro2005/EffectDeck
+git clone https://github.com/satomasahiro2005/EffectDeck
 cd EffectDeck
+git submodule update --init Vendor/effetune Vendor/ysfx
 bash Scripts/build.sh          # build and install on the attached device
 ```
+
+Leave out `--recursive`: ysfx's own submodules are not used. Keep the effetune submodule's
+full history, not `--depth 1`, because `Tools/gen_version.py` reads its `dsp-v*` tag.
 
 To open it in Xcode, generate first. The `.xcodeproj` is not tracked; `project.yml` is the
 source.
@@ -153,17 +157,101 @@ You need:
 - `xcodegen` and python3 3.10+ from Homebrew
 
 The script finds the attached device. With more than one, use
-`DEV_ID=<UDID> bash Scripts/build.sh`.
+`DEV_ID=<UDID> bash Scripts/build.sh`. The log goes to `build.log`; look for
+`BUILD SUCCEEDED` there.
+
+Run `Scripts/build.sh` from Terminal in the Mac's own login session, not over SSH. Over SSH
+codesign cannot reach the keychain, and signing the extension fails with
+`errSecInternalComponent`. The compile still succeeds, so an unsigned `out/EffectDeck.app`
+appears and the install then fails with "not a valid bundle".
 
 ### Building under your own Apple ID
 
-Change the bundle IDs to yours, then create the following in the Apple Developer portal.
+Set `DEVELOPMENT_TEAM` in `project.yml` to your team, change the identifiers below to your
+own, and create them in the Apple Developer portal.
 
-1. A **Media Device Sharing Extension** identifier (Identifiers > new). There is no review
-2. Put that value in the extension's entitlements and in `UTExportedTypeDeclarations` in
-   its Info.plist. The entitlement value must be an array with one element; a bare string
-   stops the extension from launching
-3. App IDs for the app and the extension
+| What | Today's value | Where it is written |
+|---|---|---|
+| App ID for the app | `ai.nemut.effetune` | `project.yml` (`EffeTuneLive` target) |
+| App ID for the Media Device extension | `ai.nemut.effetune.extension` | `project.yml` (`EffeTuneLiveExtension`) |
+| App ID for the share extension | `ai.nemut.effetune.share` | `project.yml` (`EffectDeckShare`) |
+| Media Device Sharing Extension identifier | `media-device-protocol.ai.nemut.effetune` | `Sources/Extension/Extension.entitlements` and `UTExportedTypeDeclarations` in `Sources/Extension/Info.plist` |
+| App Group | `group.ai.nemut.effetune` | all three `.entitlements` files and `ETShareInbox.group` in `Sources/EffeTuneLive/DSP/ETShareInbox.swift` |
+| iCloud key-value storage | follows the app's bundle ID | `Sources/EffeTuneLive/EffeTuneLive.entitlements` |
+| Associated Domains | `applinks:effectdeck.nemut.ai` | `Sources/EffeTuneLive/EffeTuneLive.entitlements` |
+
+- The Media Device Sharing Extension identifier is made under Identifiers > new. There is
+  no review. The entitlement value must be an array with one element; a bare string stops
+  the extension from launching.
+- The app itself carries `com.apple.developer.media-device-extension` as an **empty**
+  array. Leave it empty (see **The iOS 27 Media Device Extension** above).
+- Enable App Groups on all three App IDs, iCloud (key-value storage only) on the app, and
+  Associated Domains on the app.
+- Share links only open the app if the domain serves an `apple-app-site-association` that
+  names your app. `site/` serves it for `effectdeck.nemut.ai`. Without a domain of your
+  own, remove the Associated Domains key; links then open in the browser.
+
+## Working on the code
+
+### Names
+
+The app is **EffectDeck**. The project, the targets and many files still carry its first
+name, EffeTune Live: `EffeTuneLive.xcodeproj`, the `EffeTuneLive` app target (product name
+`EffectDeck`), `EffeTuneLiveExtension`, `Sources/EffeTuneLive`. They are the same app.
+"EffeTune" alone means the upstream project in `Vendor/effetune`.
+
+### What is pinned and patched
+
+| Path | What it is |
+|---|---|
+| `Vendor/effetune` | EffeTune, pinned by the submodule. Its `dsp/` is the audio engine |
+| `Vendor/ysfx` | ysfx, the JSFX interpreter, pinned to `5c3452fe`. `Scripts/setup.sh` refuses another revision |
+| `Patches/abi-begin-ptr.diff` | Adds `et_instance_asset_begin_ptr`, a 64-bit staging pointer. Without it the seven effects that load data (IR Reverb and the ones designed in the app, such as Room EQ) pass audio through silently |
+| `Patches/effetune-external-*.diff` | Let AUv3 and JSFX run as nodes inside the EffeTune chain ([docs/external-processor.md](docs/external-processor.md)) |
+| `Patches/ysfx-effectdeck-ios.diff` | The iOS sandbox for ysfx and fixes taken from upstream WDL |
+| `Patches/ysfx-effectdeck-ios.old.diff` | The previous ysfx patch. Never applied; setup.sh uses it to take the old version off a copied tree |
+
+`Scripts/setup.sh` applies the patches to the submodule working trees, regenerates the
+effect catalog and presets from `Vendor/effetune`, and runs xcodegen. The patched
+submodule trees are never committed; the patches are. [`docs/`](docs/README.md) lists the
+design documents and notes.
+
+### Tests
+
+None of these need a device or a paid account. [CONTRIBUTING.md](CONTRIBUTING.md#running-the-tests)
+has the exact commands.
+
+| Suite | Runs on | Command |
+|---|---|---|
+| Logic tests (all of `Tests/Unit`, JSFX included) | Mac with Xcode, simulator | `bash Scripts/test.sh` |
+| The Foundation-only part of the Logic tests | Linux or WSL with Swift | `bash Tests/Linux/run.sh --name local` |
+| Native C tests (`Tests/Native`) | Linux, macOS or WSL with CMake | `cd Tests/Native && cmake --preset asan && cmake --build --preset asan && ctest --preset asan` |
+| Website (`site/`) | Node 22 | `cd site && npm ci && npm test` |
+
+GitHub Actions runs all of them, and checks that generated files are up to date, on every
+push to `main` and every pull request ([CI](CONTRIBUTING.md#ci)).
+
+### Launch arguments
+
+For the simulator and for debugging. They are read from `UserDefaults`, so they are passed
+as `-Name value` to `xcrun simctl launch`, `xcrun devicectl device process launch` or an
+XCUITest `launchArguments`. The icon on the home screen passes none.
+
+| Argument | What it does |
+|---|---|
+| `-ETSeed <name>` | Starts with a prepared chain instead of the saved one, every card open. `none`, `peq`, `compressor`, `saturation`, `meter`, `spectrum`, `peq-spectrum`, `chain`, `store`, `analyzers4`; a factory preset by short name (`vinyl`, `karaoke`, `analyzers`, `live`, `tube`, `bbe`, `fmradio`); `demo` in Debug builds; anything else is read as plugin type names separated by commas |
+| `-ETMock 1` | Feeds a generated test signal, so meters and graphs move without the extension |
+| `-ETWidth <pt>` | With `-ETSeed`, the width of the one-column chain, so screenshots taken on iPad look like a phone. Default 393; `0` keeps the device width |
+| `-ETLayout wide` | With `-ETSeed`, keeps the two-column iPad layout instead of one column |
+| `-ETCollapsed 1` | With `-ETSeed`, starts with every card folded |
+| `-ETSheet <name>` | Opens a sheet at launch: `picker`, `settings`, `routing`, `presets`, `ir`, `tips` |
+| `-ETAutoExpand 1`, `-ETAutoExpandIndex <n>` | Opens the first (or n-th, not counting Sections) effect a moment after launch, to record the animation |
+| `-ETDebugBlocks 1` | Tints each Section block to check grouping |
+| `-ETDiag 1` | Adds a hidden `diag` text with the active node count and chain length, for UI tests |
+| `-ETConsole 1` | Also prints the diagnostic log to stdout, for `devicectl ... --console` |
+| `-ETNowPlaying on\|off\|first` | Whether the app claims Now Playing (default `off`). Saved to `UserDefaults` and kept on later launches until another value is passed |
+| `-ETProbe 1` | Shows the reorder probe screen instead of the app |
+| `-pref.<key> <value>` | Overrides a setting for that launch, for example `-pref.power balanced` |
 
 ## License
 
