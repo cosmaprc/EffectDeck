@@ -31,6 +31,22 @@ Hard requirements, in order of how often they are violated:
 If a requirement conflicts with what you know about REAPER JSFX, this document
 wins.
 
+### The built-in effects may already do it
+
+EffectDeck's built-in effects are EffeTune's, built from the EffeTune DSP
+version the request names: `EffectDeck (EffeTune DSP v0.10.0)` means the
+`dsp-v0.10.0` tag of [Frieve-A/effetune](https://github.com/Frieve-A/effetune).
+The effects and their parameters are documented in `docs/plugins` at that tag,
+for example
+<https://github.com/Frieve-A/effetune/tree/dsp-v0.10.0/docs/plugins>. If the
+request does not name a version, EffectDeck shows it in Settings as
+**EffeTune DSP**.
+
+If what the user asks for can be done with one of those effects or a chain of
+them, tell them they can also do it that way: which effects, in what order, and
+roughly how to set them. Then write the JSFX unless they would rather use the
+built-in effects.
+
 ### Where to learn the language itself
 
 **This document only describes the differences.** It is not a JSFX tutorial and

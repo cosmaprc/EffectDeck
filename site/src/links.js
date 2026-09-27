@@ -23,16 +23,12 @@ export const EFFETUNE = "https://github.com/Frieve-A/effetune";
 export const APPLE_PRIVACY = "https://www.apple.com/legal/privacy/";
 export const CLOUDFLARE_PRIVACY = "https://www.cloudflare.com/privacypolicy/";
 
-// アプリの「Write JSFX with ChatGPT」が開く/writeで見せる依頼文。**文面はここ1か所。**アプリは持たない。
-// 変えてもアプリを出し直さなくて済む。
+// /writeで見せる依頼文。**決め事はJSFX.mdに書き、ここには書かない。**
+// 長くするとChatGPTへ渡る途中で切れる（"so keep"の手前までしか入らなかった）。
+// アプリは2026-09-27からchatgpt.comを直に開き、依頼文も自分で持つ（DSPの版を入れるため）。
+// /writeは古いビルドのボタンとホームのリンクのために残す。
 export const CHATGPT_Q =
-  "Write a JSFX effect for EffectDeck, an iOS app that runs single-file JSFX. " +
+  "Write a JSFX effect for EffectDeck. " +
   "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
-  "and follow its authoring contract exactly. If you cannot open it, at least: " +
-  "one file only, no import and no include(), and never write the text include( " +
-  "anywhere; no file sliders, no filesystem, no MIDI; desc: comes before any @ " +
-  "section; the interpreter is portable EEL2 without JIT, so keep @sample cheap. " +
-  "Then ask me what effect I want. Every time you give me the script, give the whole script, " +
-  "not only the part you changed: as one downloadable .jsfx file if you can create files, " +
-  "otherwise in one code block.";
+  "and follow it. Then ask me what effect I want.";
 export const CHATGPT = "https://chatgpt.com/?q=" + encodeURIComponent(CHATGPT_Q);

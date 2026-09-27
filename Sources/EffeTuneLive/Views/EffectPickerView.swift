@@ -945,11 +945,21 @@ struct EffectPickerView: View {
         catalog.filter { $0.category == category }.sorted { $0.name < $1.name }
     }
 
-    /// JSFXをChatGPTに書かせるページ。
+    /// ChatGPTを開いて、JSFXを書く依頼を入れておく。
     ///
-    /// **依頼の文面と有料版の案内はページ側に置く。**アプリには札だけ置き、
-    /// 説明を持ち込まない。文面を直すのにアプリを出し直さなくて済む。
-    static let writeJSFX = URL(string: "https://effectdeck.nemut.ai/write")!
+    /// **chatgpt.comを直に開く。**`/?q=`はChatGPTのapple-app-site-associationに
+    /// 載っているので、アプリが入っていればそちらで開く。以前はeffectdeck.nemut.ai/writeを
+    /// 挟んでいたが、ブラウザを1枚余計に通るうえ、長い依頼文が途中（"so keep"）で切れていた。
+    /// **決め事はJSFX.mdに書き、依頼には書かない。**依頼が渡すのは積んでいるDSPの版だけで、
+    /// 内蔵のエフェクトで済むかどうかはJSFX.mdがその版の一覧で見させる。
+    static let writeJSFX: URL = {
+        var c = URLComponents(string: "https://chatgpt.com/")!
+        c.queryItems = [URLQueryItem(name: "q", value:
+            "Write a JSFX effect for EffectDeck (EffeTune DSP v\(ETUpstreamVersion)). " +
+            "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
+            "and follow it. Then ask me what effect I want.")]
+        return c.url!
+    }()
 
     /// クリップボードの字をJSFXとして入れる。ChatGPTの返事をコピーして戻ってきたとき。
     /// 読むのは押したときだけ（貼り付けの許可はこの操作に対して出る）。
