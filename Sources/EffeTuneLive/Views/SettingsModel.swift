@@ -127,11 +127,14 @@ enum ETRunState {
         }
     }
 
-    /// 見出しだけで足りる状態は nil（行は見出し 1 行になる）。
+    /// 状態の説明。**削らない。**3cb7da7 で見出しだけにしたが、Status で
+    /// 何が起きているのか読めなくなったので戻した（2026-09-27、オーナーの判断）。
     var detail: String? {
         switch self {
         case .failed:
-            return "Another app may be holding the audio device."
+            return "Close any other app that is holding the audio device, then try again."
+        case .interrupted:
+            return "A call or another app took the audio device. Play something again to restart."
         // **「少し鳴らしてから選ぶ」は書かない**（#1 の訂正）。
         // 何も鳴らしていない間や一時停止中に選んでも基本的に戻されない。
         // 一時停止が原因と確かめた失敗は無い（A-10 の非動画の切断 3 回も
@@ -142,8 +145,11 @@ enum ETRunState {
         // **ConnectBanner と同じ字にする。**同じ「まだ音が来ていない」間に出る。
         case .waiting:
             return "Pick EffectDeck as the output in Control Center."
-        case .interrupted, .idle, .playing:
-            return nil
+        case .idle:
+            return "The input has been silent, so the effects are paused. They start again "
+                 + "the moment sound returns."
+        case .playing:
+            return "Audio is arriving and the effects are running."
         case .starting:
             return "Waiting for the audio device."
         }
@@ -313,7 +319,10 @@ struct ETIssue: Identifiable {
                 tone: .warning,
                 systemImage: "arrow.triangle.2.circlepath",
                 title: "Output is set to EffectDeck",
-                detail: "Select a different output in Control Center."))
+                // 長押しの手順は実機で確かめていないので書かない（ETRunState.waiting と同じ）。
+                detail: "The processed sound is going back into this app instead of to a "
+                      + "speaker, so you hear nothing and the level keeps rising. Pick a real "
+                      + "output for this device in Control Center."))
         }
 
         // 2. 端末のレートが 48kHz でない。速さと音程がずれる。
@@ -327,8 +336,12 @@ struct ETIssue: Identifiable {
                 // **マイクも名指しする。**16 k / 32 k は Bluetooth のハンズフリーで、
                 // そこに落ちるのは通話用のマイクを掴むアプリが動いているとき。
                 // 「他のアプリが握っている」だけでは、何を止めればいいのか分からない。
-                detail: "Pitch and speed are incorrect. Close any other app that is "
-                      + "using the microphone or the audio device."))
+                detail: io.sampleRate <= 32000
+                      ? "Audio arrives at 48 kHz, so pitch and speed are off. Bluetooth "
+                      + "headphones drop to this rate when an app takes their microphone "
+                      + "— a call, voice input or a recorder. Quit it, then play again."
+                      : "Audio arrives at 48 kHz, so pitch and speed are off. Another app is "
+                      + "holding the hardware at that rate. Stop it, then play again."))
         }
 
         // 3. **割れているときだけ出す。**「締切に近い」は CPU の数字が
@@ -340,7 +353,9 @@ struct ETIssue: Identifiable {
                 tone: .warning,
                 systemImage: "gauge.with.needle",
                 title: "The sound is breaking up",
-                detail: "CPU \(load.percent)%. Lower the processing rate or raise the latency."))
+                detail: "The effects need more time than each buffer has "
+                      + "(\(load.percent)% of it). Lower the processing rate, "
+                      + "raise the latency, or remove an effect."))
         }
 
         // 4. 鎖が切ってある。警告ではなく事実の確認なので色を付けない。
@@ -352,7 +367,8 @@ struct ETIssue: Identifiable {
                 tone: .normal,
                 systemImage: "power",
                 title: "Effects are switched off",
-                detail: nil))
+                detail: "The sound is passing through untouched. The power button at the top "
+                      + "left of the main screen turns them back on."))
         }
 
         return out

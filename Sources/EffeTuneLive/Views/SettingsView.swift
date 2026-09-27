@@ -50,12 +50,6 @@ struct SettingsView: View {
                 switch pane {
                 case .audio:
                     StatusSection(io: io, dsp: dsp)
-                    // **Status の中に入れない。**あちらは 3.3Hz で作り直されるので、
-                    // 押して進む行を置くと提示の途中で作り直すことになる。
-                    // 説明は開いた先にだけ書く。ここは札 1 行。
-                    Section {
-                        NavigationLink("Known limitations") { ConnectionTipsView() }
-                    }
                     // **音 → 電池 → 見た目 → 数字の順に並べる。**
                     // 以前は Processing と Power のあいだに見た目の設定
                     // （Sync Visuals・JSFX canvas）が挟まっていて、音の話が
@@ -237,6 +231,11 @@ struct SettingsView: View {
             // 載せたいのは**人**（Twitter で不具合を知らせてくれた人）。
             // その人がライブラリの下に並ぶのは性質が違う。最初の 1 人が
             // 出たときに、人だけのページとして作る。
+            //
+            // **既知の制限は About に置く（2026-09-27、オーナーの判断）。**
+            // Status の中には入れない。あちらは 3.3Hz で作り直されるので、
+            // 押して進む行を置くと提示の途中で作り直すことになる。
+            NavigationLink("Known limitations") { ConnectionTipsView() }
             NavigationLink("Licenses") { LicensesView() }
         } header: {
             Text("About")
