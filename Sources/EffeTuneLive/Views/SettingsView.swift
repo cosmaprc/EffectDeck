@@ -245,9 +245,12 @@ struct SettingsView: View {
             // リンクとして置く（Text の markdown リンクはそのまま開く）。
             // 行き先はeffectdeck.nemut.ai（site/src/worker.js）。App Store Connectの登録も同じURLにする。
             // 前のnemut.ai/effetune-live/privacy.htmlはJSFXもリンクの取得も書いていない。
+            // 「手を入れずに」とは書かない。Scripts/setup.shがPatches/effetune-external-*.diffを
+            // dsp/coreに当てている。ポリシー（site/src/text.js）の書き方に合わせる。
             Text("""
-                 The effects are EffeTune's own DSP by Yoshiyuki Kobayashi, running \
-                 unmodified under the MIT license. This app is a separate project by \
+                 The effects are EffeTune's own DSP by Yoshiyuki Kobayashi, used under \
+                 the MIT license with small patches that connect it to the app. \
+                 This app is a separate project by \
                  nemut.ai. It is not affiliated with, endorsed by, or supported by \
                  EffeTune or its author. \
                  [Privacy policy](https://effectdeck.nemut.ai/privacy)

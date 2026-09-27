@@ -718,8 +718,11 @@ final class EffeTuneDSP: ObservableObject {
 
         // 末尾に足すなら閉じる必要が無い（その先に何も無い）。
         // 次が既に Section ならそれが区切りになるので、重ねない。
-        let nextIsSection = target < chain.count && chain[target].isSection
-        if target < chain.count && !nextIsSection {
+        // **終端（isRootReset）も区切り。**isSectionは偽なので別に見る。見ないと名前の無い
+        // Sectionが配下を持たないまま終端の前に残り、終端を保存するようになってからは再起動しても消えない。
+        // 上流の終端は名前の無いSectionそのものなので、上流の「次がSectionなら」に当たる。
+        let nextCloses = target < chain.count && (chain[target].isSection || chain[target].isRootReset)
+        if target < chain.count && !nextCloses {
             toAdd.append(PipelineStore.Loaded(spec: ETSection.spec, values: [], enabled: true,
                                               inputBus: 0, outputBus: 0, channelSpec: -1,
                                               sectionName: ""))
