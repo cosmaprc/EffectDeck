@@ -290,6 +290,22 @@ targets:
         buildPhase: resources
       # 共有の拡張から本体へ渡す置き場。並べる・消すだけで Foundation のみ。
       - path: Sources/EffeTuneLive/DSP/ETShareInbox.swift
+      # 貼られた鎖の下ごしらえ（ChainTextTests）。Foundationだけ。
+      # Sectionの綴り・表示の鍵・チャンネルの綴り・同梱の鎖・DSPの版を引くので、その5本も入れる。
+      - path: Sources/EffeTuneLive/DSP/ETChainText.swift
+      - path: Sources/EffeTuneLive/DSP/SectionSupport.swift
+      - path: Sources/EffeTuneLive/DSP/DisplayParams.swift
+      - path: Sources/EffeTuneLive/DSP/ETChannel.swift
+      - path: Sources/EffeTuneLive/Generated/SystemPresets.swift
+      - path: Sources/EffeTuneLive/Generated/UpstreamVersion.swift
+      # CHAIN.mdの見本と、積んでいる版の語彙（chain/v<版>/effects.json）を実行時に読む。
+      # **chainはフォルダのまま入れる。**版ごとに同じ名前のeffects.jsonが並ぶので、
+      # 平らに束ねると名前がぶつかる。
+      - path: CHAIN.md
+        buildPhase: resources
+      - path: chain
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.nemut.effetune.unittests

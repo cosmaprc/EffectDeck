@@ -133,8 +133,10 @@ final class PresetStore: ObservableObject {
         CloudMirror.patch(key: Self.key, path: [name], value: nil)
     }
 
-    func importFrom(_ text: String) -> [PipelineStore.Loaded] {
-        ETShareLink.parse(text, catalog: ETCatalog)
+    /// 貼られた字から鎖を読む。直したもの・落としたもの（ETChainText.Report）も返す。
+    /// JSFXをdesc:の名前で指した段は、取り込んであるJSFXで引く（CHAIN.md）。
+    func importFrom(_ text: String) -> (items: [PipelineStore.Loaded], report: ETChainText.Report) {
+        ETShareLink.parseChecked(text, catalog: ETCatalog, jsfx: ETJSFXHost.shared.chainResolver())
     }
 
     // MARK: - ファイルとのやり取り（ETBackup）

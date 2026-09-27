@@ -180,8 +180,8 @@ enum PipelineStore {
                 }
                 out.append(Loaded(spec: spec, values: [],
                                    enabled: (entry["enabled"] ?? entry["en"]) as? Bool ?? true,
-                                   inputBus: UInt8(clamping: (entry["inputBus"] ?? entry["ib"]) as? Int ?? 0),
-                                   outputBus: UInt8(clamping: (entry["outputBus"] ?? entry["ob"]) as? Int ?? 0),
+                                   inputBus: bus(entry["inputBus"] ?? entry["ib"]),
+                                   outputBus: bus(entry["outputBus"] ?? entry["ob"]),
                                    channelSpec: ETChannel.spec(from: (entry["channel"] ?? entry["ch"]) as? String),
                                    externalID: externalID,
                                    externalInstanceID: instanceID,
@@ -223,14 +223,21 @@ enum PipelineStore {
                 spec: spec,
                 values: values,
                 enabled: (entry["enabled"] ?? entry["en"]) as? Bool ?? true,
-                inputBus: UInt8(clamping: (entry["inputBus"] ?? entry["ib"]) as? Int ?? 0),
-                outputBus: UInt8(clamping: (entry["outputBus"] ?? entry["ob"]) as? Int ?? 0),
+                inputBus: bus(entry["inputBus"] ?? entry["ib"]),
+                outputBus: bus(entry["outputBus"] ?? entry["ob"]),
                 channelSpec: ETChannel.spec(from: ch),
                 sectionName: "",
                 irId: params[ETIRLoader.presetKey] as? String ?? "",
                 display: ETDisplayParam.read(params, type: spec.type)))
         }
         return out
+    }
+
+    /// バスの番号。**0...4に寄せる。**エンジンは5以上が1本でもあると鎖ごと拒む
+    /// （engine.cpp:674-678）。貼られた字はETChainText.prepareが先に寄せるが、
+    /// バックアップとpipeline.lastはそこを通らずにここへ来る。
+    private static func bus(_ raw: Any?) -> UInt8 {
+        UInt8(clamping: min(ETChainText.busLimit, raw as? Int ?? 0))
     }
 
     // MARK: - 端末に残す

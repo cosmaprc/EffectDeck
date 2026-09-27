@@ -392,7 +392,7 @@ final class ETJSFXHost: ObservableObject {
     /// 判定も写し方もimportFileと同じ道を通すため、一度ファイルに書いてから渡す。
     @discardableResult
     func importText(_ text: String) throws -> Entry {
-        try importSource(Self.codeBlock(in: text) ?? text)
+        try importSource(ETCodeBlock.first(in: text) ?? text)
     }
 
     /// ソースそのものを取り込む。**囲いは外さない。**
@@ -410,18 +410,29 @@ final class ETJSFXHost: ObservableObject {
         return try importFile(file)
     }
 
-    /// 最初の```囲いの中身。囲いが無ければnil。
-    /// **囲いは外す。**返事ごとコピーすると付いてくる（「Copy code」なら付かない）。
-    static func codeBlock(in text: String) -> String? {
-        guard let open = text.range(of: "```"),
-              let lineEnd = text[open.upperBound...].firstIndex(of: "\n") else { return nil }
-        // 開きの行の残り（```jsfxなど）は飛ばす。
-        let body = text[text.index(after: lineEnd)...]
-        guard let close = body.range(of: "```") else { return String(body) }
-        return String(body[..<close.lowerBound])
-    }
-
     func entry(id: String) -> Entry? { entries.first { $0.id == id } ?? entryAliases[id] }
+
+    /// 鎖の字が`{"jsfx":"<desc:の名前>"}`で指すものを、取り込んである一覧から引く（CHAIN.md）。
+    /// 引き方（綴りが同じもの → 大文字小文字を無視）はETChainText.jsfxResolverが持つ。
+    ///
+    /// **同じ名前が2本あれば最後に取り込んだほう。**ChatGPTに直させた版を入れ直すと、
+    /// 中身が違うので別の1本（名前はsha256）として前の版と並ぶ。取り込んだ時刻はファイルの
+    /// 更新日時で、同じ中身を入れ直したときもownedCopyが進める。
+    /// **同梱の見本は後ろへ。**refreshのたびに写し直すので、日時で並べると常に一番新しくなる。
+    /// 一覧はこの時点で写し取るので、閉包が後からこのクラスに触ることは無い。
+    func chainResolver() -> ETChainText.JSFXResolver {
+        let dated = entries.map { entry -> (entry: Entry, date: Date) in
+            let values = try? entry.url.resourceValues(forKeys: [.contentModificationDateKey])
+            return (entry, values?.contentModificationDate ?? .distantPast)
+        }
+        let library = dated
+            .sorted { a, b in
+                if a.entry.isDebugFixture != b.entry.isDebugFixture { return !a.entry.isDebugFixture }
+                return a.date > b.date
+            }
+            .map { (id: $0.entry.id, name: $0.entry.name) }
+        return ETChainText.jsfxResolver(library)
+    }
 
     func sourceText(instanceID: String) -> String? {
         guard let entry = instances[instanceID]?.entry else { return nil }
@@ -1196,6 +1207,11 @@ final class ETJSFXHost: ObservableObject {
         let destination = root.appendingPathComponent(hash).appendingPathExtension("jsfx")
         if !FileManager.default.fileExists(atPath: destination.path) {
             try data.write(to: destination, options: .atomic)
+        } else {
+            // 同じ中身を入れ直したら、取り込んだ時刻だけ進める。鎖の`{"jsfx":"<名前>"}`は
+            // 同じ名前なら最後に取り込んだ1本を指す（chainResolver）。
+            try? FileManager.default.setAttributes([.modificationDate: Date()],
+                                                   ofItemAtPath: destination.path)
         }
         return destination
     }

@@ -6,6 +6,20 @@ It does not use JIT or executable memory. Imported source is copied into the
 app's Application Support container and the original Files/iCloud URL is not
 used at runtime.
 
+## Before anything else
+
+**If you cannot open the linked documents, cannot run code, or cannot create
+files, say so plainly in one line before anything else, and say which
+fallback you use:**
+
+- cannot open the links: ask the user to paste the page you need.
+- cannot run code: check the script against the rules that reject a file
+  and the self-check list by reading it, line by line.
+- cannot create files: hand the script over as one code block (see
+  *Handing the script over*).
+
+Never guess what a page says when you could not open it.
+
 ## Authoring contract (read this first)
 
 **You are writing a single-file JSFX that must load in EffectDeck, not in
@@ -33,19 +47,10 @@ wins.
 
 ### The built-in effects may already do it
 
-EffectDeck's built-in effects are EffeTune's, built from the EffeTune DSP
-version the request names: `EffectDeck (EffeTune DSP v0.10.0)` means the
-`dsp-v0.10.0` tag of [Frieve-A/effetune](https://github.com/Frieve-A/effetune).
-The effects and their parameters are documented in `docs/plugins` at that tag,
-for example
-<https://github.com/Frieve-A/effetune/tree/dsp-v0.10.0/docs/plugins>. If the
-request does not name a version, EffectDeck shows it in Settings as
-**EffeTune DSP**.
-
-If what the user asks for can be done with one of those effects or a chain of
-them, tell them they can also do it that way: which effects, in what order, and
-roughly how to set them. Then write the JSFX unless they would rather use the
-built-in effects.
+If EffectDeck's built-in effects can do what the user asks, or part of it,
+tell them they can also build it as a chain of those effects, handed over as
+[CHAIN.md](CHAIN.md) describes. Then write the JSFX unless they would rather
+have the chain.
 
 ### Where to learn the language itself
 

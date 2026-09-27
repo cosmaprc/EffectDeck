@@ -18,6 +18,9 @@ struct ClipboardBanner: View {
     @ObservedObject var dsp: EffeTuneDSP
     @State private var looksLikeLink = false
     @State private var failed = false
+    /// 貼った鎖で直したもの・落としたもの（ETChainText.Report.message）。空でなければ1行で出す。
+    /// Presets → Import from clipboardと同じ。**黙って直さない。**
+    @State private var note = ""
 
     var body: some View {
         Group {
@@ -50,19 +53,39 @@ struct ClipboardBanner: View {
 
                         PasteButton(payloadType: String.self) { items in
                             guard let text = items.first else { return }
-                            let loaded = ETShareLink.parse(text, catalog: ETCatalog)
-                            if loaded.isEmpty {
+                            // ChatGPTに作らせたリンクは`{"jsfx":"<名前>"}`の段を持つことがある（CHAIN.md）。
+                            let checked = ETShareLink.parseChecked(
+                                text, catalog: ETCatalog,
+                                jsfx: ETJSFXHost.shared.chainResolver())
+                            if checked.items.isEmpty {
                                 failed = true
                             } else {
-                                dsp.replaceChain(with: loaded)
-                                looksLikeLink = false
+                                dsp.replaceChain(with: checked.items)
                                 failed = false
+                                // 知らせがあれば、閉じるまで帯を残す（知らせは帯に付いている）。
+                                if checked.report.isEmpty {
+                                    looksLikeLink = false
+                                } else {
+                                    note = checked.report.message
+                                }
                             }
                         }
                         .labelStyle(.iconOnly)
                         .buttonBorderShape(.capsule)
                     }
                     .padding(12)
+                }
+                .alert("Chain imported", isPresented: Binding(
+                    get: { !note.isEmpty },
+                    set: { shown in
+                        if !shown {
+                            note = ""
+                            looksLikeLink = false
+                        }
+                    })) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(note)
                 }
             }
         }

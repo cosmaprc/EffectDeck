@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import zlib from "node:zlib";
 import { decodeFXD } from "./src/fxd.js";
 import * as parse from "./src/parse.js";
-import { DECK_HOST, APP_STORE, TESTFLIGHT, GITHUB, RELEASES, JSFX_MD, CHATGPT, CHATGPT_Q } from "./src/links.js";
+import { DECK_HOST, APP_STORE, TESTFLIGHT, GITHUB, RELEASES, JSFX_MD, CHAIN_MD, CHATGPT, CHATGPT_Q } from "./src/links.js";
 import { TEXT, FAQ, LLMS_TXT } from "./src/text.js";
 import { homeLd, plainText } from "./src/seo.js";
 
@@ -119,14 +119,16 @@ await test("llms.txt names the app and links README, JSFX.md, App Store, GitHub,
 // 例外はフッターの名札 betaLink 1 つだけ。
 await test("no release status in the text: no TestFlight or beta outside the footer label", async () => {
   const release = /testflight|\bbeta\b|App Store version|build/i;
+  // アプリのボタンの名札は機能の名前で、ビルドの話ではない。外してから見る。
+  const label = (s) => s.replaceAll("Build a chain with ChatGPT", "");
   for (const [k, v] of Object.entries(TEXT)) {
     if (k === "betaLink") continue;
-    assert.ok(!release.test(JSON.stringify(v)), `TEXT.${k}: ${JSON.stringify(v)}`);
+    assert.ok(!release.test(label(JSON.stringify(v))), `TEXT.${k}: ${JSON.stringify(v)}`);
   }
   assert.equal(TEXT.betaLink, "Beta (TestFlight)");
   for (const f of FAQ) assert.ok(!release.test(f.q + f.a), f.q);
   assert.ok(!release.test(JSON.stringify(homeLd())), "JSON-LD");
-  assert.ok(!release.test(LLMS_TXT), "llms.txt");
+  assert.ok(!release.test(label(LLMS_TXT)), "llms.txt");
   assert.ok(!LLMS_TXT.includes(TESTFLIGHT));
   // JSFX は機能として書く
   assert.match(TEXT.jsfx[0], /^EffectDeck loads JSFX/);
@@ -153,6 +155,20 @@ await test("/write text: a short request that points at JSFX.md, linked from hom
   assert.ok(LLMS_TXT.includes("https://effectdeck.nemut.ai/write"));
 });
 
+// 鎖を組ませるCHAIN.md。JSFX.mdの隣に置き、llms.txtはページと同じことだけを書く（text.jsの頭）。
+await test("CHAIN.md: linked next to JSFX.md on the home page and in llms.txt", async () => {
+  assert.equal(CHAIN_MD, "https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md");
+  assert.equal(TEXT.jsfxLinks[1], `<a href="${CHAIN_MD}">CHAIN.md</a>`);
+  assert.ok(TEXT.jsfxLinks[0].includes(`href="${JSFX_MD}"`));
+  const para = TEXT.jsfx.find((p) => p.includes(CHAIN_MD));
+  assert.ok(para, "the JSFX section says what CHAIN.md is for");
+  assert.match(para, /Build a chain with ChatGPT/);
+  assert.match(para, /Import from clipboard/);
+  assert.ok(LLMS_TXT.includes(`- CHAIN.md: ${CHAIN_MD}`));
+  assert.match(LLMS_TXT, /Build a chain with ChatGPT \(under Presets\)/);
+  assert.match(LLMS_TXT, /Import from clipboard/);
+});
+
 await test("chain preview reads the share-link p", async () => {
   const chain = [
     { nm: "Section", cm: "Main", en: true },
@@ -171,6 +187,22 @@ await test("chain preview reads the share-link p", async () => {
   assert.deepEqual(chainEntries(plus.replace(/\+/g, " ")), [{ section: false, name: "Volume~", off: false }]);
   assert.equal(chainEntries("not base64 at all"), null);
   assert.equal(chainEntries(Buffer.from('{"nm":"x"}').toString("base64")), null);
+  // アプリと同じ幅で読む（ETChainText.json(from:)）。base64url・= 無し・途中の改行と、
+  // JSFX を名前で指す段（CHAIN.md）。
+  const wideChain = [{ jsfx: "Tape Wobble" }, { nm: "Section", cm: "??>>~~" }, { nm: "Volume", en: false }];
+  const wide = Buffer.from(JSON.stringify(wideChain)).toString("base64url");
+  assert.ok(wide.includes("-") && wide.includes("_") && wide.length % 4 !== 0, wide);
+  assert.deepEqual(chainEntries(`${wide.slice(0, 12)}\n${wide.slice(12)}`), [
+    { section: false, name: "Tape Wobble", off: false },
+    { section: true, name: "??>>~~ Section" },
+    { section: false, name: "Volume", off: true },
+  ]);
+  // ロング形式
+  const long = { pipeline: [{ name: "Section", parameters: { cm: "Main" } }, { name: "Volume", enabled: false }] };
+  assert.deepEqual(chainEntries(Buffer.from(JSON.stringify(long)).toString("base64")), [
+    { section: true, name: "Main Section" },
+    { section: false, name: "Volume", off: true },
+  ]);
 });
 
 console.log(`\n${n} passed`);

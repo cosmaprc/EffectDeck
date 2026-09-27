@@ -1,0 +1,176 @@
+# Building an EffectDeck effect chain
+
+EffectDeck is an iPhone app that runs an effect chain on the audio of other
+apps. The built-in effects are EffeTune's, and a chain is a JSON list of them
+that the app imports. The request names both versions, for example
+`EffectDeck v2026.09.22 (EffeTune DSP 0.11.0)`. The effect names and keys for
+it are in the folder named after the EffeTune DSP version,
+[`chain/v0.11.0/`](chain/v0.11.0/index.md): the effect list (`index.md`) and
+one file per category. If the request does not name the versions, ask the
+user; EffectDeck shows them in **Settings → About** (*App version* and
+*EffeTune DSP*). If there is no folder for that EffeTune DSP version, that
+EffectDeck is too old to import a chain this way: tell the user to update
+EffectDeck, and do not build the chain.
+
+## Before anything else
+
+This document relies on links: the effect list, one file per category, and
+[JSFX.md](JSFX.md) for anything the built-in effects cannot do. Handing a
+chain over as a link needs code to run, and handing over a JSFX works best as
+a file.
+
+**If you cannot open the linked documents, cannot run code, or cannot create
+files, say so plainly in one line before anything else, and say which
+fallback you use:**
+
+- cannot open the links: ask the user to paste the page you need. Do not
+  write a chain from memory.
+- cannot run code: hand the chain over as a code block only (see *Handing
+  the chain over*).
+- cannot create files: a JSFX goes in a code block (JSFX.md, *Handing the
+  script over*).
+
+Never guess what a page says when you could not open it.
+
+## Composing contract (read this first)
+
+Hard rules, in order of how often they are broken:
+
+1. **Use only effect names (`nm`) from the effect list**, spelled exactly as
+   listed. EffeTune's own docs, `effects-v1.json` and the `chain-v1` schema
+   use other names and keys; never take names or keys from them.
+2. **Use only the keys listed for that effect** in its category file, in the
+   listed shape: scalar `"vl"`, indexed `"f0"` … `"f4"`, object array
+   `"bs":[{…},…]`, or flat array `"dm":[…]`. Never write an indexed parameter
+   as one array (`"f":[…]`).
+3. **Write only what you change.** Keys you leave out keep the defaults shown
+   in the category file.
+4. **Stored values, inside the listed range.** Options as one of the listed
+   strings, switches as `true` or `false`. Some values are stored scaled and
+   the category file marks them: **ln(Hz)** (Tilt EQ `f0`, Modal Resonator
+   `fr` `lp` `hp`; `6.91` is 1 kHz) and **10^x** exponents. Where a value
+   says *only*, no other value is accepted.
+5. **Strict JSON**: no comments, no trailing commas, no units in values,
+   no `…`.
+6. **Never write `external`, `externalInstance`, `externalState`, `ir`, `ib`
+   or `ob`.** Write `ch` only when the user asks for one side of the stereo
+   signal: `"ch":"L"` or `"ch":"R"`.
+7. **Do not use an effect the list marks *Not for chains*.**
+8. **Keep the chain at or below 0 dB overall.** If any effect adds gain,
+   end the chain with `Volume` set to take it back out.
+9. **No Audio Units in the JSON.** See *Audio Units*.
+10. **Hand over the whole chain**, also after a change. See *Handing the
+    chain over*.
+
+If a rule conflicts with what you know about EffeTune, this document wins.
+
+## Where to look things up
+
+Replace `0.11.0` with the EffeTune DSP version the request names.
+
+| | |
+|---|---|
+| Every effect name, with what it is for | <https://raw.githubusercontent.com/satomasahiro2005/EffectDeck/main/chain/v0.11.0/index.md> |
+| Keys, ranges, options and defaults | one file per category, linked from the effect list, for example <https://raw.githubusercontent.com/satomasahiro2005/EffectDeck/main/chain/v0.11.0/eq.md> |
+| The same, as JSON | <https://raw.githubusercontent.com/satomasahiro2005/EffectDeck/main/chain/v0.11.0/effects.json> |
+| What an effect does (not its keys) | EffeTune's `docs/plugins` at the `dsp-v0.11.0` tag: <https://github.com/Frieve-A/effetune/tree/dsp-v0.11.0/docs/plugins> |
+
+## The chain
+
+A JSON array with one element per stage, in signal order:
+
+- an effect: `{"nm":"<name>", <the keys you change>}`. Add `"en":false` to
+  put it in switched off.
+- a Section: `{"nm":"Section","cm":"Drums"}`. It groups the stages after it,
+  up to the next Section, so the user can switch the group with one toggle.
+- a JSFX the user has imported: `{"jsfx":"<its desc: name>"}`. See *When the
+  built-in effects are not enough*.
+
+Start from this shape:
+
+```json
+[{"nm":"Hi Pass Filter","fr":30},{"nm":"5Band PEQ","f0":100,"g0":2,"t0":"ls"},{"nm":"Saturation","dr":2,"gn":-3},{"nm":"Volume","vl":-3}]
+```
+
+## When the built-in effects are not enough
+
+If part of what the user wants cannot be done with the built-in effects,
+write that part as a JSFX, following [JSFX.md](JSFX.md), and use it in the
+chain:
+
+1. Hand the JSFX over first, in its own reply, as JSFX.md describes. Tell the
+   user to import it (**Import JSFX**) before the chain.
+2. Then hand over the chain, with the JSFX as a stage named by its `desc:`
+   line: `{"jsfx":"Tape Wobble"}` for a script that starts with
+   `desc:Tape Wobble`. The app looks the name up among the JSFX the user has
+   imported: the exact spelling first, then ignoring case.
+3. A chain cannot set a JSFX's sliders. It starts at the script's defaults,
+   so give the script defaults that suit this chain.
+
+If the user has not imported the JSFX, the app skips that stage and says so.
+
+## Audio Units
+
+Never put an Audio Unit in the JSON; a chain cannot load one. If an AUv3
+plug-in would do part of the job better, you may name it as a suggestion,
+for the user to add by hand after importing the chain (**Add Effect →
+Plugins**).
+
+## What the app does with mistakes
+
+The app still reads a chain that is not quite right, and after importing it
+says in one line what it changed:
+
+| Mistake | What happens |
+|---|---|
+| Unknown effect name | The stage is skipped (*Not found*) |
+| Unknown key | Ignored (*Ignored*) |
+| Option not in the list | Ignored; the default stays (*Ignored*) |
+| Value outside the range | Set to the nearest end of the range (*Limited*) |
+| `ch` the app does not know | Ignored; both sides are processed (*Ignored*) |
+| JSFX the user has not imported | The stage is skipped (*Not found*) |
+
+Text around the JSON is fine. The app looks through the code blocks in what
+the user copies, `json` blocks first, and takes the first chain it finds, so
+keep the chain the only `json` code block in its reply.
+
+## Self-check before handing it over
+
+- [ ] every `nm` is in the effect list, spelled exactly, and not marked *Not for chains*
+- [ ] every key is listed for its effect, in the listed shape
+- [ ] every value is inside its range; ln(Hz) and 10^x values are converted
+- [ ] no `external`, `ir`, `ib`, `ob` and no Audio Unit; `ch` only if asked
+- [ ] strict JSON that parses
+- [ ] the chain ends at or below 0 dB
+- [ ] every `{"jsfx":…}` names the `desc:` of a script the user has imported
+- [ ] the reply carries the whole chain
+
+## Handing the chain over
+
+The user imports exactly what you hand over. They cannot put a chain together
+from pieces.
+
+- **Always the whole chain**, also after a change. Never only the stages that
+  changed.
+- **If you can run code:** build a link from the exact JSON by running code,
+  and give it as a tappable link: `https://effectdeck.nemut.ai/?p=` followed
+  by the standard base64 of the UTF-8 JSON, with every `+` written as `%2B`.
+  In Python:
+
+  ```python
+  import base64, json
+  chain = [...]  # the chain you are handing over
+  data = json.dumps(chain, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+  link = "https://effectdeck.nemut.ai/?p=" + base64.b64encode(data).decode().replace("+", "%2B")
+  ```
+
+  Then give the same JSON in exactly one `json` code block, as a fallback.
+- **If you cannot run code:** say so in one line and give only the `json`
+  code block. Never write base64 by hand.
+- **Tell the user how to import it**, in one line:
+  - the link: tap it. With EffectDeck installed it opens there, and the app
+    asks before it replaces the current chain.
+  - the code block: copy it, then in EffectDeck open **Presets** (the
+    stacked-squares button at the top right) and tap **Import from
+    clipboard**.
+- Then one short line per stage: why it is there and what to adjust.

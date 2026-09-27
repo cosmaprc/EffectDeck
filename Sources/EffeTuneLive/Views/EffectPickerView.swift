@@ -955,16 +955,33 @@ struct EffectPickerView: View {
     /// **chatgpt.comを直に開く。**`/?q=`はChatGPTのapple-app-site-associationに
     /// 載っているので、アプリが入っていればそちらで開く。以前はeffectdeck.nemut.ai/writeを
     /// 挟んでいたが、ブラウザを1枚余計に通るうえ、長い依頼文が途中（"so keep"）で切れていた。
-    /// **決め事はJSFX.mdに書き、依頼には書かない。**依頼が渡すのは積んでいるDSPの版だけで、
-    /// 内蔵のエフェクトで済むかどうかはJSFX.mdがその版の一覧で見させる。
-    static let writeJSFX: URL = {
+    /// **決め事はJSFX.mdに書き、依頼には書かない。**依頼が渡すのはアプリとDSPの版だけ。
+    /// 内蔵のエフェクトで済むときは、JSFX.mdが鎖（CHAIN.md）でも組めると言わせる。
+    /// **200字未満、@無し。**2026.09.22と0.11.0で192字（buildChainは194字）。
+    static let writeJSFX: URL = chatGPT(
+        "Write a JSFX effect for \(requestVersion). " +
+        "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
+        "and follow it. Then ask me what effect I want.")
+
+    /// 同じ形で、内蔵のエフェクトの鎖を組ませる依頼（CHAIN.md）。返ってきた鎖は
+    /// Presets → Import from clipboardで入れる（依頼を開くボタンもそのすぐ上に置いてある）。
+    static let buildChain: URL = chatGPT(
+        "Build an effect chain for \(requestVersion). " +
+        "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md " +
+        "and follow it. Then ask me what sound I want.")
+
+    /// 依頼に入れる版。"EffectDeck v2026.09.22 (EffeTune DSP 0.11.0)"。
+    /// ビルド番号は入れない。CHAIN.mdはこの書き方で版を読み（JSFX.mdから鎖へ回るときも）、
+    /// 無ければSettings → Aboutを見させる。
+    private static var requestVersion: String {
+        "EffectDeck v\(ETAppInfo.version) (EffeTune DSP \(ETUpstreamVersion))"
+    }
+
+    private static func chatGPT(_ request: String) -> URL {
         var c = URLComponents(string: "https://chatgpt.com/")!
-        c.queryItems = [URLQueryItem(name: "q", value:
-            "Write a JSFX effect for EffectDeck (EffeTune DSP v\(ETUpstreamVersion)). " +
-            "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
-            "and follow it. Then ask me what effect I want.")]
+        c.queryItems = [URLQueryItem(name: "q", value: request)]
         return c.url!
-    }()
+    }
 
     /// クリップボードの字をJSFXとして入れる。ChatGPTの返事をコピーして戻ってきたとき。
     /// 読むのは押したときだけ（貼り付けの許可はこの操作に対して出る）。

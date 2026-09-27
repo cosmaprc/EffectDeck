@@ -62,6 +62,9 @@ struct PipelineView: View {
     /// 開いたリンクの鎖。**入れ替えは取り消せないので一度確かめる**（Reset と同じ形）。
     /// タップ 1 回で今の鎖が消えると、押し間違いで積み上げたものを失う。
     @State private var pendingChain: [PipelineStore.Loaded]?
+    /// 開いたリンクを読んだときに直したもの・落としたもの（ETChainText.Report.message）。
+    /// 空でなければ入れ替えの確認に1行で出す。入れ替える前に分かるように。
+    @State private var pendingReport = ""
     /// シートを畳み終えてから出すもの（afterClosingSheet）。
     @State private var afterSheet: (() -> Void)?
 
@@ -253,6 +256,8 @@ struct PipelineView: View {
                     pendingChain = nil
                 }
                 Button("Cancel", role: .cancel) { pendingChain = nil }
+            } message: {
+                if !pendingReport.isEmpty { Text(pendingReport) }
             }
             .alert(linkError != nil ? "Could Not Open Link" : "Could Not Add JSFX", isPresented: Binding(
                 get: { pluginError != nil || linkError != nil },
@@ -1057,16 +1062,20 @@ struct PipelineView: View {
 
     /// 開いたリンクを振り分ける（ETFXDLink.route）。
     ///
-    /// 鎖はクリップボードの帯と同じ ETShareLink.parse で読む。**すぐには入れ替えない。**
+    /// 鎖はクリップボードの帯と同じETShareLink.parseCheckedで読む。**すぐには入れ替えない。**
     /// JSFX は一覧へ入れてピッカーを開く。ファイルで受けたときと同じ（ETInbox の .jsfx）。
     private func openLink(_ route: ETFXDLink.Route) {
         switch route {
         case .chain(let text):
-            let loaded = ETShareLink.parse(text, catalog: ETCatalog)
+            // ChatGPTに作らせたリンクは`{"jsfx":"<名前>"}`の段を持つことがある（CHAIN.md）。
+            let checked = ETShareLink.parseChecked(text, catalog: ETCatalog,
+                                                   jsfx: ETJSFXHost.shared.chainResolver())
+            let loaded = checked.items
+            let note = checked.report.isEmpty ? "" : checked.report.message
             if loaded.isEmpty {
                 afterClosingSheet { linkError = "That link had no chain in it." }
             } else {
-                afterClosingSheet { pendingChain = loaded }
+                afterClosingSheet { pendingReport = note; pendingChain = loaded }
             }
         case .jsfx(let source):
             do {

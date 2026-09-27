@@ -8,6 +8,8 @@
 //
 //  web 版は受け取り側で base64 の文字集合を /^[A-Za-z0-9+/=]+$/ で検査するので、
 //  こちらも素の base64 で書く。
+//  **読むほうは広く受ける**（ETChainText.json(from:)）。ChatGPTなどが作ったリンクや
+//  貼られた返事は、base64urlや改行入りで来ることがある。
 
 import Foundation
 import os
@@ -114,38 +116,21 @@ enum ETShareLink {
 
     /// 共有リンクでも、`p=` の中身そのものでも、JSON そのものでも受ける。
     /// 人がクリップボードから貼るときに、どれが来るか分からないため。
+    ///
+    /// 範囲の外の値は寄せ、知らない段は外す（ETChainText.prepare）。
+    /// 何を直したかを見せる所はparseCheckedを使う。
     static func parse(_ text: String, catalog: [ETEffect]) -> [PipelineStore.Loaded] {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        // 1. URL として読めるなら p を取る
-        if let comps = URLComponents(string: trimmed),
-           let p = comps.queryItems?.first(where: { $0.name == "p" })?.value,
-           let loaded = fromBase64(p, catalog: catalog), !loaded.isEmpty {
-            return loaded
-        }
-
-        // 2. base64 そのもの
-        if let loaded = fromBase64(trimmed, catalog: catalog), !loaded.isEmpty {
-            return loaded
-        }
-
-        // 3. JSON そのもの（ロング形式でもショート形式でも）
-        if let data = trimmed.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) {
-            return PipelineStore.parse(json, catalog: catalog)
-        }
-
-        return []
+        parseChecked(text, catalog: catalog).items
     }
 
-    private static func fromBase64(_ s: String, catalog: [ETEffect]) -> [PipelineStore.Loaded]? {
-        // 素の base64 以外の文字が混じっていたら諦める。web 版と同じ検査。
-        let allowed = CharacterSet(charactersIn:
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-        guard !s.isEmpty, s.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
-        guard let data = Data(base64Encoded: s),
-              let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
-        return PipelineStore.parse(json, catalog: catalog)
+    /// parseと同じものに、直したこと・落としたことの控えを付けて返す。
+    /// `jsfx`を渡すと`{"jsfx":"<desc:の名前>"}`の段を取り込んであるJSFXで引く（CHAIN.md）。
+    /// 渡さなければその段は置けず、控えのnotFoundに入る。
+    static func parseChecked(_ text: String, catalog: [ETEffect],
+                             jsfx: ETChainText.JSFXResolver? = nil)
+        -> (items: [PipelineStore.Loaded], report: ETChainText.Report) {
+        guard let json = ETChainText.json(from: text) else { return ([], ETChainText.Report()) }
+        let prepared = ETChainText.prepare(json, catalog: catalog, jsfx: jsfx)
+        return (PipelineStore.parse(prepared.json, catalog: catalog), prepared.report)
     }
 }

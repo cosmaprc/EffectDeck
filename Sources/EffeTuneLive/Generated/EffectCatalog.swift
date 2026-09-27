@@ -137,7 +137,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "ChannelDividerPlugin",
       name: "Channel Divider",
-      about: "",
+      about: "Split stereo signal into frequency bands and route to separate channels",
       category: "basics",
       paramsHash: 0xea073d60,
       floatCount: 7,
@@ -537,7 +537,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "BandPassFilterPlugin",
       name: "Band Pass Filter",
-      about: "",
+      about: "Band-pass filter using cascaded hi/lo-pass filters",
       category: "eq",
       paramsHash: 0x8cb24a49,
       floatCount: 4,
@@ -551,7 +551,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "CombFilterPlugin",
       name: "Comb Filter",
-      about: "",
+      about: "Digital comb filter with feedback/feedforward for harmonic coloration",
       category: "eq",
       paramsHash: 0xa04d8883,
       floatCount: 4,
@@ -608,7 +608,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "HiPassFilterPlugin",
       name: "Hi Pass Filter",
-      about: "",
+      about: "High-pass filter with adjustable frequency and slope",
       category: "eq",
       paramsHash: 0x11d28ef7,
       floatCount: 2,
@@ -620,7 +620,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "LoPassFilterPlugin",
       name: "Lo Pass Filter",
-      about: "",
+      about: "Low-pass filter with adjustable frequency and slope",
       category: "eq",
       paramsHash: 0x11d28ef7,
       floatCount: 2,
@@ -650,7 +650,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "NarrowRangePlugin",
       name: "Narrow Range",
-      about: "",
+      about: "High-pass and low-pass filter combination for narrow band filtering (crossover-capable)",
       category: "eq",
       paramsHash: 0x3726bda7,
       floatCount: 4,
@@ -915,7 +915,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "BluetoothSBCSimulatorPlugin",
       name: "SBC Codec Simulator",
-      about: "Simulates a Bluetooth A2DP SBC encode and decode round trip, ",
+      about: "Simulates a Bluetooth A2DP SBC encode and decode round trip, with optional link packet loss and frame concealment",
       category: "lofi",
       paramsHash: 0xa0d7750b,
       floatCount: 6,
@@ -1583,7 +1583,7 @@ let ETCatalog: [ETEffect] = [
     ETEffect(
       type: "SubSynthPlugin",
       name: "Sub Synth",
-      about: "",
+      about: "Generates and mixes subharmonic signals for bass enhancement",
       category: "saturation",
       paramsHash: 0x06f29552,
       floatCount: 8,

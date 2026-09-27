@@ -10,7 +10,7 @@
 // FOSS（無料・MIT）はリリースで変わらないので書いてよい（トップにも出す）。
 
 import {
-  APP_STORE, RELEASES, GITHUB, LICENSE, ISSUES, JSFX_MD, TWITTER, EMAIL,
+  APP_STORE, RELEASES, GITHUB, LICENSE, ISSUES, JSFX_MD, CHAIN_MD, TWITTER, EMAIL,
   EFFETUNE, APPLE_PRIVACY, CLOUDFLARE_PRIVACY,
 } from "./links.js";
 
@@ -41,9 +41,11 @@ export const TEXT = {
     "EffectDeck loads JSFX, the script format REAPER uses. One text file is one effect.",
     `${a(JSFX_MD, "JSFX.md")} sets out what EffectDeck supports and what it rejects. It is written to be handed to a language model as it is.`,
     "In the app, <strong>Write JSFX with ChatGPT</strong> (under Plugins) opens a page with a request for ChatGPT that points it at JSFX.md. Import the file it returns with <strong>Import JSFX → From Files</strong>, or copy the script and use <strong>From Clipboard</strong>. A paid ChatGPT plan works better, since the free tier may skip the linked file and miss the rules.",
+    // 鎖はJSFXと対になるので同じ節に置く。llms.txtはこの1行と同じことだけを書く。
+    `<strong>Build a chain with ChatGPT</strong> (under Presets) asks ChatGPT for a chain of the built-in effects instead, following ${a(CHAIN_MD, "CHAIN.md")}. Bring the chain back with <strong>Import from clipboard</strong>.`,
   ],
   // **ChatGPT へは /write を挟む。**依頼文を見せてコピーもでき、有料版を勧める 1 行もそこに置く。
-  jsfxLinks: [a(JSFX_MD, "JSFX.md"), a("/write", "Write JSFX with ChatGPT")],
+  jsfxLinks: [a(JSFX_MD, "JSFX.md"), a(CHAIN_MD, "CHAIN.md"), a("/write", "Write JSFX with ChatGPT")],
   shareTitle: "Share links",
   share: [
     "Chains and JSFX scripts shared from EffectDeck are links on effectdeck.nemut.ai. With the app installed, they open in the app.",
@@ -240,6 +242,7 @@ export const LLMS_TXT = `# EffectDeck
 - Built-in effects: EQ, dynamics, saturation, reverb, spatial effects and analyzers, ported from EffeTune (MIT license). The chain also takes AUv3 plug-ins installed on the device, impulse responses and AutoEQ profiles.
 - EffectDeck also loads JSFX, the script format REAPER uses. One text file is one effect. JSFX.md describes what is supported and is written to be given to a language model.
 - https://effectdeck.nemut.ai/write has a request to paste into ChatGPT or another assistant to have it write a JSFX effect. The returned file is imported with Import JSFX → From Files, or the copied script with From Clipboard.
+- CHAIN.md describes how a language model writes a chain of the built-in effects that EffectDeck imports. In the app, Build a chain with ChatGPT (under Presets) asks ChatGPT for one, and the chain comes back with Import from clipboard.
 - EffectDeck is free on the App Store and its source is on GitHub under the MIT license.
 - Chains and JSFX scripts are shared as links on https://effectdeck.nemut.ai/ . A JSFX link carries the script after the #.
 
@@ -251,6 +254,7 @@ export const LLMS_TXT = `# EffectDeck
 - README: ${GITHUB}#readme
 - Release notes: ${RELEASES}
 - JSFX.md: ${JSFX_MD}
+- CHAIN.md: ${CHAIN_MD}
 - Write a JSFX effect with ChatGPT: https://effectdeck.nemut.ai/write
 - Issues: ${ISSUES}
 - Privacy policy: https://effectdeck.nemut.ai/privacy

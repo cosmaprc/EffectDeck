@@ -109,7 +109,7 @@ states the requirements in the order they are usually violated, and there is a
 checklist to run a generated script against before you try to import it.
 
 In the app, **Write JSFX with ChatGPT** (Plugins, or the Import JSFX menu) opens
-ChatGPT with a short request that names the EffeTune DSP version, points it at
+ChatGPT with a short request that names the EffectDeck and EffeTune DSP versions, points it at
 `JSFX.md`, and asks what you want to build. Import the file it
 returns with **Import JSFX → From Files**, or copy the script and use **From Clipboard**.
 Use a paid ChatGPT plan: it reads the
@@ -122,6 +122,12 @@ The short version: one file, no `import` or `include()`, no filesystem, no MIDI,
 It describes only the differences, not the language. For JSFX itself, read
 REAPER's *JS: Programming Reference* and [JoepVanlier/ysfx](https://github.com/JoepVanlier/ysfx),
 which is the interpreter embedded here.
+
+In Presets, **Build a chain with ChatGPT** opens ChatGPT the same way, for a chain of the
+built-in effects instead of a script. [`CHAIN.md`](CHAIN.md) is its contract; the effect
+names and keys it points to are generated for each EffeTune DSP version under
+[`chain/`](chain/). Bring the chain back with **Import from clipboard** on the same
+screen, or tap the link ChatGPT gives when it can run code.
 
 ## Building
 

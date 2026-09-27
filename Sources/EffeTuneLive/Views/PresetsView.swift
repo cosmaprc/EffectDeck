@@ -13,6 +13,7 @@ import UIKit
 
 struct PresetsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @ObservedObject var dsp: EffeTuneDSP
     @StateObject private var store = PresetStore.shared
 
@@ -42,6 +43,9 @@ struct PresetsView: View {
         case importClipboard(String)
         case emptyClipboard
         case failed(String)
+        /// 読めたが、直したもの・落としたものがある（ETChainText.Report.message）。
+        /// 鎖はもう入れ替えてあり、OKで閉じる。**黙って直さない。**
+        case imported(String)
         /// いまの鎖で、この名前のプリセットを置き換える。
         case overwrite(String)
         /// 読むと鎖が置き換わる（ユーザープリセットのみ）。
@@ -54,6 +58,7 @@ struct PresetsView: View {
             case .importClipboard: return "import"
             case .emptyClipboard:  return "empty"
             case .failed(let why): return "failed:" + why
+            case .imported(let note): return "imported:" + note
             case .overwrite(let name): return "overwrite:" + name
             case .loadUser(let name): return "load:" + name
             case .confirmDelete(let name): return "delete:" + name
@@ -64,6 +69,7 @@ struct PresetsView: View {
             switch self {
             case .importClipboard, .emptyClipboard: return "Import chain"
             case .failed:                           return "Could not load"
+            case .imported:                         return "Chain imported"
             case .overwrite(let name):              return "Overwrite “\(name)”?"
             case .loadUser(let name):               return "“\(name)”"
             case .confirmDelete(let name):          return "Delete “\(name)”?"
@@ -76,7 +82,7 @@ struct PresetsView: View {
                 return "Replace the current chain with what is on the clipboard?"
             case .emptyClipboard:
                 return "The clipboard is empty."
-            case .failed(let why):
+            case .failed(let why), .imported(let why):
                 return why
             case .overwrite:
                 return "The saved preset is overwritten with the chain you have now."
@@ -182,12 +188,18 @@ struct PresetsView: View {
     /// 共有リンクの取り込みだけは**置き換え**。鎖まるごとの写しなので、
     /// 足すと二重になる（上流も読み込みは置き換え）。
     private func importChain(_ text: String) {
-        let loaded = store.importFrom(text)
+        let (loaded, report) = store.importFrom(text)
         if loaded.isEmpty {
             dialog = .failed("Nothing readable on the clipboard.")
         } else {
             dsp.replaceChain(with: loaded)
-            dismiss()
+            // 直したもの・落としたものがあれば、閉じる前に1行だけ出す（ChatGPTに組ませた鎖）。
+            // 何も無ければ前と同じく黙って閉じる。
+            if report.isEmpty {
+                dismiss()
+            } else {
+                dialog = .imported(report.message)
+            }
         }
     }
 
@@ -246,6 +258,8 @@ struct PresetsView: View {
                     Button("Import") { importChain(text) }
                 case .emptyClipboard, .failed:
                     Button("OK", role: .cancel) {}
+                case .imported:
+                    Button("OK", role: .cancel) { dismiss() }
                 case .overwrite(let name):
                     Button("Cancel", role: .cancel) {}
                     Button("Overwrite", role: .destructive) {
@@ -651,6 +665,13 @@ struct PresetsView: View {
                           systemImage: externalCount == 0
                                        ? "square.and.arrow.up" : "arrow.up.forward.square")
                 }
+            }
+            // **組ませる口と戻す口を並べる。**ChatGPTにCHAIN.mdを読ませて鎖を組ませ、
+            // 返ってきたものはすぐ下のImport from clipboardで入れる。説明は足さず、札だけ置く。
+            Button {
+                openURL(EffectPickerView.buildChain)
+            } label: {
+                Label("Build a chain with ChatGPT", systemImage: "sparkles")
             }
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、
