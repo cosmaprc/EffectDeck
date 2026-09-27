@@ -3,7 +3,7 @@
 //
 //  見張るのは 4 つ:
 //    - 断る形: 2xx 以外は .http、向こうが言う大きさが上限を超えれば本文を受ける前に .tooLarge、
-//      届いている途中で超えても .tooLarge、空なら .empty。**どれでも書きかけを残さない**
+//      届いている途中で超えても**残りを待たずに** .tooLarge、空なら .empty。**どれでも書きかけを残さない**
 //    - 名前: 飛ばされた先の末尾を先に見る。`raw` と `/` は名前にしない。置き場の外へ出る字は潰す
 //    - gist: 一覧の raw_url を印で選ぶ。無ければ .noSuchFile。API に断られたら画面から引く
 //    - User-Agent を付ける（GitHub は無いと断ることがある）
@@ -116,8 +116,10 @@ final class RemoteFileDownloadTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("tiny".utf8))
     }
 
-    /// 大きさを言わずに上限を超えて届いたら、途中で断って書きかけを消す。
+    /// 大きさを言わずに上限を超えて届いたら、断って書きかけを消す。
     /// 64 KiB ずつ書くので、200 000 バイトは 1 塊書いた後の 2 塊目で超える。
+    /// 読み切るのを待たずに断るかは、次の試験が見る（ここは本文が終わるので、読み切ってから
+    /// 大きさを見る作りでも通る）。
     func testBodyGrowingPastTheLimitIsRejectedAndThePartRemoved() async throws {
         let url = "https://example.com/stream.wav"
         StubURLProtocol.route(url, .init(body: body(200_000)))
@@ -125,6 +127,28 @@ final class RemoteFileDownloadTests: XCTestCase {
         XCTAssertEqual(got, "tooLarge")
         XCTAssertEqual(try leftovers(), [])
     }
+
+    /// **本文が終わるのを待たずに断る。**上限を超えた分を受け続けて置き場へ書くと、終わりの無い
+    /// 本文で書きかけが際限なく育つ。代役は 200 000 バイト送った後も線を閉じずに取り消しを待つ。
+    /// 読み切ってから大きさを見る作りだとここで待ち続け、10 秒で代役に切られて（.timedOut）
+    /// tooLarge にならない。
+    func testBodyGrowingPastTheLimitIsRejectedBeforeItEnds() async throws {
+        try XCTSkipIf(Self.bytesArriveOnlyWhenComplete,
+                      "Linux の URLSession.bytes の代役（Tests/Linux/Shims/FoundationGaps/URLSessionBytes.swift）"
+                      + "は本文を全部受けてから渡すので、途中で断るかは見られない")
+        let url = "https://example.com/endless.wav"
+        StubURLProtocol.route(url, .init(body: body(200_000), holdOpen: 10))
+        let got = await failure(url, limit: 100_000)
+        XCTAssertEqual(got, "tooLarge")
+        XCTAssertEqual(try leftovers(), [])
+    }
+
+    /// Mac の URLSession.bytes は届いた順に渡す。Linux の代役は受け終えてから渡す。
+    #if os(Linux)
+    private static let bytesArriveOnlyWhenComplete = true
+    #else
+    private static let bytesArriveOnlyWhenComplete = false
+    #endif
 
     func testBodyExactlyAtTheLimitIsAcceptedAndOneMoreByteIsNot() async throws {
         let url = "https://example.com/edge.wav"

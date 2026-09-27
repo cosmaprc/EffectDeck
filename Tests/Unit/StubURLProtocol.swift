@@ -5,6 +5,9 @@
 //  **決めていない URL は失敗で返す**（試験が知らないうちに網へ出ない）。fragment は送られないので、
 //  突き合わせるときは落とす。Mac の URLSession と Linux の FoundationNetworking のどちらでも
 //  protocolClasses に差せば使われる。
+//
+//  `holdOpen` を付けると本文を送り終えても閉じず、取り消されるのを待つ（終わりの無い本文の代わり）。
+//  待ちきれなければ URLError(.timedOut) で閉じる。**本文を読み切ってから断る作りだと、そこで止まる。**
 
 import Foundation
 
@@ -16,6 +19,8 @@ final class StubURLProtocol: URLProtocol {
         var headers: [String: String] = [:]
         /// 応答に載せる URL（飛ばされた先）。nil なら頼まれた URL のまま。
         var finalURL: URL?
+        /// 本文を送った後、閉じずに取り消しを待つ秒数。nil なら送ってすぐ閉じる。
+        var holdOpen: TimeInterval?
     }
 
     private static let lock = NSLock()
@@ -73,8 +78,30 @@ final class StubURLProtocol: URLProtocol {
         }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         if !reply.body.isEmpty { client?.urlProtocol(self, didLoad: reply.body) }
-        client?.urlProtocolDidFinishLoading(self)
+        guard let wait = reply.holdOpen else {
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        let me = Unchecked(value: self)
+        DispatchQueue.global().asyncAfter(deadline: .now() + wait) {
+            let stub = me.value
+            guard !stub.stopped else { return }
+            stub.client?.urlProtocol(stub, didFailWithError: URLError(.timedOut))
+        }
     }
 
-    override func stopLoading() {}
+    private struct Unchecked<Value>: @unchecked Sendable { let value: Value }
+
+    /// 取り消された（task.cancel か session の片付け）。holdOpen の待ちはこれで閉じずに終わる。
+    private let stopLock = NSLock()
+    private var stopFlag = false
+    private var stopped: Bool {
+        stopLock.lock(); defer { stopLock.unlock() }
+        return stopFlag
+    }
+
+    override func stopLoading() {
+        stopLock.lock(); defer { stopLock.unlock() }
+        stopFlag = true
+    }
 }

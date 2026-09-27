@@ -212,10 +212,12 @@ final class ShareModelTests: XCTestCase {
     // MARK: - NSItemProvider から選ぶ（Mac だけ）
 
     /// Safari は URL と字（ページの題名）の両方を載せてくる。字を先に取ると題名を JSFX として置く。
+    /// URL は共有元がするように `init(item:typeIdentifier:)` で載せる。`init(object:)` で載せると
+    /// `loadItem` が NSURL でなく Data を返すことがあり、`as? URL` が外れて字の方へ落ちる。
     func testURLBeatsText() async throws {
         let link = URL(string: "https://github.com/u/r/blob/main/a.jsfx")!
         let title = NSItemProvider(object: "Page Title" as NSString)
-        let url = NSItemProvider(object: link as NSURL)
+        let url = NSItemProvider(item: link as NSURL, typeIdentifier: UTType.url.identifier)
         let item = try await ShareModel.resolve([title, url])
         XCTAssertEqual(item, .web(link))
     }
@@ -223,7 +225,8 @@ final class ShareModelTests: XCTestCase {
     func testFileURLBecomesAFile() async throws {
         let file = scratch.appendingPathComponent("Hall.wav")
         try Data([1]).write(to: file)
-        let item = try await ShareModel.resolve([NSItemProvider(object: file as NSURL)])
+        let provider = NSItemProvider(item: file as NSURL, typeIdentifier: UTType.fileURL.identifier)
+        let item = try await ShareModel.resolve([provider])
         guard case .file(let got) = item else { return XCTFail("\(String(describing: item))") }
         XCTAssertEqual(got.standardizedFileURL, file.standardizedFileURL)
     }
