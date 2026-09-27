@@ -13,16 +13,25 @@ Only from the user. Scripts are imported by the user through:
   pastes; the field is pre-filled from the clipboard)
 - Available Effects > Plugins > Import JSFX > From Clipboard (script text the
   user copied)
-- Open in / share sheet from another app
+- Open in from another app, or the EffectDeck share-sheet extension (a file, a
+  link or selected text)
 - A share link (https://effectdeck.nemut.ai/j#...) that the user taps. The
-  script is carried inside the link itself; it is added to the Plugins list, not
-  to the chain, and does not run until the user adds it.
-Import JSFX > Write JSFX with ChatGPT only opens a chatgpt.com link (the ChatGPT
-app if installed, otherwise the browser) that carries a short request. The app
-sends nothing else to ChatGPT; the user imports the script it returns with From
-Files or From Clipboard.
+  script is carried inside the link itself.
+Scripts that arrive through Open in, the share-sheet extension or a share link
+are only added to the Plugins list. They are not added to the chain and do not
+run until the user adds them. A chain link (https://effectdeck.nemut.ai/?p=...)
+carries no script source; it can only use scripts already imported on the
+device.
+Import JSFX > Write JSFX with ChatGPT and Presets > Build a chain with ChatGPT
+only open a chatgpt.com link (the ChatGPT app if installed, otherwise the
+browser) that carries a short request. The app sends nothing else to ChatGPT.
+The user imports a returned script with From Files or From Clipboard. A returned
+chain goes in with Presets > Import from clipboard, which reads the clipboard
+only when tapped and builds a chain from the app's built-in effects and scripts
+already imported; it never imports script code.
 The app does not offer a catalog, store or directory of scripts, and it does not
-download scripts on its own. A link is fetched only when the user taps Import.
+download scripts on its own. A link is fetched only when the user taps Import
+(From Link) or Add (in the share-sheet extension).
 The App Store build ships no scripts, so no JSFX appears in the list until the
 user imports one.
 
