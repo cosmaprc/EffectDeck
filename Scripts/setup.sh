@@ -6,6 +6,13 @@
 #
 # .xcodeproj は追跡していない（project.yml が正）。Xcode で開く前と、
 # Vendor/effetune を進めたあとに叩く。Scripts/build.sh もこれを呼ぶ。
+#
+# 環境変数（どれも付けなければ今までと同じ動き。手元の Mac は何も付けない）:
+#   SKIP_XCODEGEN=1  最後の xcodegen を叩かない。生成物だけ作る
+#                    （Linux の CI。xcodegen が無い。シミュレータ用は project-sim.yml を別に組む）
+#   ET_STRICT=1      gen_version.py の失敗でも止める（CI。浅い submodule でタグが無いと落ちる）。
+#                    生成スクリプトも同じ変数を環境から読む（引数では渡さない）
+#   XCODEGEN=<path>  使う xcodegen（CI は版を固定したものを渡す。既定は PATH の xcodegen）
 set -u
 export PATH="/opt/homebrew/bin:$PATH"   # xcodegen と、3.10 以降の python3
 cd "$(dirname "$0")/.." || exit 1
@@ -15,10 +22,12 @@ if [ ! -d Vendor/effetune/dsp ]; then
   exit 1
 fi
 
+# **--recursive は付けない。**ysfx の中の submodule（dr_libs・clap-juce-extensions）は
+# 使わない。dr_libs を引くのは project.yml が外している ysfx_audio_{flac,wav}.cpp だけ。
 if [ ! -f Vendor/ysfx/include/ysfx.h ]; then
   echo "--- JSFX runtime ---"
-  git submodule update --init --recursive Vendor/ysfx || {
-    echo "!! Vendor/ysfx を取得できない。git submodule update --init --recursive Vendor/ysfx を確認すること。"
+  git submodule update --init Vendor/ysfx || {
+    echo "!! Vendor/ysfx を取得できない。git submodule update --init Vendor/ysfx を確認すること。"
     exit 1
   }
 fi
@@ -30,7 +39,7 @@ YSFX_REV="5c3452fee62583aa3d1b7e877d0c758c4024af89"
 YSFX_ACTUAL="$(git -C Vendor/ysfx rev-parse HEAD 2>/dev/null || true)"
 if [ -n "$YSFX_ACTUAL" ] && [ "$YSFX_ACTUAL" != "$YSFX_REV" ]; then
   echo "!! Vendor/ysfx is not the reviewed revision $YSFX_REV"
-  echo "   run: git submodule update --init --recursive Vendor/ysfx"
+  echo "   run: git submodule update --init Vendor/ysfx"
   exit 1
 fi
 # **目印はこの版のパッチが初めて足すものにする。**前の版にもある印だと、
@@ -218,8 +227,18 @@ done
 ls Generated/note-models
 
 echo "--- プロジェクトを作る ---"
-# gen_version だけは止めない。git の無い写し（Mac へ送った作業ツリー）では
+# gen_version は既定では止めない。git の無い写し（Mac へ送った作業ツリー）では
 # git describe が落ちるが、追跡してある UpstreamVersion.swift をそのまま使える。
+# **CI（ET_STRICT=1）では止める。**浅い submodule でタグが無いと落ちるのに、
+# 止めないと版の照合を何もしないまま緑になる。
 python3 Tools/gen_version.py 2>&1 | tail -1
-xcodegen generate --spec project.yml 2>&1 | tail -5
-gen_ok "${PIPESTATUS[0]}" xcodegen
+GEN_VERSION_STATUS=${PIPESTATUS[0]}
+if [ "${ET_STRICT:-0}" = 1 ]; then
+  gen_ok "$GEN_VERSION_STATUS" gen_version.py
+fi
+if [ "${SKIP_XCODEGEN:-0}" = 1 ]; then
+  echo "xcodegen は叩かない（SKIP_XCODEGEN=1）"
+else
+  "${XCODEGEN:-xcodegen}" generate --spec project.yml 2>&1 | tail -5
+  gen_ok "${PIPESTATUS[0]}" xcodegen
+fi

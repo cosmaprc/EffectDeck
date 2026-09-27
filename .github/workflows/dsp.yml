@@ -1,0 +1,131 @@
+# 上流の DSP（Vendor/effetune/dsp）に、こちらのパッチ（Patches/*.diff）を当てたものの ctest。
+#
+#   debug  Debug。上流の実時間の確保の見張り（-Wl,--wrap=malloc）が生きる
+#   asan   RelWithDebInfo + ASan + UBSan。UBSan は halt_on_error で本当に落とす
+#          （既定は印字だけで、ctest は通ったテストの出力を隠すので、付けないと何も見ていない）。
+#          外すのは 2 つだけ: vptr（コアは -fno-rtti で建つので全部偽陽性）と、
+#          上流の試験の道具 graph_test.cpp の memcpy(dst, nullptr, 0)
+#
+# 重いので（asan は 4 vCPU で 10 分台）、パッチ・上流の版・Sources/Shared・Tests/Native が
+# 変わったときと、毎晩だけ回す。
+# Tests/Native に上流のエンジンを繋ぐ試験（ET_NATIVE_WITH_ENGINE）があれば、同じ木で続けて走らせる。
+name: DSP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Patches/**
+      - Vendor/**
+      - Sources/Shared/**
+      - Tests/Native/**
+      - Scripts/setup.sh
+      - .github/workflows/dsp.yml
+  pull_request:
+    paths:
+      - Patches/**
+      - Vendor/**
+      - Sources/Shared/**
+      - Tests/Native/**
+      - Scripts/setup.sh
+      - .github/workflows/dsp.yml
+  schedule:
+    - cron: "17 18 * * *"   # 毎日 03:17（日本時間）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsp-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  upstream:
+    name: upstream ctest (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    # debug の上流の試験は最適化なしで重い（WSL で md_simulator 589 秒・pitch_shifter_hq 531 秒）。
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, asan]
+    env:
+      MODE: ${{ matrix.mode }}
+      CCACHE_MAXSIZE: 500M
+    steps:
+      - uses: actions/checkout@v7
+      # ysfx は setup.sh が無いと取りに行くので、先に浅く入れておく。
+      - name: submodule
+        run: |
+          git submodule update --init --filter=blob:none Vendor/effetune
+          git submodule update --init --depth 1 Vendor/ysfx
+          git submodule status
+      - name: ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ccache >/dev/null
+          ccache --version | sed -n 1p
+      # ccache は中身で引くので、古いものが戻っても結果は変わらない（速さだけが変わる）。
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: dsp-ccache-${{ matrix.mode }}-${{ github.sha }}
+          restore-keys: dsp-ccache-${{ matrix.mode }}-
+      # パッチを当てる（生成物も作り直すが、ここでは使わない）。
+      - name: Scripts/setup.sh
+        env:
+          SKIP_XCODEGEN: 1
+        run: bash Scripts/setup.sh
+      - name: configure
+        run: |
+          case "$MODE" in
+            debug) BT=Debug;          SAN="" ;;
+            asan)  BT=RelWithDebInfo; SAN="-fsanitize=address,undefined -fno-omit-frame-pointer" ;;
+            *) echo "::error::知らない MODE: $MODE"; exit 1 ;;
+          esac
+          cmake -S Vendor/effetune/dsp -B build/dsp -G Ninja -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE="$BT" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_FLAGS="$SAN" -DCMAKE_CXX_FLAGS="$SAN" \
+            -DCMAKE_EXE_LINKER_FLAGS="$SAN" -DCMAKE_SHARED_LINKER_FLAGS="$SAN"
+      - name: build
+        run: |
+          cmake --build build/dsp --parallel
+          ccache --show-stats
+      - name: ctest
+        run: |
+          supp="$RUNNER_TEMP/ubsan.supp"
+          printf 'vptr:*\nnonnull-attribute:graph_test.cpp\n' > "$supp"
+          export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:suppressions=$supp"
+          ctest --test-dir build/dsp --parallel 4 --output-on-failure
+
+      # パッチの当たったエンジンと ETPipeline.c を繋いだ試験（外部ノード・遅延・経路）。
+      # Tests/Native が ET_NATIVE_WITH_ENGINE を持っているときだけ走る。
+      - name: Tests/Native（上流のエンジンつき）
+        if: hashFiles('Tests/Native/CMakeLists.txt') != ''
+        run: |
+          if ! grep -rq ET_NATIVE_WITH_ENGINE Tests/Native --include=CMakeLists.txt; then
+            echo "Tests/Native に ET_NATIVE_WITH_ENGINE が無いので飛ばす"
+            exit 0
+          fi
+          SAN=""
+          if [ "$MODE" = asan ]; then SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"; fi
+          cmake -S Tests/Native -B build/native-engine -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DET_NATIVE_WITH_ENGINE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_FLAGS="$SAN" -DCMAKE_CXX_FLAGS="$SAN" \
+            -DCMAKE_EXE_LINKER_FLAGS="$SAN" -DCMAKE_SHARED_LINKER_FLAGS="$SAN"
+          cmake --build build/native-engine --parallel
+          if [ -f Tests/Native/lsan.supp ]; then
+            export LSAN_OPTIONS="suppressions=$PWD/Tests/Native/lsan.supp:print_suppressions=0"
+          fi
+          export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+          # engine の印の付いたものだけ（ほかは ci.yml の native が毎回走らせている）。
+          ctest --test-dir build/native-engine -L engine --no-tests=error --parallel 4 --output-on-failure
+
+      # ---- 統合で足す枠（P-Fuzz）: 長い fuzz の回はここに段を足すか、同じ on: で別ジョブにする ----
