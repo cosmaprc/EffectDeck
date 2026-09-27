@@ -1,6 +1,12 @@
 //  fake_engine.c
 //  fake_engine.h の中身。POSIX（Linux / macOS）だけ。MSVC では建てない。
 
+// nanosleep / clock_gettime / CLOCK_MONOTONIC は POSIX。-std=c11 の glibc では宣言が隠れる。
+// ETPipeline.c と同じ守り。
+#if !defined(__APPLE__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "fake_engine.h"
 
 #include <string.h>

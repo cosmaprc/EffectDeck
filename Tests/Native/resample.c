@@ -210,12 +210,13 @@ ET_CASE(alias_26k)
     }
 }
 
-ET_CASE(alias_30k_below_74db)
+ET_CASE(alias_30k_below_84db)
 {
+    // 今の設計で -88.9dB（2倍）/ -86dB（4倍）。以前の設計は -75dB で、ここで落ちる。
     for (size_t f = 0; f < ET_COUNT(kFactors); f++) {
         Rig g = rig(kFactors[f], 1);
         const double db = alias_db(&g, 30000);
-        ET_CHECK_MSG(db <= -74.0, "x%u 30 kHz -> 18 kHz at %.1f dB", g.F, db);
+        ET_CHECK_MSG(db <= -84.0, "x%u 30 kHz -> 18 kHz at %.1f dB", g.F, db);
         unrig(&g);
     }
 }
@@ -375,7 +376,7 @@ static const et_case cases[] = {
     ET_ENTRY(passband_flat_to_20k),
     ET_ENTRY(stopband_from_24k),
     ET_ENTRY(alias_26k),
-    ET_ENTRY(alias_30k_below_74db),
+    ET_ENTRY(alias_30k_below_84db),
     ET_ENTRY(image_stopband_from_24k),
     ET_ENTRY(image_1k_below_90db),
     ET_ENTRY(overshoot_and_square_peak),
