@@ -57,6 +57,16 @@ enum ETSection {
     /// セクションの名前を入れる保存キー。section.js の `cm`。
     static let commentKey = "cm"
 
+    /// **自分で置いた終端（rootReset）の印。**`Section(cm: "")`の段に`true`で付ける。
+    ///
+    /// 渡す形には組を閉じる印が無く、終端も素の`Section("")`になる。印が無いと、読み戻したときに
+    /// 名前の無いSectionとして戻り、下の段を組に呑む（PipelineAnalysis.swiftの頭）。
+    /// 付けるのはこちらが自分のために書くもの（pipeline.last・自分のプリセット・バックアップ・
+    /// effectdeck.nemut.aiのリンク）だけで、effetune.frieve.comのリンクでは外す
+    /// （PipelineStore.upstreamEntry）。上流はsection.jsのsetParametersが`cm`しか読まないので、
+    /// 付いたまま渡っても害は無い。
+    static let rootResetKey = "rr"
+
     /// 鎖に置ける飾りとしての見た目。パラメータは持たない
     /// （名前は Node 側に文字列で持つ。ETParam は float しか運べない）。
     /// about は docs/plugins/control.md:13 の説明から。

@@ -357,7 +357,8 @@ enum ETChainText {
         stageKeys.subtracting(["nm"]).union(["name", "parameters"])
     /// IR Reverbの素材の鍵。綴りはETIRLoader.presetKey（IRLoader.swiftはAVFoundationに触るので
     /// このファイルからは引けない）。PipelineStore.parseはどの段でも読む。
-    private static let irKey = "ir"
+    /// PipelineForm.swiftも同じ理由でこれを引く。
+    static let irKey = "ir"
     /// 上流が書くが音に効かないので、読まなくても言わない鍵。オブジェクト配列の行の中にも効く。
     /// - Modal Resonatorの`sr`は選択中のタブの添字（modal_resonator.js:30-32、
     ///   EffectPresetApply.matchingPresetIdの注記）
@@ -455,9 +456,15 @@ enum ETChainText {
             let params = isLong ? (entry["parameters"] as? [String: Any] ?? [:]) : entry
             for key in params.keys.sorted() where key != ETSection.commentKey {
                 if !isLong && stageKeys.contains(key) { continue }
+                // 終端の印（EffectDeckどうしのリンクに乗ってくる）。どちらの形でも段の鍵に置く。
+                if key == ETSection.rootResetKey && !isLong { continue }
                 report.add("\(ETSection.name).\(key)", to: \.ignored)
             }
-            if isLong { reportUnknownStageKeys(entry, label: ETSection.name, report: &report) }
+            if isLong {
+                var stage = entry
+                stage.removeValue(forKey: ETSection.rootResetKey)
+                reportUnknownStageKeys(stage, label: ETSection.name, report: &report)
+            }
             return entry
         }
 

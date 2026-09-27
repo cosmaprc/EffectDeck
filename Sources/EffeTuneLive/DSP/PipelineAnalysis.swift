@@ -15,12 +15,12 @@
 //
 //  **こちらでは終端を独立した語にする。**それが `rootReset`。
 //  Section ではないので、名前も入切も持たず、行にも出ず、畳めもしない。
-//  EffeTune へ出す瞬間だけ `Section(cm: "")` に化ける（ETWireCodec）。
+//  EffeTuneへ出す瞬間だけ`Section(cm: "")`に化ける（PipelineForm.swift）。
 //
 //  **外から来た空 Section を rootReset と推測してはいけない。**
 //  人が付けなかった名前なのか、上流が挿した終端なのか、渡された形からは
 //  区別できない。外のものは必ず普通の Section として読む。自分で作ったものだけ、
-//  端末に残した覚え（ETPipelineMetadata）から戻す。**誤って消すより、
+//  書いたときに付けた印（ETSection.rootResetKey）から戻す。**誤って消すより、
 //  見た目の情報を失うほうが安全。**
 
 import Foundation

@@ -92,7 +92,8 @@ enum ETShareLink {
     static func effeTuneForm(_ chain: [EffeTuneDSP.Node]) -> [[String: Any]] {
         let encoded = PipelineStore.shortForm(chain)
         return zip(chain, encoded).compactMap { node, entry in
-            guard node.isExternal else { return entry }
+            // Sectionの終端は印を外し、上流が組の終わりに使う素のSection("")にする。
+            guard node.isExternal else { return PipelineStore.upstreamEntry(entry) }
 
             // With no bus crossing, bypassing the processor is deletion.
             guard node.inputBus != node.outputBus else { return nil }

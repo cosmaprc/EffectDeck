@@ -22,222 +22,31 @@
 //      ロング    { "name": "Section", "enabled": true, "parameters": { "cm": "Drums" } }
 //  上流は `cm` を常に書く（plugins/control/section.js の getParameters）ので、
 //  空でもキーごと落とさない。ib/ob/ch は Section が持たないので出ない。
+//  こちらが置いた終端（rootReset）は`Section(cm: "")`に`"rr": true`を付けて書く
+//  （ETSection.rootResetKey）。effetune.frieve.comへ渡すリンクでは外す。
 //
 //  出典: js/utils/serialization-utils.js:13-106、plugins/control/section.js
+//
+//  書く・読むの中身はPipelineForm.swift（Foundationだけで、単体テストに入る）。
+//  ここはNodeからの写しと、端末への書き込み。
 
 import Foundation
-import os
 
-enum PipelineStore {
-
-    private static let log = Logger(subsystem: "ai.nemut.effetune", category: "store")
+extension PipelineStore {
 
     // MARK: - 書く
+    //
+    // **中身はPipelineForm.swiftのLoaded版が書く。**ここはNodeを写して渡すだけ。
+    // 前はNode版とLoaded版が同じことを別々に書いていて、終端の扱いはNode版にしか無かった。
 
     /// ショート形式。共有リンクとプリセットに使う。
     static func shortForm(_ chain: [EffeTuneDSP.Node]) -> [[String: Any]] {
-        chain.map { node in
-            var o: [String: Any] = parameters(of: node)
-            o["nm"] = node.spec.name
-            o["en"] = node.enabled
-            if let externalID = node.externalID {
-                o["external"] = externalID
-                o["externalInstance"] = node.externalInstanceID
-                if let state = node.externalState {
-                    o["externalState"] = state.base64EncodedString()
-                }
-            }
-            if node.inputBus  != 0 { o["ib"] = Int(node.inputBus) }
-            if node.outputBus != 0 { o["ob"] = Int(node.outputBus) }
-            if let ch = ETChannel.channel(from: node.channelSpec) { o["ch"] = ch }
-            return o
-        }
-    }
-
-    /// 読み込んだ鎖をショート形式へ戻す。取り込みでロング形式のプリセットを
-    /// 受けたときに使う（ETBackup.presets(from:catalog:)）。
-    ///
-    /// 上の `shortForm(_ chain:)` と同じものを出すが、入口が Node ではなく Loaded。
-    /// Node を作るには instance が要り、鎖に載せずに作ることはできない。
-    static func shortForm(_ loaded: [Loaded]) -> [[String: Any]] {
-        loaded.map { item in
-            var o: [String: Any]
-            if ETSection.isSection(item.spec) {
-                // Section は ETParam を持たない（parameters(of:) と同じ扱い）。
-                // Loaded は外から読んだものなので rootReset は持たない。
-                o = [ETSection.commentKey: item.sectionName]
-            } else {
-                o = ETParamCoding.encode(params: item.spec.params, values: item.values)
-                if !item.irId.isEmpty { o[ETIRLoader.presetKey] = item.irId }
-                ETDisplayParam.write(item.display, type: item.spec.type, into: &o)
-            }
-            if !item.externalID.isEmpty {
-                o["external"] = item.externalID
-                o["externalInstance"] = item.externalInstanceID
-                if let state = item.externalState {
-                    o["externalState"] = state.base64EncodedString()
-                }
-            }
-            o["nm"] = item.spec.name
-            o["en"] = item.enabled
-            if item.inputBus  != 0 { o["ib"] = Int(item.inputBus) }
-            if item.outputBus != 0 { o["ob"] = Int(item.outputBus) }
-            if let ch = ETChannel.channel(from: item.channelSpec) { o["ch"] = ch }
-            return o
-        }
+        shortForm(chain.map { Loaded($0) })
     }
 
     /// ロング形式。ファイルに書き出すときに使う。
     static func longForm(_ chain: [EffeTuneDSP.Node]) -> [String: Any] {
-        let list: [[String: Any]] = chain.map { node in
-            var o: [String: Any] = [
-                "name": node.spec.name,
-                "enabled": node.enabled,
-                "parameters": parameters(of: node),
-            ]
-            if let externalID = node.externalID {
-                o["external"] = externalID
-                o["externalInstance"] = node.externalInstanceID
-                if let state = node.externalState {
-                    o["externalState"] = state.base64EncodedString()
-                }
-            }
-            if node.inputBus  != 0 { o["inputBus"] = Int(node.inputBus) }
-            if node.outputBus != 0 { o["outputBus"] = Int(node.outputBus) }
-            if let ch = ETChannel.channel(from: node.channelSpec) { o["channel"] = ch }
-            return o
-        }
-        return ["pipeline": list]
-    }
-
-    /// パラメータを保存形式へ。中身は ETParamCoding が持つ。
-    ///
-    /// **EffeTuneDSP に触らない形で切り出してある。** オブジェクト配列の扱いを
-    /// 何度も読み違えたので、Tests/Unit/ParamCodingTests.swift が実機なしで見張る。
-    private static func parameters(of node: EffeTuneDSP.Node) -> [String: Any] {
-        // **rootReset はここで Section("") に化ける。**渡す形に終端が無いので、
-        // 上流と同じ代用品に落とす（preset-manager.js:149-161 も同じことをする）。
-        // 読むときは推測しない。外から来た空 Section は普通の Section として読む
-        // （PipelineAnalysis.swift の頭）。
-        if node.isRootReset { return [ETSection.commentKey: ""] }
-        // Section は ETParam を持たない。名前は Node 側の文字列なのでここで出す。
-        if node.isSection { return [ETSection.commentKey: node.sectionName] }
-        var o = ETParamCoding.encode(params: node.spec.params, values: node.values)
-        // IR Reverb の素材は float に載らないので、鍵をここで足す。
-        // 綴りは上流に合わせて `ir`（ir_reverb.js:866）。
-        if !node.irId.isEmpty { o[ETIRLoader.presetKey] = node.irId }
-        // 図の見せ方（float に載らない）。綴りは上流のまま。
-        ETDisplayParam.write(node.display, type: node.spec.type, into: &o)
-        return o
-    }
-
-    // MARK: - 読む
-
-    struct Loaded {
-        let spec: ETEffect
-        var values: [Float]
-        var enabled: Bool
-        var inputBus: UInt8
-        var outputBus: UInt8
-        var channelSpec: Int8
-        /// Section の名前（`cm`）。Section 以外では空。
-        var sectionName: String = ""
-        /// IR Reverb の素材の鍵（`ir`）。それ以外では空。
-        var irId: String = ""
-        /// 音に関わらない表示の設定（`cl` / `sc` など）。DisplayParams.swift を読むこと。
-        var display: [String: String] = [:]
-        var externalID: String = ""
-        var externalInstanceID: String = ""
-        var externalState: Data? = nil
-    }
-
-    /// ロングでもショートでも受ける。根が配列ならショート、
-    /// 辞書で `pipeline` を持っていればロング。
-    static func parse(_ json: Any, catalog: [ETEffect]) -> [Loaded] {
-        let list: [[String: Any]]
-        if let a = json as? [[String: Any]] {
-            list = a
-        } else if let d = json as? [String: Any], let a = d["pipeline"] as? [[String: Any]] {
-            list = a
-        } else {
-            return []
-        }
-
-        let byName = Dictionary(catalog.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
-        var out: [Loaded] = []
-
-        for entry in list {
-            let isLong = entry["name"] != nil
-            let name = (entry["name"] ?? entry["nm"]) as? String ?? ""
-            let externalID = entry["external"] as? String ?? ""
-
-            if !externalID.isEmpty {
-                let spec = ETEffect.external(type: "External:\(externalID)", name: name,
-                                              category: externalID.hasPrefix("jsfx:") ? "JSFX" : "Audio Units")
-                let instanceID = entry["externalInstance"] as? String ?? UUID().uuidString
-                let state = (entry["externalState"] as? String).flatMap {
-                    Data(base64Encoded: $0)
-                }
-                out.append(Loaded(spec: spec, values: [],
-                                   enabled: (entry["enabled"] ?? entry["en"]) as? Bool ?? true,
-                                   inputBus: bus(entry["inputBus"] ?? entry["ib"]),
-                                   outputBus: bus(entry["outputBus"] ?? entry["ob"]),
-                                   channelSpec: ETChannel.spec(from: (entry["channel"] ?? entry["ch"]) as? String),
-                                   externalID: externalID,
-                                   externalInstanceID: instanceID,
-                                   externalState: state))
-                continue
-            }
-
-            let params: [String: Any] = isLong
-                ? (entry["parameters"] as? [String: Any] ?? [:])
-                : entry
-
-            // Section はカーネルが無いので catalog に載っていない。名前で拾う。
-            // ここで落とすと、web 版で作った鎖を取り込んだときに区切りだけ消えて
-            // 配下が別のセクションに繰り上がる（次の Section まで、が変わる）。
-            if name == ETSection.name {
-                out.append(Loaded(
-                    spec: ETSection.spec,
-                    values: [],
-                    enabled: (entry["enabled"] ?? entry["en"]) as? Bool ?? true,
-                    inputBus: 0,
-                    outputBus: 0,
-                    channelSpec: -1,
-                    sectionName: params[ETSection.commentKey] as? String ?? ""))
-                continue
-            }
-
-            guard let spec = byName[name] else {
-                log.notice("知らないエフェクト \(name, privacy: .public)")
-                continue
-            }
-
-            let values = ETParamCoding.decode(params: spec.params,
-                                              defaults: spec.defaults,
-                                              from: params,
-                                              type: spec.type)
-
-            let ch = (entry["channel"] ?? entry["ch"]) as? String
-            out.append(Loaded(
-                spec: spec,
-                values: values,
-                enabled: (entry["enabled"] ?? entry["en"]) as? Bool ?? true,
-                inputBus: bus(entry["inputBus"] ?? entry["ib"]),
-                outputBus: bus(entry["outputBus"] ?? entry["ob"]),
-                channelSpec: ETChannel.spec(from: ch),
-                sectionName: "",
-                irId: params[ETIRLoader.presetKey] as? String ?? "",
-                display: ETDisplayParam.read(params, type: spec.type)))
-        }
-        return out
-    }
-
-    /// バスの番号。**0...4に寄せる。**エンジンは5以上が1本でもあると鎖ごと拒む
-    /// （engine.cpp:674-678）。貼られた字はETChainText.prepareが先に寄せるが、
-    /// バックアップとpipeline.lastはそこを通らずにここへ来る。
-    private static func bus(_ raw: Any?) -> UInt8 {
-        UInt8(clamping: min(ETChainText.busLimit, raw as? Int ?? 0))
+        longForm(chain.map { Loaded($0) })
     }
 
     // MARK: - 端末に残す
@@ -305,5 +114,24 @@ enum PipelineStore {
 
     static func loadExpanded() -> [Int] {
         UserDefaults.standard.array(forKey: expandedKey) as? [Int] ?? []
+    }
+}
+
+extension PipelineStore.Loaded {
+    /// 鎖の1段を、書く手前の形へ写す。**書くのはLoadedの側だけ**（PipelineForm.swift）。
+    init(_ node: EffeTuneDSP.Node) {
+        self.init(spec: node.spec,
+                  values: node.values,
+                  enabled: node.enabled,
+                  inputBus: node.inputBus,
+                  outputBus: node.outputBus,
+                  channelSpec: node.channelSpec,
+                  sectionName: node.sectionName,
+                  irId: node.irId,
+                  display: node.display,
+                  externalID: node.externalID ?? "",
+                  externalInstanceID: node.externalInstanceID,
+                  externalState: node.externalState,
+                  isRootReset: node.isRootReset)
     }
 }

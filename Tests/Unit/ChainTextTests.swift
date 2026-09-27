@@ -12,7 +12,8 @@
 //
 //  ETChainText.swiftと、それが引くSectionSupport / DisplayParams / SystemPresets /
 //  UpstreamVersion、CHAIN.mdとchain/はこのバンドルへ直接入れてある（project.yml）。
-//  PipelineStoreとETShareLinkは入っていないので、確かめるのはPipelineStore.parseの手前まで。
+//  ETShareLinkは入っていないので、確かめるのはPipelineStore.parseの手前まで。
+//  parseを通した往復はPipelineStoreTests（PipelineForm.swiftも入れてある）。
 
 import XCTest
 

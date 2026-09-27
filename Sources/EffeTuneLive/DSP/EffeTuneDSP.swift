@@ -79,7 +79,8 @@ final class EffeTuneDSP: ObservableObject {
         /// **組を抜けて root へ戻る印。**Section ではない。
         ///
         /// 名前も入切も持たず、行にも出ず、畳めもせず、DSP にも出ない。
-        /// EffeTune へ出す瞬間だけ `Section(cm: "")` に化ける（ETWireCodec）。
+        /// EffeTuneへ出す瞬間だけ`Section(cm: "")`に化ける（PipelineForm.swift）。
+        /// こちらが書くものには印（ETSection.rootResetKey）を付け、読むときはそれだけを戻す。
         /// 外から来た空 Section をこれと推測してはいけない（PipelineAnalysis の頭）。
         var isRootReset: Bool = false
 
@@ -727,6 +728,12 @@ final class EffeTuneDSP: ObservableObject {
         var made: [Node] = []
         for item in toAdd {
             var node = Node(spec: item.spec, values: item.values)
+            // プリセットに入っていた終端。appendと同じくinstanceを作らずに置く。
+            if item.isRootReset {
+                node.isRootReset = true
+                made.append(node)
+                continue
+            }
             node.enabled = item.enabled
             node.inputBus = item.inputBus
             node.outputBus = item.outputBus
@@ -838,6 +845,13 @@ final class EffeTuneDSP: ObservableObject {
     @discardableResult
     private func append(_ item: PipelineStore.Loaded) -> Bool {
         var node = Node(spec: item.spec, values: item.values)
+        // 自分で置いた終端（PipelineStore.parseが印から戻す）。leaveSectionが挿すものと同じで、
+        // instanceは持たない。isSectionが偽なのでinstantiateへ渡すと失敗して落ちる。
+        if item.isRootReset {
+            node.isRootReset = true
+            chain.append(node)
+            return true
+        }
         node.enabled = item.enabled
         node.inputBus = item.inputBus
         node.outputBus = item.outputBus
