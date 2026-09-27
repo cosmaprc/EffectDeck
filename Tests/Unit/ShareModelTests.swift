@@ -208,6 +208,33 @@ final class ShareModelTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path), [])
     }
 
+    /// ファイルも取り消したら写さない（add の Task が走り出す前に Cancel を押した場合）。
+    func testCancelledFileIsNotCopied() async throws {
+        let file = scratch.appendingPathComponent("Hall.wav")
+        try Data([1, 2, 3]).write(to: file)
+        let rootURL = root!
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ShareIntake.deposit(.file(file), in: rootURL)
+        }
+        let result = await task.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+        XCTAssertEqual(ETShareInbox.pending(in: root), [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// 字も取り消したら pasted.jsfx を置かない。
+    func testCancelledTextIsNotDeposited() async throws {
+        let rootURL = root!
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ShareIntake.deposit(.text("desc:gain\n"), in: rootURL)
+        }
+        let result = await task.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+        XCTAssertEqual(ETShareInbox.pending(in: root), [])
+    }
+
     #if canImport(UniformTypeIdentifiers)
     // MARK: - NSItemProvider から選ぶ（Mac だけ）
 
@@ -256,7 +283,9 @@ final class ShareModelTests: XCTestCase {
         let item = try await ShareModel.resolve([provider])
         guard case .file(let copy) = item else { return XCTFail("\(String(describing: item))") }
         defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
-        XCTAssertEqual(copy.lastPathComponent, "My-IR.wav")
+        // 拡張子は付くとは限らない。OSが写す一時ファイルは示された名前（My:IR）で作られ、
+        // 元の.wavを持たないことがある（macOSで実測）。足す規則そのものはtestCopyNameで見ている。
+        XCTAssertEqual(copy.deletingPathExtension().lastPathComponent, "My-IR")
         XCTAssertEqual(try Data(contentsOf: copy), Data([4, 5, 6]))
     }
 
