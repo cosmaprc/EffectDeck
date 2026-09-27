@@ -13,7 +13,8 @@
 //
 //  **その段が何本を処理するか（processedWidth）もここだけに置く。**前は同じ決まりの写しが
 //  4 つあって食い違っていた（EffeTuneDSP.routedChannels・BandFIRPEQDesigner・GroupDelayEQDesigner・
-//  GroupDelayPEQSettings）。designer の 3 つもここへ寄せる（ETChannelTests が表の全部で見張る）。
+//  GroupDelayPEQSettings）。ETChannelTests が表の全部で見張るのは processedWidth だけ。
+//  designer の 3 つはまだ自前の写しを持っていて、ここへ寄せるまでは表で見張られていない。
 
 import Foundation
 

@@ -50,10 +50,11 @@ final class ChainEditingTests: XCTestCase {
     // MARK: - 選択肢
 
     /// **値は param.offset から読む。**並びの位置（md は 2 番目）で読むと gains の 2 本目を読む。
+    /// lt も並びの位置（3 番目）で読むと gains の 3 本目の 1 を読んで "128" になるので、offset の 2 と違える。
     func testChoiceUsesOffset() {
-        let values: [Float] = [0, 0, 1, 2, 1]
+        let values: [Float] = [0, 0, 1, 2, 2]
         XCTAssertEqual(ETChainEditing.choice("md", params: shifted.params, values: values), "c")
-        XCTAssertEqual(ETChainEditing.choice("lt", params: shifted.params, values: values), "128")
+        XCTAssertEqual(ETChainEditing.choice("lt", params: shifted.params, values: values), "256")
     }
 
     /// 読めないものは "auto"。知らない鍵・数の param・範囲の外・値が足りない・NaN。
