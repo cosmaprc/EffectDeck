@@ -368,6 +368,15 @@ struct PipelineView: View {
         .onChange(of: dsp.chain.count) { _, _ in
             ETCardSelection.shared.prune(keeping: dsp.chain.map(\.id))
         }
+        // **ピッカーを出さないまま別のシートへ行ったら、面を戻す。**共有の拡張にJSFXとIRが
+        // 溜まっていると、sheetは同じ回で.pickerを経て.irになり、ピッカーは出ない。onDisappearが
+        // 来ないので、次に+で開くとPluginsのまま、行も塗られたままだった。
+        // 出ていたピッカーから替わるときはonDisappearに任せる（閉じる途中で面が替わって見える）。
+        .onChange(of: sheet) { old, new in
+            guard old != .picker, new != .picker else { return }
+            pickerPane = .effects
+            freshJSFX = nil
+        }
         // io を丸ごと観測せず、要る値だけを写す。
         .onReceive(io.$running) { running = $0 }
         .onReceive(io.$hasPeer) { hasPeer = $0 }
@@ -413,10 +422,35 @@ struct PipelineView: View {
     /// **音でも JSFX でもなかったときも出す。**「このアプリで開く」は OS が
     /// 型で候補を絞っているが、共有はリンクなので何でも来る。黙ると Add を
     /// 押したのに何も起きない形になる。
+    ///
+    /// **断りは、取り込めたものを出してから。**届いた順に出すと、同じ回で開いたばかりのシートを
+    /// afterClosingSheetが閉じる。SwiftUIには開きも閉じもしなかったことになってonDismissが来ず、
+    /// 警告は出ないまま残り、関係の無い次のシートを閉じたときに出ていた（2本溜まっていたとき）。
+    /// 取り込めたものがあれば、そのシートは閉じさせず、閉じられた後に出す。
     private func drainShared() {
         guard let root = ETShareInbox.root else { return }
-        for received in ETShareInbox.drain(in: root, { ETInbox.receive($0) }) {
-            show(received, unsupported: ETInbox.unsupportedLink)
+        let received = ETShareInbox.drain(in: root, { ETInbox.receive($0) })
+        var opened = false
+        for item in received {
+            switch item {
+            case .ir, .jsfx:
+                show(item, unsupported: ETInbox.unsupportedLink)
+                opened = true
+            case .failed, .unsupported:
+                break
+            }
+        }
+        for item in received {
+            switch item {
+            case .ir, .jsfx:
+                break
+            case .failed, .unsupported:
+                if opened {
+                    afterSheet = { show(item, unsupported: ETInbox.unsupportedLink) }
+                } else {
+                    show(item, unsupported: ETInbox.unsupportedLink)
+                }
+            }
         }
     }
 
@@ -1144,6 +1178,9 @@ struct PipelineView: View {
     }
 
     private func runAfterSheet() {
+        // 別のシートへ替わっただけなら、それを閉じるまで待つ（シートの上には警告が出ない）。
+        // itemが別の値へ替わったときも前のシートのonDismissが来うる。
+        guard sheet == nil else { return }
         let next = afterSheet
         afterSheet = nil
         next?()

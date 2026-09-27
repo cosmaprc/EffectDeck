@@ -530,9 +530,13 @@ struct EffectPickerView: View {
                     // 帯を押したときと同じ道（下のjump）を通す。行ではなく見出しへ送るのも同じ理由
                     // （見出しの.idのコメント）。面が替わった回はonChange(of: pane)がjumpを空に戻す。
                     // taskの中身は非同期で、その回を組み終えてから走るので、戻された後に入れることになる。
+                    // 帯の塗りも帯を押したときと同じく先に合わせる。飛んでいる間は見出しでcurrentを
+                    // 書き換えない（jumping）ので、入れないと面の最初の作者が塗られたまま残る。
                     .task(id: fresh) {
                         guard let id = fresh, let entry = jsfx.entry(id: id) else { return }
-                        jump = Jump(name: jsfxVendor(entry), count: jump.count + 1)
+                        let vendor = jsfxVendor(entry)
+                        current = vendor
+                        jump = Jump(name: vendor, count: jump.count + 1)
                     }
                     .onChange(of: jump) { _, now in
                         guard !now.name.isEmpty else { return }
