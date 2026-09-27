@@ -68,6 +68,10 @@ final class PresetStore: ObservableObject {
         reload()
     }
 
+    /// save が書く名前（空になるなら nil）。押す前の「もう在る」はこれで確かめる。
+    /// save は名前を整えるので、打ったままの名前では在るものを見落とす。
+    func savedName(for name: String) -> String? { core.savedName(for: name) }
+
     func load(_ name: String) -> [PipelineStore.Loaded] {
         guard let raw = core.form(named: name) else { return [] }
         return PipelineStore.parse(raw, catalog: ETCatalog)

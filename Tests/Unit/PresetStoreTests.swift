@@ -197,6 +197,27 @@ final class PresetStoreTests: XCTestCase {
         XCTAssertEqual(tag(store.form(named: "A/B/C")), 2)
     }
 
+    /// 押す前に「もう在る」を言うには、save が書く名前で確かめる。打ったままの名前で
+    /// 確かめると、`Live/ Set 1` は整えて `Live/Set 1` になり、言われないまま上書きする。
+    func testSavedNameIsTheKeySaveWrites() {
+        let store = presets(["Live/Set 1": form(1), "A/B/C": form(2), "X/Y Z": form(3)])
+
+        XCTAssertEqual(store.savedName(for: "Live/ Set 1"), "Live/Set 1")
+        XCTAssertTrue(store.names.contains(store.savedName(for: "Live/ Set 1") ?? ""),
+                      "整えた名前が在るので、押す前に言える")
+        XCTAssertEqual(store.savedName(for: "A/B/C"), "A/B/C", "在る名前そのものはそのまま")
+        XCTAssertEqual(store.savedName(for: "X/Y/Z"), "X/Y Z")
+        XCTAssertNil(store.savedName(for: "   "))
+        XCTAssertNil(store.savedName(for: "/"))
+
+        for typed in ["Live/ Set 1", "A/B/C", "X/Y/Z", "  new  ", "/lead", "F/", "   "] {
+            let predicted = store.savedName(for: typed)
+            XCTAssertEqual(store.save(typed, form: form(9)), predicted, typed)
+        }
+        XCTAssertEqual(store.names, ["A/B/C", "F", "Live/Set 1", "X/Y Z", "lead", "new"])
+        XCTAssertEqual(tag(store.form(named: "Live/Set 1")), 9)
+    }
+
     func testSaveReplacesSameName() {
         let store = presets(["a": form(1)])
 

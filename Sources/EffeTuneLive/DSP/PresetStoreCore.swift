@@ -144,12 +144,25 @@ final class PresetStoreCore {
     @discardableResult
     func save(_ name: String, form: [[String: Any]]) -> String? {
         var d = dict()
-        let key = d[name] != nil ? name : ETUserPresetName.normalized(name)
-        guard !key.isEmpty, !form.isEmpty else { return nil }
+        guard let key = savedName(for: name, in: d), !form.isEmpty else { return nil }
         d[key] = form
         write(d)
         patch(Self.key, [CloudChange(path: [key], value: form)])
         return key
+    }
+
+    /// save が書く名前。空になる名前は nil。
+    ///
+    /// **押す前に「もう在る」を言うのはこれで確かめる。**save は名前を整えるので、
+    /// 打ったままの名前で確かめると `Live/ Set 1` は在ると言われないまま
+    /// `Live/Set 1` を上書きする。
+    func savedName(for name: String) -> String? {
+        savedName(for: name, in: dict())
+    }
+
+    private func savedName(for name: String, in d: [String: Any]) -> String? {
+        let key = d[name] != nil ? name : ETUserPresetName.normalized(name)
+        return key.isEmpty ? nil : key
     }
 
     func remove(_ name: String) {
