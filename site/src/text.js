@@ -11,7 +11,7 @@
 
 import {
   APP_STORE, RELEASES, GITHUB, LICENSE, ISSUES, JSFX_MD, CHAIN_MD, TWITTER, EMAIL,
-  EFFETUNE, APPLE_PRIVACY, CLOUDFLARE_PRIVACY,
+  EFFETUNE, APPLE_PRIVACY, CLOUDFLARE_PRIVACY, OPENAI_PRIVACY,
 } from "./links.js";
 
 const a = (href, label) => `<a href="${href}">${label}</a>`;
@@ -40,15 +40,20 @@ export const TEXT = {
   jsfx: [
     "EffectDeck loads JSFX, the script format REAPER uses. One text file is one effect.",
     `${a(JSFX_MD, "JSFX.md")} sets out what EffectDeck supports and what it rejects. It is written to be handed to a language model as it is.`,
-    "In the app, <strong>Write JSFX with ChatGPT</strong> (under Plugins) opens a page with a request for ChatGPT that points it at JSFX.md. Import the file it returns with <strong>Import JSFX → From Files</strong>, or copy the script and use <strong>From Clipboard</strong>. A paid ChatGPT plan works better, since the free tier may skip the linked file and miss the rules.",
+    // アプリはページを挟まずchatgpt.comを直に開く（EffectPickerView.writeJSFX、61efe19）。
+    "In the app, <strong>Write JSFX with ChatGPT</strong> (under Plugins) opens ChatGPT with a short request that points it at JSFX.md. Import the file it returns with <strong>Import JSFX → From Files</strong>, or copy the script and use <strong>From Clipboard</strong>. A paid ChatGPT plan works better, since the free tier may skip the linked file and miss the rules.",
     // 鎖はJSFXと対になるので同じ節に置く。llms.txtはこの1行と同じことだけを書く。
-    `<strong>Build a chain with ChatGPT</strong> (under Presets) asks ChatGPT for a chain of the built-in effects instead, following ${a(CHAIN_MD, "CHAIN.md")}. Bring the chain back with <strong>Import from clipboard</strong>.`,
+    // 戻し方はCHAIN.mdの「Handing the chain over」と同じ2つ（リンクか、コードブロックを貼る）。
+    `<strong>Build a chain with ChatGPT</strong> (under Presets) opens ChatGPT the same way to ask for a chain of the built-in effects, following ${a(CHAIN_MD, "CHAIN.md")}. Tap the link it returns, or copy the chain and use <strong>Import from clipboard</strong>.`,
   ],
-  // **ChatGPT へは /write を挟む。**依頼文を見せてコピーもでき、有料版を勧める 1 行もそこに置く。
+  // **ページからChatGPTへは/writeを挟む。**依頼文を見せてコピーもでき、有料版を勧める1行もそこに置く。
+  // アプリは2026-09-27から/writeを通らない（依頼文にアプリとDSPの版を入れるため、自分で持つ）。
   jsfxLinks: [a(JSFX_MD, "JSFX.md"), a(CHAIN_MD, "CHAIN.md"), a("/write", "Write JSFX with ChatGPT")],
   shareTitle: "Share links",
+  // **内蔵の効果だけの鎖はEffeTuneのWeb版のリンクになる**（ETShareLink.url(for:)）。
+  // effectdeck.nemut.aiで作るのはAUかJSFXを含む鎖とJSFXだけ（PresetsView、ETFXDLink）。
   share: [
-    "Chains and JSFX scripts shared from EffectDeck are links on effectdeck.nemut.ai. With the app installed, they open in the app.",
+    "JSFX scripts, and chains that use AUv3 plug-ins or JSFX effects, are shared as links on effectdeck.nemut.ai. With the app installed, they open in the app. A chain of only built-in effects is shared as a link to the EffeTune web app.",
     "A JSFX link carries the whole script after the #. Browsers do not send that part to the server.",
   ],
   supportTitle: "Support",
@@ -125,17 +130,21 @@ export const FAQ = [
 // プライバシーポリシー。元は nemut.ai/effetune-live/privacy の 2026-09-18 版。
 // 2026-09-26: このサイト（共有リンクの ?p= が届く）、リンク、JSFX を足し、
 // EffeTune を「改変せずに」としていたのを直した（Patches/effetune-*.diff を当てている）。
+// 2026-09-27: 正はここ（effectdeck.nemut.ai/privacy）。旧URLはnemut.aiのWorkerが301でここへ送る。
+// Linksにアプリが取りに行く先と開く先を全部書いた（From Linkの音、gistのapi.github.com、
+// 共有の拡張、ChatGPTの2つの口、frieveのリンク）。Report a problemの節を足した。
+// **アプリが取りに行く先や開く先を増やしたら、ここも足す。**
 // **中身を変えたら updated も変える。**
 export const PRIVACY = {
   title: "Privacy Policy",
-  updated: "Last updated 2026-09-26",
+  updated: "Last updated 2026-09-27",
   body: `
 <p>
   nemut.ai does not collect or store any of your data. There is no account to sign
-  up for, no analytics, and no advertising. The app sends nothing to nemut.ai.
-  What it sends elsewhere is described under <a href="#presets">Settings and presets</a>
-  and <a href="#links">Links</a>. What this website receives is described under
-  <a href="#website">This website</a>.
+  up for, no analytics, and no advertising. The app sends nothing to nemut.ai on its
+  own. What it sends elsewhere is described under <a href="#presets">Settings and presets</a>,
+  <a href="#links">Links</a> and <a href="#report">Reporting a problem</a>. What this
+  website receives is described under <a href="#website">This website</a>.
 </p>
 
 <h2>Audio</h2>
@@ -161,12 +170,51 @@ export const PRIVACY = {
 
 <h2 id="links">Links</h2>
 <p>
-  When you import a JSFX script from a link, the app downloads it from the address you
-  entered. That request goes to that site, not to nemut.ai.
+  The app downloads a file only when you ask it to:
+</p>
+<ul>
+  <li><strong>Import JSFX → From Link</strong> downloads the JSFX script or impulse
+    response at the address you enter.</li>
+  <li>When you share a link to EffectDeck from another app and tap <strong>Add</strong>,
+    the EffectDeck share extension downloads it the same way. Files and text you share
+    are copied on the device, and nothing is downloaded.</li>
+</ul>
+<p>
+  The request goes to the site in the address, not to nemut.ai. That site sees your IP
+  address, as with any download. For a GitHub page, the app downloads the file from
+  raw.githubusercontent.com instead. For a gist, it may first read the gist's list of
+  files from api.github.com to find the file, then download that file from GitHub.
 </p>
 <p>
-  Sharing an effect chain or a JSFX script makes a link on effectdeck.nemut.ai. The chain or
-  the script is carried in the link itself. Nothing is uploaded when the link is made.
+  <strong>Write JSFX with ChatGPT</strong> and <strong>Build a chain with ChatGPT</strong>
+  open chatgpt.com, or the ChatGPT app if it is installed, with a short request in the
+  address. The request names the versions of EffectDeck and its EffeTune DSP and links
+  to JSFX.md or CHAIN.md on GitHub. It reaches OpenAI when ChatGPT opens. The app sends
+  nothing else to OpenAI. What you do in ChatGPT is covered by the
+  <a href="${OPENAI_PRIVACY}">OpenAI Privacy Policy</a>.
+</p>
+<p>
+  Sharing a JSFX script, or a chain that uses AUv3 plug-ins or JSFX effects, makes a link
+  on effectdeck.nemut.ai. Sharing a chain of only built-in effects, or exporting a chain to
+  EffeTune, makes a link to the EffeTune web app on effetune.frieve.com, which nemut.ai
+  does not run. The chain or the script is carried in the link itself. Nothing is
+  uploaded when the link is made. When EffectDeck opens an effectdeck.nemut.ai link, it
+  reads the link on the device and contacts no server.
+</p>
+<p>
+  Other links in the app, such as those to GitHub issues and Twitter, only open the page
+  and carry nothing from the app.
+</p>
+
+<h2 id="report">Reporting a problem</h2>
+<p>
+  <strong>Report a problem</strong> in Settings opens an email to ${EMAIL} or a new
+  GitHub issue with a report filled in: the app version, the device model and iOS
+  version, the app's audio settings and output, and the end of the app's log. You can
+  change or delete any of it first. The email goes only when you send it. For GitHub,
+  the report is part of the page's address, so it reaches GitHub when the page opens;
+  it is published only when you submit the issue. <strong>Attach log</strong> hands the
+  whole log to the share sheet, and you choose where it goes.
 </p>
 
 <h2 id="presets">Settings and presets</h2>
@@ -241,10 +289,10 @@ export const LLMS_TXT = `# EffectDeck
 - Audio is processed on the device. It is not recorded and not sent over the network.
 - Built-in effects: EQ, dynamics, saturation, reverb, spatial effects and analyzers, ported from EffeTune (MIT license). The chain also takes AUv3 plug-ins installed on the device, impulse responses and AutoEQ profiles.
 - EffectDeck also loads JSFX, the script format REAPER uses. One text file is one effect. JSFX.md describes what is supported and is written to be given to a language model.
-- https://effectdeck.nemut.ai/write has a request to paste into ChatGPT or another assistant to have it write a JSFX effect. The returned file is imported with Import JSFX → From Files, or the copied script with From Clipboard.
-- CHAIN.md describes how a language model writes a chain of the built-in effects that EffectDeck imports. In the app, Build a chain with ChatGPT (under Presets) asks ChatGPT for one, and the chain comes back with Import from clipboard.
+- In the app, Write JSFX with ChatGPT (under Plugins) opens ChatGPT with a short request that points it at JSFX.md. https://effectdeck.nemut.ai/write has the same kind of request to paste into ChatGPT or another assistant. The returned file is imported with Import JSFX → From Files, or the copied script with From Clipboard.
+- CHAIN.md describes how a language model writes a chain of the built-in effects that EffectDeck imports. In the app, Build a chain with ChatGPT (under Presets) opens ChatGPT the same way to ask for one. The chain comes back as a link to tap, or is copied and imported with Import from clipboard.
 - EffectDeck is free on the App Store and its source is on GitHub under the MIT license.
-- Chains and JSFX scripts are shared as links on https://effectdeck.nemut.ai/ . A JSFX link carries the script after the #.
+- JSFX scripts, and chains that use AUv3 plug-ins or JSFX effects, are shared as links on https://effectdeck.nemut.ai/ . A JSFX link carries the script after the #. A chain of only built-in effects is shared as a link to the EffeTune web app.
 
 ## Links
 

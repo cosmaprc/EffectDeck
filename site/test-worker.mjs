@@ -374,7 +374,10 @@ try {
     const icon = await get(DECK, "/icon.png");
     assert.equal(icon.headers.get("content-type"), "image/png");
     assert.deepEqual(icon.bytes, new Uint8Array(readFileSync(new URL("../docs/icon.png", here))));
-    assert.ok((await get(DECK, "/privacy")).body.includes("makes a link on effectdeck.nemut.ai"));
+    const privacy = (await get(DECK, "/privacy")).body.replace(/\s+/g, " ");
+    for (const s of ["makes a link on effectdeck.nemut.ai", "api.github.com", "open chatgpt.com", "Reporting a problem"]) {
+      assert.ok(privacy.includes(s), s);
+    }
     assert.equal((await get(DECK, "/", { method: "POST" })).status, 405);
   });
 } finally {

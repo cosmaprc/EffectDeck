@@ -9,8 +9,8 @@ import { readFileSync } from "node:fs";
 import zlib from "node:zlib";
 import { decodeFXD } from "./src/fxd.js";
 import * as parse from "./src/parse.js";
-import { DECK_HOST, APP_STORE, TESTFLIGHT, GITHUB, RELEASES, JSFX_MD, CHAIN_MD, CHATGPT, CHATGPT_Q } from "./src/links.js";
-import { TEXT, FAQ, LLMS_TXT } from "./src/text.js";
+import { DECK_HOST, APP_STORE, TESTFLIGHT, GITHUB, RELEASES, JSFX_MD, CHAIN_MD, CHATGPT, CHATGPT_Q, OPENAI_PRIVACY, EMAIL } from "./src/links.js";
+import { TEXT, FAQ, LLMS_TXT, PRIVACY } from "./src/text.js";
 import { homeLd, plainText } from "./src/seo.js";
 
 const { chainEntries } = parse;
@@ -167,6 +167,53 @@ await test("CHAIN.md: linked next to JSFX.md on the home page and in llms.txt", 
   assert.ok(LLMS_TXT.includes(`- CHAIN.md: ${CHAIN_MD}`));
   assert.match(LLMS_TXT, /Build a chain with ChatGPT \(under Presets\)/);
   assert.match(LLMS_TXT, /Import from clipboard/);
+});
+
+// アプリの2つの口はchatgpt.comを直に開く（EffectPickerView.writeJSFX / buildChain、61efe19）。
+// /writeはページ側の道で、アプリはそこを通らない。
+await test("the app opens ChatGPT directly; the page still goes through /write", async () => {
+  const para = TEXT.jsfx.find((p) => p.includes("Write JSFX with ChatGPT"));
+  assert.match(para, /opens ChatGPT with a short request that points it at JSFX\.md/);
+  assert.ok(!/opens a page/.test(JSON.stringify(TEXT)), "the app no longer opens a page");
+  const chain = TEXT.jsfx.find((p) => p.includes(CHAIN_MD));
+  assert.match(chain, /opens ChatGPT the same way/);
+  assert.match(chain, /Tap the link it returns/);
+  assert.match(LLMS_TXT, /Write JSFX with ChatGPT \(under Plugins\) opens ChatGPT/);
+  assert.match(LLMS_TXT, /comes back as a link to tap/);
+});
+
+// 内蔵の効果だけの鎖はEffeTuneのWeb版のリンクになる（ETShareLink.url(for:)）。
+await test("share links: effectdeck.nemut.ai only for JSFX and chains with AUv3 or JSFX", async () => {
+  assert.match(TEXT.share[0], /^JSFX scripts, and chains that use AUv3 plug-ins or JSFX effects, are shared as links on effectdeck\.nemut\.ai\./);
+  assert.match(TEXT.share[0], /A chain of only built-in effects is shared as a link to the EffeTune web app\./);
+  assert.match(LLMS_TXT, /A chain of only built-in effects is shared as a link to the EffeTune web app\./);
+  assert.ok(!LLMS_TXT.includes("Chains and JSFX scripts are shared"));
+});
+
+// プライバシーポリシーのLinksは、アプリが取りに行く先と開く先を全部言う（text.jsのPRIVACYの頭）。
+await test("privacy: Links covers every download and every page the app opens", async () => {
+  const body = PRIVACY.body.replace(/\s+/g, " ");
+  assert.equal(PRIVACY.updated, "Last updated 2026-09-27");
+  for (const s of [
+    "From Link</strong> downloads the JSFX script or impulse response",
+    "the EffectDeck share extension downloads it the same way",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "open chatgpt.com, or the ChatGPT app if it is installed",
+    `href="${OPENAI_PRIVACY}"`,
+    "makes a link on effectdeck.nemut.ai",
+    "effetune.frieve.com, which nemut.ai does not run",
+    "reads the link on the device and contacts no server",
+    '<h2 id="report">Reporting a problem</h2>',
+    `an email to ${EMAIL} or a new GitHub issue`,
+    "it reaches GitHub when the page opens",
+  ]) assert.ok(body.includes(s), s);
+  // 頭の段落が指す節がどれも在る
+  for (const id of ["presets", "links", "report", "website"]) {
+    assert.ok(body.includes(`href="#${id}"`), `#${id}`);
+    assert.ok(body.includes(`id="${id}"`), `id=${id}`);
+  }
+  assert.ok(!/[\u3040-\u30ff\u4e00-\u9fff]/.test(body), "Japanese in the policy");
 });
 
 await test("chain preview reads the share-link p", async () => {

@@ -24,6 +24,8 @@ export const EMAIL = "support@nemut.ai";
 export const EFFETUNE = "https://github.com/Frieve-A/effetune";
 export const APPLE_PRIVACY = "https://www.apple.com/legal/privacy/";
 export const CLOUDFLARE_PRIVACY = "https://www.cloudflare.com/privacypolicy/";
+// プライバシーポリシーのLinks（アプリのChatGPTの2つの口がchatgpt.comを開く）。
+export const OPENAI_PRIVACY = "https://openai.com/policies/privacy-policy/";
 
 // /writeで見せる依頼文。**決め事はJSFX.mdに書き、ここには書かない。**
 // 長くするとChatGPTへ渡る途中で切れる（"so keep"の手前までしか入らなかった）。

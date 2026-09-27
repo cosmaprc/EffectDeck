@@ -498,7 +498,9 @@ function jsfxPage() {
 
 // MARK: - /write
 
-// アプリの「Write JSFX with ChatGPT」が開くページ。**字は links.js の CHATGPT_Q 1 か所から。**
+// JSFXをChatGPTに書かせる依頼を見せるページ。トップのJSFX節と古いビルドのボタンから来る。
+// アプリは2026-09-27からここを通らず、chatgpt.comを直に開く（EffectPickerView.writeJSFX）。
+// **字は links.js の CHATGPT_Q 1 か所から。**
 // JS が無くても字は選べるし、Open ChatGPT はただのリンク。
 function writeScript(t) {
   return inline(`(() => {
