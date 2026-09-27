@@ -91,6 +91,12 @@ spl1 *= g;
 file only if it finds `desc:` or one of `@init` `@slider` `@block` `@sample`
 `@serialize` `@gfx` within the first 80 lines.
 
+**`author:` is the user's name**, because the user is the author of the effect
+they asked for. EffectDeck lists imported scripts under their author. Use the
+name the user goes by if you know it; otherwise ask for it when you ask what
+effect they want. Never write yourself, ChatGPT, OpenAI or EffectDeck as the
+author.
+
 ### The file itself
 
 - **A file extension is not required.** REAPER stores JSFX without one and
@@ -129,6 +135,7 @@ word in a string, break it up (`"inclu" + "de("`).
 ### Self-check before returning a script
 
 - [ ] `desc:` is the first non-comment line
+- [ ] `author:` is the user's name, not yours
 - [ ] no line begins with `import`, `filename:`, or `data:`
 - [ ] the text `include(` appears nowhere (strings and comments included)
 - [ ] no MIDI function, no file slider, no external resource
