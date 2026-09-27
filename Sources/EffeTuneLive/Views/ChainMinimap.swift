@@ -145,12 +145,9 @@ private struct ETMinimapRow: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    // **棒は名前の下ではなく右端に置く。**名前（15pt）の下に2本積むと44ptに
-                    // 収まらず、名前が上へ押し出され、Rの棒が次の行へはみ出していた。
-                    // 右端なら名前はどの行とも同じ高さに並ぶ。
+                    // Level Meterの行はクリップしたときだけOVERLOADを出す。棒は出さない（オーナーの判断）。
                     if let tap = item.levelTap {
-                        ETMinimapLevel(tap: tap)
-                            .frame(width: ETMinimapLevel.width)
+                        ETMinimapOverload(tap: tap)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -178,66 +175,42 @@ private struct ETMinimapRow: View {
     }
 }
 
-/// Level Meterの行の棒。1チャンネル1本、標準のGauge（.linearCapacity）で出す。
-/// 行の右端に、上からL、Rの順で積む。
+/// Level Meterの行の札。クリップしてからLevelMeterView.overloadTimeの間だけ、
+/// カードと同じOVERLOADの札（GraphCanvasのbadge）を行の右端に出す。それ以外は何も出さない。
 ///
 /// **テレメトリを観測するのはこのViewだけ。**一覧ぜんぶが枠ごとに組み直されないように。
-/// 読み方と落ちる速さはカード（LevelMeterView）と同じ。
-/// 3チャンネル以上は2段に振り分ける。行の高さを変えないため。
-private struct ETMinimapLevel: View {
-    /// 棒の幅。名前の取り分を残す（一覧は最小220pt）。
-    static let width: CGFloat = 64
-
+/// 決め方はカードと同じ（LevelMeterView.overloads）。
+private struct ETMinimapOverload: View {
     let tap: UInt32
 
     @ObservedObject private var telemetry = Telemetry.shared
-    /// 棒の値（dB）。枠が来るたびに落としながら追いかける。
-    @State private var bars: [Int: Double] = [:]
-    @State private var lastFall = Date()
+    @State private var until: Date?
 
     var body: some View {
         let reading = LevelMeterView.read(telemetry.frame(tap: tap, type: .level))
-        let count = reading?.peaks.count ?? 0
-        let lines = min(count, 2)
-        let perLine = lines == 0 ? 0 : (count + lines - 1) / lines
-        VStack(spacing: 4) {
-            ForEach(0..<lines, id: \.self) { line in
-                HStack(spacing: 3) {
-                    ForEach(line * perLine ..< min(count, (line + 1) * perLine), id: \.self) { ch in
-                        // **名札はGaugeに渡さない。**labelsHiddenを付けても.linearCapacityは
-                        // 名札（L、R）を棒の上に描き、1本ぶん背が伸びていた。
-                        // 何のチャンネルかは読み上げにだけ出す。
-                        Gauge(value: level(ch, reading), in: LevelMeterView.floorDB...0) {
-                            EmptyView()
-                        }
-                        .gaugeStyle(.linearCapacity)
-                        .accessibilityLabel(LevelMeterView.label(ch, of: count))
-                    }
-                }
+        ZStack {
+            if let until, Date() < until {
+                // 字の大きさと色はGraphCanvasのbadgeと同じ。
+                Text("OVERLOAD")
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(0.5)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.tint, in: .capsule)
+                    .fixedSize()
             }
         }
         .onChange(of: reading?.sequence ?? 0) { _, _ in advance(reading) }
-        .onAppear { lastFall = Date() }
     }
 
-    private func level(_ ch: Int, _ reading: LevelMeterView.Reading?) -> Double {
-        let now = reading.map { ETdB.fromAmplitude($0.peaks[ch], floor: LevelMeterView.floorDB) }
-            ?? LevelMeterView.floorDB
-        return min(0, max(LevelMeterView.floorDB, bars[ch] ?? now))
-    }
-
-    /// 新しい枠が来たときだけ落とす（LevelMeterView.advanceと同じ計算）。
+    /// 新しい枠が来たときだけ見る（LevelMeterView.advanceと同じ）。
     private func advance(_ reading: LevelMeterView.Reading?) {
         guard let reading else { return }
         let now = Date()
-        let dt = min(max(now.timeIntervalSince(lastFall), 0), 0.5)
-        lastFall = now
-        var next: [Int: Double] = [:]
-        for ch in reading.peaks.indices {
-            let db = ETdB.fromAmplitude(reading.peaks[ch], floor: LevelMeterView.floorDB)
-            let fallen = (bars[ch] ?? LevelMeterView.floorDB) - LevelMeterView.fallRate * dt
-            next[ch] = max(db, max(fallen, LevelMeterView.floorDB))
+        if let until, now >= until { self.until = nil }
+        if LevelMeterView.overloads(reading) {
+            until = now.addingTimeInterval(LevelMeterView.overloadTime)
         }
-        bars = next
     }
 }

@@ -52,7 +52,8 @@ struct LevelMeterView: View {
     static let floorDB: Double = -96
     static let fallRate: Double = 20
     private static let holdTime: Double = 1.0
-    private static let overloadTime: Double = 5.0
+    /// OVERLOADを出し続ける長さ。左の一覧の札（ChainMinimap）も同じ。
+    static let overloadTime: Double = 5.0
     private static let ticks: [Double] = [-96, -72, -48, -24, -12, 0]
 
     var body: some View {
@@ -135,10 +136,15 @@ struct LevelMeterView: View {
         bars = next
 
         if let until = overloadUntil, now >= until { overloadUntil = nil }
-        // clipFlags か、振幅が 1 を超えたら（level_meter.js:310）。
-        if r.clipped.contains(true) || r.peaks.contains(where: { $0 > 1 }) {
+        if Self.overloads(r) {
             overloadUntil = now.addingTimeInterval(Self.overloadTime)
         }
+    }
+
+    /// この枠でクリップしたか。clipFlagsか、振幅が1を超えたら（level_meter.js:310）。
+    /// 左の一覧の札（ChainMinimap）も同じ決め方で出す。
+    static func overloads(_ r: Reading) -> Bool {
+        r.clipped.contains(true) || r.peaks.contains(where: { $0 > 1 })
     }
 
     // MARK: 枠を読む
