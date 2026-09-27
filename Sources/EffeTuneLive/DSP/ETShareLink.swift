@@ -10,13 +10,13 @@
 //  こちらも素の base64 で書く。
 //  **読むほうは広く受ける**（ETChainText.json(from:)）。ChatGPTなどが作ったリンクや
 //  貼られた返事は、base64urlや改行入りで来ることがある。
+//
+//  **Foundationだけ。**書く側は鎖の段（ETChainNode）をPipelineStore.Loadedへ写してから書くので、
+//  EffeTuneDSPを連れてこずに単体テストに入る（ShareLinkTests）。
 
 import Foundation
-import os
 
 enum ETShareLink {
-
-    private static let log = Logger(subsystem: "ai.nemut.effetune", category: "share")
 
     /// web 版の置き場。ここに `?p=` を付けたものが共有リンクになる。
     static let base = "https://effetune.frieve.com/effetune.html"
@@ -41,10 +41,33 @@ enum ETShareLink {
     /// an official EffeTune link. An in-place processor can simply disappear.
     /// A processor which routes between buses is replaced by a 0 dB Volume so
     /// that removing the AU does not also disconnect the remaining graph.
-    static func url(for chain: [EffeTuneDSP.Node]) -> URL? {
-        let short = effeTuneForm(chain)
-        guard !short.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: short,
+    static func url(for chain: [ETChainNode]) -> URL? {
+        url(for: chain.map { PipelineStore.Loaded($0) })
+    }
+
+    static func url(for items: [PipelineStore.Loaded]) -> URL? {
+        link(base: base, form: effeTuneForm(items))
+    }
+
+    /// **落とさずに渡す。**外から来たもの（AU / JSFX）も、図の見せ方も、
+    /// 鎖の形もそのまま入る。受けられるのは EffectDeck だけ。
+    ///
+    /// JSFX が乗るのは鍵（`jsfx:<名前>`）だけで、**ソースは入らない**
+    /// （DSP/DisplayParams.swift と ETJSFXHost の置き場を読むこと）。
+    /// 受け取った側が同じ JSFX を持っていなければ、その段は解決できずに落ちる。
+    /// 再配布にはならない。
+    static func deckURL(for chain: [ETChainNode]) -> URL? {
+        deckURL(for: chain.map { PipelineStore.Loaded($0) })
+    }
+
+    static func deckURL(for items: [PipelineStore.Loaded]) -> URL? {
+        link(base: deckBase, form: PipelineStore.shortForm(items))
+    }
+
+    /// ショート形式を`<base>?p=<base64>`にする。
+    private static func link(base: String, form: [[String: Any]]) -> URL? {
+        guard !form.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: form,
                                                      options: [.withoutEscapingSlashes,
                                                                .sortedKeys]),
               var comps = URLComponents(string: base) else { return nil }
@@ -57,7 +80,7 @@ enum ETShareLink {
         // 出るのは Section 名に ASCII 以外を入れたとき（UTF-8 のバイト並びが
         // base64 で `+` を生む位置に来る）で、ASCII 名だけだと出ない。
         // こちら（ETShareLink.parse）は URLComponents 経由なので読めてしまい、
-        // 送った側では気づけない。
+        // 送った側では気づけない（ShareLinkTests が URLSearchParams と同じ読み方で見張る）。
         //
         // `/` はクエリでも `URLSearchParams` でもそのまま通るので触らない。
         // base64 に `&` `#` `?` は出ない。
@@ -66,44 +89,28 @@ enum ETShareLink {
         return comps.url
     }
 
-    /// **落とさずに渡す。**外から来たもの（AU / JSFX）も、図の見せ方も、
-    /// 鎖の形もそのまま入る。受けられるのは EffectDeck だけ。
-    ///
-    /// JSFX が乗るのは鍵（`jsfx:<名前>`）だけで、**ソースは入らない**
-    /// （DSP/DisplayParams.swift と ETJSFXHost の置き場を読むこと）。
-    /// 受け取った側が同じ JSFX を持っていなければ、その段は解決できずに落ちる。
-    /// 再配布にはならない。
-    static func deckURL(for chain: [EffeTuneDSP.Node]) -> URL? {
-        let short = PipelineStore.shortForm(chain)
-        guard !short.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: short,
-                                                     options: [.withoutEscapingSlashes,
-                                                               .sortedKeys]),
-              var comps = URLComponents(string: deckBase) else { return nil }
-        // `+` を %2B にするのは url(for:) と同じ理由。
-        let encoded = data.base64EncodedString().replacingOccurrences(of: "+", with: "%2B")
-        comps.percentEncodedQuery = "p=" + encoded
-        return comps.url
-    }
-
     /// An upstream-compatible projection of an EffectDeck chain.
     /// The sound will necessarily differ where an external processor was used,
     /// but native effects and bus topology remain loadable by EffeTune.
-    static func effeTuneForm(_ chain: [EffeTuneDSP.Node]) -> [[String: Any]] {
-        let encoded = PipelineStore.shortForm(chain)
-        return zip(chain, encoded).compactMap { node, entry in
+    static func effeTuneForm(_ chain: [ETChainNode]) -> [[String: Any]] {
+        effeTuneForm(chain.map { PipelineStore.Loaded($0) })
+    }
+
+    static func effeTuneForm(_ items: [PipelineStore.Loaded]) -> [[String: Any]] {
+        let encoded = PipelineStore.shortForm(items)
+        return zip(items, encoded).compactMap { item, entry in
             // Sectionの終端は印を外し、上流が組の終わりに使う素のSection("")にする。
-            guard node.isExternal else { return PipelineStore.upstreamEntry(entry) }
+            guard !item.externalID.isEmpty else { return PipelineStore.upstreamEntry(entry) }
 
             // With no bus crossing, bypassing the processor is deletion.
-            guard node.inputBus != node.outputBus else { return nil }
+            guard item.inputBus != item.outputBus else { return nil }
 
             // A disabled routed node contributes nothing in EffectDeck, so its
             // replacement must also remain disabled. Routing and channel keys
             // use the official short-form spelling already present in entry.
             var passthrough: [String: Any] = [
                 "nm": "Volume",
-                "en": node.enabled,
+                "en": item.enabled,
                 "vl": 0.0,
             ]
             for key in ["ib", "ob", "ch"] {

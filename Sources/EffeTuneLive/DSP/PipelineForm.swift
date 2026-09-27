@@ -4,7 +4,7 @@
 //  PipelineStore.swiftから出した。あちらは鎖のNode（EffeTuneDSP）と端末への書き込みを持ち、
 //  AVFoundationとSwiftUIを連れてくるので単体テストに入れられない。
 //  書く側と読む側をどちらもここに置き、往復を実機なしで試す（PipelineStoreTests）。
-//  **書くのはここだけ。**NodeからはPipelineStore.Loadedへ写してから書く（PipelineStore.swift）。
+//  **書くのはここだけ。**NodeからはPipelineStore.Loadedへ写してから書く（ChainEditing.swift）。
 //  形そのものの説明はPipelineStore.swiftの頭。
 //
 //  **Sectionの終端（rootReset）には印を付ける（ETSection.rootResetKey）。**

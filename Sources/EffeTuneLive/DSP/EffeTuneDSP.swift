@@ -75,9 +75,8 @@ final class EffeTuneDSP: ObservableObject {
     static let telemetryRingBytes: UInt32 = 256 * 1024
     static let telemetryHz: Float = 60
 
-    /// 何も無いときに置く 1 本。restore() の既定と resetToDefault() が同じものを
-    /// 指すように、型名はここだけに書く。
-    private static let defaultType = "LevelMeterPlugin"
+    /// 何も無いときに置く 1 本。型名は ETChainEditing.defaultType だけに書く。
+    private static let defaultType = ETChainEditing.defaultType
 
     private init() {}
 
@@ -354,18 +353,13 @@ final class EffeTuneDSP: ObservableObject {
         pendingPersist?.cancel()
         pendingPersist = nil
 
-        // **restore() が置いた既定の 1 本は残さない。**
-        // 「まだ何も残していない（hasSaved が false）」かつ「並んでいるのが
-        // 既定そのもの」は、人が組んだ鎖ではなく restore() の第二の枝が
-        // 置いたものしかありえない。これを書くと 2 つ壊れる:
-        //   - iCloud 側の鎖が Level Meter 1 本で上書きされる（CloudMirror）
-        //   - "pipeline.last" が埋まるので、遅れて降りてくる鎖を受ける口
-        //     （CloudMirror.seed の「手元が空の鍵だけ」）が閉じる
-        // 入れ直した端末では、この 2 つが同じ起動の数ミリ秒差で起きていた。
-        //
-        // 人が消して既定に戻した場合は hasSaved が true なので、ここは通る。
+        // **restore() が置いた既定の 1 本は残さない**（ETChainEditing.shouldPersist）。
+        // 書くと iCloud 側の鎖が Level Meter 1 本で上書きされ、遅れて降りてくる鎖を
+        // 受ける口も閉じる。入れ直した端末では、この 2 つが同じ起動の数ミリ秒差で起きていた。
+        // 人が消して既定に戻した場合は hasSaved が true なので残す。
         // 何も触らずに終了した場合は次の起動でまた既定が並ぶ。見え方は同じ。
-        guard !(isDefaultChain && !PipelineStore.hasSaved) else { return }
+        guard ETChainEditing.shouldPersist(types: chain.map(\.spec.type),
+                                           hasSaved: PipelineStore.hasSaved) else { return }
 
         // **host に生きた instance が無いときは、読み込んだ state を残す。**
         // 元のファイルが無い端末（消した・iCloud で鎖だけ来た）や、組み立てに
@@ -522,56 +516,33 @@ final class EffeTuneDSP: ObservableObject {
         return line != nil
     }
 
-    /// この段が実際に処理する幅。descriptor の channelSpec から出す。
+    /// この段を engine が実際に処理する幅。**engine が回さない段は 0。**
     ///
-    /// **engine.cpp:759 に合わせる。**
-    /// `channelSpec == -1 || channelSpec >= 16 ? 2 : 1`。
-    /// 16 は「1ch 目と 2ch 目の対」で、17 以降が "34"、"56" と続く。
-    /// 16 を 1 に数えると、対に置いた段へ 1ch ぶんの形で資産を送ることになる。
+    /// 決まりは ETChannel.processedWidth（engine.cpp:757-769 の飛ばし方と同じ）。
+    /// 前は対を常に 2、1 本を常に 1 と数えていたので、出力 2ch で "56" に置いた IR Reverb や
+    /// Crosstalk を 2ch 幅として設計していた（engine はその段を飛ばす）。
     /// -2（All）は接続中の出力IFに合わせた engine の幅そのもの。
     static func routedChannels(of node: Node) -> Int {
-        switch node.channelSpec {
-        case -2: return Int(shared.maxChannels)
-        case -1: return min(2, Int(shared.maxChannels))
-        case 16...:  return 2
-        default:     return 1
-        }
+        ETChannel.processedWidth(spec: node.channelSpec, engineChannels: Int(shared.maxChannels))
     }
 
-    /// 上流が受けない Ch に置かれた段。**descriptor では enabled 0 で渡す**
-    /// （カーネルを回さず、遅延も engine の合計に入らない）。
+    /// 外部の段（AU / JSFX）の host に組ませる幅。**0 を渡さない。**
     ///
-    /// 上流は plugin-execution-capabilities.js:37-89 で Ch を mode に直し、
-    /// supportedChannelModes に無ければ bypass する（:91-110）。
-    ///   Bass Extender   mono / stereo-pair（bass_extender.js:15-19）
-    ///     → 既定（-1。出力 1ch なら mono）と対（16 以降）だけ。All は幅によらず外す
-    ///   Bass Management all（bass_management.js:15-19）→ All（-2）だけ
-    /// 上流の bypass は入力をそのまま出力 bus へ渡す（offline-processor.js:878-879 で
-    /// 処理前の buffer を applyOfflineRoutingResult へ回す）。
-    /// enabled 0 は bus を移さないので、**入力と出力の bus が違う段だけ**音が食い違う。
+    /// engine が飛ばす段でも host は形（バスの ch 数）を作るので、置いた Ch が名乗る幅のまま
+    /// 渡す（ETChannel.nominalWidth。routedChannels が 0 を返すようになる前と同じ値）。
+    private static func externalChannels(of node: Node) -> Int {
+        ETChannel.nominalWidth(spec: node.channelSpec, engineChannels: Int(shared.maxChannels))
+    }
+
+    /// 上流が受けない Ch に置かれた段。**descriptor では enabled 0 で渡す**。
+    /// 決まりは ETChainEditing.isChannelBypassed。
     static func isChannelBypassed(_ node: Node) -> Bool {
-        switch node.spec.type {
-        case "BassExtenderPlugin":
-            return !(node.channelSpec == -1 || node.channelSpec >= 16)
-        case BassManagementDesigners.type:
-            return node.channelSpec != -2
-        default:
-            return false
-        }
+        ETChainEditing.isChannelBypassed(type: node.spec.type, channelSpec: node.channelSpec)
     }
 
-    /// 資産を送り直さないと効かない値。
-    ///
-    /// カーネルはこの 3 つを読まない（ir_reverb/kernel.cpp が params_ から
-    /// 読むのは preDelay と wetLevel と dry だけ）。畳み込みの形は
-    /// beginAsset に渡す AssetBeginInfo で決まるので、選び直したら送り直す。
-    private static let assetConfigKeys: Set<String> = ["cm", "lt", "cr"]
-
-    /// その段で、資産を送り直さないと効かない値の位置。
+    /// その段で、資産を送り直さないと効かない値の位置（ETChainEditing.assetConfigOffsets）。
     private static func assetConfigOffsets(of node: Node) -> Set<Int> {
-        guard !node.irId.isEmpty else { return [] }
-        return Set(node.spec.params.filter { assetConfigKeys.contains($0.key) }
-                                   .map(\.offset))
+        ETChainEditing.assetConfigOffsets(params: node.spec.params, irId: node.irId)
     }
 
     /// その段がいま名乗っている遅れ（標本）。abi.h:125。
@@ -596,25 +567,17 @@ final class EffeTuneDSP: ObservableObject {
         }
     }
 
-    /// 選択肢の param から、いま選ばれている綴りを引く。
-    /// enumeration の値は選択肢の添字なので、そこから戻す。
+    /// 選択肢の param から、いま選ばれている綴りを引く（ETChainEditing.choice）。
     static func choice(_ key: String, of node: Node) -> String {
-        guard let i = node.spec.params.firstIndex(where: { $0.key == key }),
-              case .enumeration(let options) = node.spec.params[i].kind,
-              i < node.values.count else { return "auto" }
-        let n = Int(node.values[i].rounded())
-        return options.indices.contains(n) ? options[n] : "auto"
+        ETChainEditing.choice(key, params: node.spec.params, values: node.values)
     }
 
     /// プリセットを**いまの鎖へ足す**。置き換えない。
     ///
-    /// 上流 preset-manager.js:78 addPresetToPipeline と同じ組み立てにしてある:
-    ///   1. 先頭に Section を 1 本。名前（cm）はプリセット名（:95-105）
-    ///   2. その後ろにプリセットの中身（:165）
-    ///   3. **挿入先の次が Section でなく、末尾でもないなら**、終端用の
-    ///      名前の無い Section をもう 1 本（:149-160, :166-168）。
-    ///      後ろにあった鎖がこのプリセットの区切りに巻き込まれないように切る
-    ///   4. 足したものは全部開いた状態にする（:170-172 expandedPlugins.add）
+    /// 何をどこへ差し込むかは ETChainEditing.presetInsertion が決める（上流
+    /// preset-manager.js:78 addPresetToPipeline と同じ組み立て）。先頭にプリセット名の
+    /// Section、中身、要るときだけ閉じる名前の無い Section。外部の段には新しい身元が付いてくる。
+    /// 足したものは全部開いた状態にする（:170-172 expandedPlugins.add）。
     ///
     /// 置き換えではないので、プリセットを 2 つ選べば 2 つとも鎖に並ぶ。
     /// 鎖を捨てたいときは ⋯ の Reset Pipeline を使う。
@@ -622,34 +585,12 @@ final class EffeTuneDSP: ObservableObject {
     /// index を省くと末尾へ足す（上流の insertionIndex = null と同じ）。
     func addPreset(named name: String, items: [PipelineStore.Loaded], at index: Int? = nil) {
         guard ready, !items.isEmpty else { return }
-        let target = min(max(index ?? chain.count, 0), chain.count)
-
-        var toAdd: [PipelineStore.Loaded] = [
-            // **channelSpec は -1（Stereo）。** 0 は Left で、
-            // ここに 0 を入れていたせいでプリセットを読むだけで Routing が
-            // 既定から外れ、触っていないのに「Reset routing」が生えていた。
-            // 保存や共有リンクにも Section へ "ch":"L" が混ざり、
-            // 再起動すると parse が -1 に直すので表示だけ変わっていた。
-            PipelineStore.Loaded(spec: ETSection.spec, values: [], enabled: true,
-                                 inputBus: 0, outputBus: 0, channelSpec: -1,
-                                 sectionName: name)
-        ]
-        toAdd += items
-
-        // 末尾に足すなら閉じる必要が無い（その先に何も無い）。
-        // 次が既に Section ならそれが区切りになるので、重ねない。
-        // **終端（isRootReset）も区切り。**isSectionは偽なので別に見る。見ないと名前の無い
-        // Sectionが配下を持たないまま終端の前に残り、終端を保存するようになってからは再起動しても消えない。
-        // 上流の終端は名前の無いSectionそのものなので、上流の「次がSectionなら」に当たる。
-        let nextCloses = target < chain.count && (chain[target].isSection || chain[target].isRootReset)
-        if target < chain.count && !nextCloses {
-            toAdd.append(PipelineStore.Loaded(spec: ETSection.spec, values: [], enabled: true,
-                                              inputBus: 0, outputBus: 0, channelSpec: -1,
-                                              sectionName: ""))
-        }
+        let plan = ETChainEditing.presetInsertion(named: name, items: items, at: index,
+                                                  roles: chain.map(\.role))
+        let target = plan.target
 
         var made: [Node] = []
-        for item in toAdd {
+        for item in plan.items {
             var node = Node(spec: item.spec, values: item.values)
             // プリセットに入っていた終端。appendと同じくinstanceを作らずに置く。
             if item.isRootReset {
@@ -666,10 +607,8 @@ final class EffeTuneDSP: ObservableObject {
             node.display = item.display
             node.externalID = item.externalID.isEmpty ? nil : item.externalID
             if node.isExternal {
-                // Adding a preset creates new processor instances. Reusing the
-                // IDs stored in the preset would make two cards share one AU,
-                // one parameter tree and one external slot.
-                node.externalInstanceID = UUID().uuidString
+                // 身元は presetInsertion が新しく付け直してある（同じ AU を 2 枚のカードが取り合わない）。
+                node.externalInstanceID = item.externalInstanceID
                 node.externalState = item.externalState
                 guard let externalIndex = try? ETAUExternalBridge.shared.reserve(
                     instanceID: node.externalInstanceID) else { continue }
@@ -730,7 +669,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 画面で「戻す」を押せなくするのに使う。型名を画面側に持たせないため、
     /// 何が既定かの判断はここに置く。
     var isDefaultChain: Bool {
-        chain.count == 1 && chain[0].spec.type == Self.defaultType
+        ETChainEditing.isDefaultChain(types: chain.map(\.spec.type))
     }
 
     /// 鎖を捨てて、初めて起動したときと同じ Level Meter 1 本へ戻す。
@@ -784,11 +723,10 @@ final class EffeTuneDSP: ObservableObject {
         node.display = item.display
         node.externalID = item.externalID.isEmpty ? nil : item.externalID
         if node.isExternal {
-            let requestedID = item.externalInstanceID.isEmpty
-                ? UUID().uuidString : item.externalInstanceID
-            node.externalInstanceID = chain.contains(where: {
-                $0.isExternal && $0.externalInstanceID == requestedID
-            }) ? UUID().uuidString : requestedID
+            // 空か、既に鎖に居る外部の段と同じ身元なら新しく作る（ETChainEditing.externalInstanceID）。
+            node.externalInstanceID = ETChainEditing.externalInstanceID(
+                requested: item.externalInstanceID,
+                taken: Set(chain.filter(\.isExternal).map(\.externalInstanceID)))
             node.externalState = item.externalState
             guard let index = try? ETAUExternalBridge.shared.reserve(
                 instanceID: node.externalInstanceID) else { return false }
@@ -1131,7 +1069,7 @@ final class EffeTuneDSP: ObservableObject {
     private func applySectionGates() {
         // **答えを出すのは ETPipelineAnalysis だけ。**ここは書き戻すだけで、
         // 数え方をここにも持たない（持つと二重管理になる。前は ETSection.gates が
-        // 名前と型から数えていて、rootReset を Section と区別できなかった）。
+        // 名前と型から数えていて、rootReset を Section と区別できなかった。もう消してある）。
         let a = analysis
         for i in chain.indices {
             let gate = chain[i].role == .effect ? a.gate(of: chain[i].id) : 1
@@ -1152,33 +1090,7 @@ final class EffeTuneDSP: ObservableObject {
         let retiredProbes = syncProbes()
         // Section は instance を持たないのでここで落ちる。上流も同じく
         // descriptor に入れない（dsp-pipeline-descriptor.js:194-198）。
-        var nodes: [ETPipeNode] = []
-        nodes.reserveCapacity(chain.count * 2)
-        for n in chain where n.instance != 0 || n.isExternal {
-            // 探りは相手の**直前**。engine.cpp:917 は descriptor の順に回すので、
-            // 直前の段が見ている音 = その段に入る音。
-            if let probe = probes[n.id] {
-                // enabled: 2 = 音は通すが「動いている数」には入れない
-                // （ETPipeline.h の enabled）。人が置いた段ではないので、
-                // 画面の Effects running に混ぜると数が合わなくなる。
-                nodes.append(ETPipeNode(instance: probe.instance,
-                                        enabled: 2,
-                                        inputBus: n.inputBus,
-                                        outputBus: n.inputBus,
-                                        channelSpec: n.channelSpec,
-                                        sectionGate: n.sectionGate,
-                                        kind: UInt8(ET_PIPE_NODE_NATIVE),
-                                        externalIndex: 0))
-            }
-            nodes.append(ETPipeNode(instance: n.isExternal ? 0 : n.instance,
-                                    enabled: n.enabled && !Self.isChannelBypassed(n) ? 1 : 0,
-                                    inputBus: n.inputBus,
-                                    outputBus: n.outputBus,
-                                    channelSpec: n.channelSpec,
-                                    sectionGate: n.sectionGate,
-                                    kind: UInt8(n.isExternal ? ET_PIPE_NODE_EXTERNAL : ET_PIPE_NODE_NATIVE),
-                                    externalIndex: n.externalIndex))
-        }
+        let nodes = pipeNodes()
         nodes.withUnsafeBufferPointer { ETPipeline_Publish($0.baseAddress, UInt32($0.count)) }
         // 外した探りは、探りの無い descriptor を出したあとで壊す。
         retire(retiredProbes)
@@ -1197,6 +1109,22 @@ final class EffeTuneDSP: ObservableObject {
         persist()
     }
 
+    /// 音のスレッドへ渡す並び。**中身は ETChainEditing.descriptors が決める**
+    /// （探りは相手の直前・enabled 2、上流が受けない Ch の段は切）。
+    /// ここは C の ETPipeNode へ写すだけで、publish と republish が同じものを出す。
+    private func pipeNodes() -> [ETPipeNode] {
+        ETChainEditing.descriptors(chain: chain, probes: probes.mapValues(\.instance)).map { d in
+            ETPipeNode(instance: d.instance,
+                       enabled: d.enabled,
+                       inputBus: d.inputBus,
+                       outputBus: d.outputBus,
+                       channelSpec: d.channelSpec,
+                       sectionGate: d.sectionGate,
+                       kind: UInt8(d.kind == .external ? ET_PIPE_NODE_EXTERNAL : ET_PIPE_NODE_NATIVE),
+                       externalIndex: d.externalIndex)
+        }
+    }
+
     /// 鎖の形を変える。既定は 0→0 の All。
     ///
     /// sectionGate は受けるが残らない。Section の入切と鎖の並びから決まる値なので、
@@ -1205,6 +1133,7 @@ final class EffeTuneDSP: ObservableObject {
                     channelSpec: Int8? = nil, sectionGate: UInt8? = nil) {
         guard chain.indices.contains(index) else { return }
         let previousChannels = Self.routedChannels(of: chain[index])
+        let previousExternalChannels = Self.externalChannels(of: chain[index])
         let previousBypass = Self.isChannelBypassed(chain[index])
         if let v = inputBus    { chain[index].inputBus = v }
         if let v = outputBus   { chain[index].outputBus = v }
@@ -1220,8 +1149,8 @@ final class EffeTuneDSP: ObservableObject {
             ETAssetReattach.paramsChanged(chain[index])
         }
         if chain[index].isExternal {
-            let channels = Self.routedChannels(of: chain[index])
-            if channels != previousChannels {
+            let channels = Self.externalChannels(of: chain[index])
+            if channels != previousExternalChannels {
                 if chain[index].externalID?.hasPrefix("jsfx:") == true {
                     ETJSFXHost.shared.setChannels(channels,
                                                   instanceID: chain[index].externalInstanceID)
@@ -1243,7 +1172,7 @@ final class EffeTuneDSP: ObservableObject {
 
     private func restoreExternal(_ node: Node) {
         guard let componentID = node.externalID else { return }
-        let channels = Self.routedChannels(of: node)
+        let channels = Self.externalChannels(of: node)
         if componentID.hasPrefix("jsfx:") {
             ETJSFXHost.shared.restore(componentID: componentID,
                                       instanceID: node.externalInstanceID,
@@ -1330,31 +1259,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 鎖の中身は変わっていないので保存する理由が無い。
     func republish(reason: String = "壊したので組み直した") {
         guard engine != 0 else { return }
-        var nodes: [ETPipeNode] = []
-        nodes.reserveCapacity(chain.count * 2)
-        for n in chain where n.instance != 0 || n.isExternal {
-            if let probe = probes[n.id] {
-                // enabled: 2 = 音は通すが「動いている数」には入れない
-                // （ETPipeline.h の enabled）。人が置いた段ではないので、
-                // 画面の Effects running に混ぜると数が合わなくなる。
-                nodes.append(ETPipeNode(instance: probe.instance,
-                                        enabled: 2,
-                                        inputBus: n.inputBus,
-                                        outputBus: n.inputBus,
-                                        channelSpec: n.channelSpec,
-                                        sectionGate: n.sectionGate,
-                                        kind: UInt8(ET_PIPE_NODE_NATIVE),
-                                        externalIndex: 0))
-            }
-            nodes.append(ETPipeNode(instance: n.isExternal ? 0 : n.instance,
-                                    enabled: n.enabled && !Self.isChannelBypassed(n) ? 1 : 0,
-                                    inputBus: n.inputBus,
-                                    outputBus: n.outputBus,
-                                    channelSpec: n.channelSpec,
-                                    sectionGate: n.sectionGate,
-                                    kind: UInt8(n.isExternal ? ET_PIPE_NODE_EXTERNAL : ET_PIPE_NODE_NATIVE),
-                                    externalIndex: n.externalIndex))
-        }
+        let nodes = pipeNodes()
         nodes.withUnsafeBufferPointer { ETPipeline_Publish($0.baseAddress, UInt32($0.count)) }
         let line = "republish nodes=\(nodes.count) （\(reason)）"
         log.notice("\(line, privacy: .public)")

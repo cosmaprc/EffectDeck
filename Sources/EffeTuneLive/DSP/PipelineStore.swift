@@ -27,27 +27,16 @@
 //
 //  出典: js/utils/serialization-utils.js:13-106、plugins/control/section.js
 //
-//  書く・読むの中身はPipelineForm.swift（Foundationだけで、単体テストに入る）。
-//  ここはNodeからの写しと、端末への書き込み。
+//  書く・読むの中身はPipelineForm.swift、鎖の段（Node）からの写しはChainEditing.swift
+//  （どちらもFoundationだけで、単体テストに入る）。ここは端末への書き込みだけ。
 
 import Foundation
 
 extension PipelineStore {
 
-    // MARK: - 書く
-    //
-    // **中身はPipelineForm.swiftのLoaded版が書く。**ここはNodeを写して渡すだけ。
-    // 前はNode版とLoaded版が同じことを別々に書いていて、終端の扱いはNode版にしか無かった。
-
-    /// ショート形式。共有リンクとプリセットに使う。
-    static func shortForm(_ chain: [EffeTuneDSP.Node]) -> [[String: Any]] {
-        shortForm(chain.map { Loaded($0) })
-    }
-
-    /// ロング形式。ファイルに書き出すときに使う。
-    static func longForm(_ chain: [EffeTuneDSP.Node]) -> [String: Any] {
-        longForm(chain.map { Loaded($0) })
-    }
+    // 書く中身はPipelineForm.swiftのLoaded版だけ。Nodeの鎖はChainEditing.swiftで
+    // Loadedへ写してから渡す（shortForm(_: [ETChainNode])）。前はNode版とLoaded版が同じことを
+    // 別々に書いていて、終端の扱いはNode版にしか無かった。
 
     // MARK: - 端末に残す
 
@@ -114,24 +103,5 @@ extension PipelineStore {
 
     static func loadExpanded() -> [Int] {
         UserDefaults.standard.array(forKey: expandedKey) as? [Int] ?? []
-    }
-}
-
-extension PipelineStore.Loaded {
-    /// 鎖の1段を、書く手前の形へ写す。**書くのはLoadedの側だけ**（PipelineForm.swift）。
-    init(_ node: EffeTuneDSP.Node) {
-        self.init(spec: node.spec,
-                  values: node.values,
-                  enabled: node.enabled,
-                  inputBus: node.inputBus,
-                  outputBus: node.outputBus,
-                  channelSpec: node.channelSpec,
-                  sectionName: node.sectionName,
-                  irId: node.irId,
-                  display: node.display,
-                  externalID: node.externalID ?? "",
-                  externalInstanceID: node.externalInstanceID,
-                  externalState: node.externalState,
-                  isRootReset: node.isRootReset)
     }
 }
