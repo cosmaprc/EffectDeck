@@ -1,21 +1,59 @@
-Fixes effects that could not load their data.
+New since 2026.09.20.
 
-IR Reverb, FIR Crossover, 5Band FIR PEQ, Group Delay EQ, Group Delay PEQ,
-Room EQ and Crosstalk Cancellation all failed with "This build cannot reach the
-effect's staging buffer." and could not be used at all. This affected every
-release since 2026.09.17. They work again.
+Seven effects work again
+IR Reverb, FIR Crossover, 5Band FIR PEQ, Group Delay EQ, Group Delay PEQ, Room EQ and Crosstalk Cancellation could not load their data in any version since 2026.09.17. Fixed.
 
-Also in this version:
+JSFX
+EffectDeck now hosts JSFX, the single-file script format REAPER uses.
+- Import from Files, a link, the clipboard or the share sheet.
+- Write JSFX with ChatGPT opens ChatGPT with a request. Import its reply From Files or From Clipboard.
+- Sliders keep their ranges, curves and menus, hidden ones stay hidden, and values are typed as plain numbers.
+- Scripts that draw (@gfx) get their canvas with touch, keyboard, menus and full screen. Settings has Adaptive and Pixel Perfect sizing.
+- @serialize state is saved with the chain and presets. Reported latency is compensated.
+- A script that keeps overrunning its time budget is bypassed, and the card says by how much. Re-enable puts it back.
+- In Plugins, the ... next to a script offers View Source (line numbers, colouring, search), Copy Source, Share as a link and Delete.
 
-- Reordering effects is decided by how the cards actually overlap, so a card no
-  longer runs away from your finger, and you can scroll while reordering.
-- Full-screen spectrogram, with the grid drawn over the image and corrected
-  colours.
-- FIR PEQ points can be dragged, and the band header matches the other band
-  strips.
-- Sections were rebuilt: an unnamed section collapses, and a section imported
-  from EffeTune is read as written.
-- Audio files can be sent in from the share sheet.
-- Reporting a problem fills in the diagnostics and the last part of the log for
-  you.
-- Less work while nothing is routed in.
+EffeTune 2.11.0 (DSP 0.11.0)
+- New: Attack Tonal Balance, Bass Extender, Chroma Spiral, Bass Management.
+- Oversampling up to 8x on Saturation, Dynamic Saturation, Exciter, Harmonic Distortion and Multiband Saturation, 16x on Hard Clipping. Older chains stay at 1x.
+- Time Alignment goes up to 500 ms.
+- Color choices on Spectrum Analyzer, Pitch Meter and Spectrogram. Gain on the Stereo Meter goniometer.
+
+The chain
+- Reordering compares a card's edge with its neighbour's centre, so a tall card swaps after a short move and cards no longer flip back and forth.
+- Hold a card with one finger and scroll with another.
+- Removing a Section keeps the effects in it. Unnamed Sections collapse, and dragging a card out of a group no longer leaves empty Sections.
+- Picker search covers effects, plug-ins and presets at once.
+- Collapsed cards keep their selections and hide controls you cannot press.
+- Numbers can be typed into AU parameters and many effect fields.
+- AU cards show the full plug-in name, with the maker below it.
+
+EQ and graphs
+- 15Band PEQ imports an AutoEQ ParametricEQ.txt.
+- 5Band FIR PEQ handles can be dragged, with the target curve drawn live.
+- Moving an EQ marker no longer plays a tone.
+- Spectrogram is in colour by default, with the grid on top. It and Note Spectrogram open full screen with their history.
+- Note Spectrogram draws solid traces at 1/60 octave, and its keys no longer scroll.
+- Analyzer display settings are saved in the chain, presets and links.
+
+Sharing and presets
+- With AU or JSFX in the chain, Share this chain makes an effectdeck.nemut.ai link that keeps them. EffectDeck asks before replacing your chain. A JSFX goes by reference, not source, so the other device needs the same script.
+- EffectDeck appears in the share sheet for links, files and selected text.
+- Impulse responses can be m4a, mp3 or ALAC.
+- Presets > Build a chain with ChatGPT. Paste the whole reply with Import from clipboard; names or values it got wrong are corrected and listed.
+
+Settings
+- Report a problem fills in the diagnostics and the end of the log. Attach log shares the whole log. Twitter (@ainemut) was added.
+- Known limitations (English and Japanese) covers connection problems caused by iOS. Help on the main screen opens it.
+
+Power
+- Much less work while nothing is playing or no app is routed in.
+
+Fixes
+- IR Reverb now prepares impulse responses as EffeTune does, so reverbs play at EffeTune's level (most are quieter than before in saved chains) and the direct sound is cut from the wet signal by default.
+- Deleting effects or loading a chain during playback no longer risks a crash.
+- Applying an effect preset updates latency and IR Reverb at once.
+
+Known
+- Spotify with Canvas, and sometimes Spotify or YouTube, cannot connect because iOS treats them as video. See Known limitations and issues #1, #3 and #4.
+- Overnight battery use is still being measured (issue #5).

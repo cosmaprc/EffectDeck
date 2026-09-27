@@ -7,8 +7,8 @@ something misbehaves. Installing from the
 [App Store](https://apps.apple.com/app/effectdeck/id6812467517) puts you back on
 the released version at any time.
 
-If you hit something, use **Settings → Report a problem** in the app (it fills in
-the diagnostics and the log for you), or tell
+If you hit something, use **Settings → About → Report a problem** in the app (it
+fills in the diagnostics and the log for you), or tell
 [@ainemut](https://twitter.com/ainemut).
 
 Everything here is new since 2026.09.20, the version on the App Store.
@@ -26,9 +26,8 @@ file you wrote or downloaded rather than something we shipped.
   keyboard, and `gfx_showmenu`.
 - State (`@serialize`) is saved with the preset and comes back with it.
 - A script that reports latency (PDC) has it compensated in the chain.
-- A script that overruns its time budget is bypassed automatically and says so
-  on the card. **Re-enable** puts it back.
-- **Details** shows how close to the deadline each script is running.
+- A script that overruns its time budget is bypassed automatically, and the
+  card says by how much. **Re-enable** puts it back.
 - Imported scripts can be deleted again.
 - Settings has **Adaptive** and **Pixel Perfect** for how a canvas is sized.
 
@@ -44,8 +43,9 @@ without hunting for one. They do not ship in the App Store version.
 
 ### The chain
 
-- Reordering is decided by how the cards actually overlap, so a card no longer
-  runs away from your finger. You can scroll while reordering.
+- Reordering compares a card's edge with its neighbour's centre, so a tall card
+  swaps after a short move and cards no longer flip back and forth.
+- Hold a card with one finger and scroll with another.
 - Sections were rebuilt. An unnamed section collapses, and a section imported
   from EffeTune is read as written rather than guessed at.
 - Collapsed cards, numeric entry and display settings all survive a round trip.
@@ -64,13 +64,10 @@ without hunting for one. They do not ship in the App Store version.
 
 ### Settings
 
-- Reporting a problem prefills the diagnostics and the last 1 MB of the log.
+- Reporting a problem prefills the diagnostics and the end of the log (up to
+  about 4,000 characters). **Attach log** shares the whole log.
 - Twitter ([@ainemut](https://twitter.com/ainemut)) was added as a lighter way to
   report something.
-- Licenses moved to their own page.
-- The text about picking EffectDeck when it will not stick was rewritten from
-  what actually happens on the device: pick it while audio is playing, and if it
-  drops back to the speaker a moment later, try again.
 
 ### Known
 

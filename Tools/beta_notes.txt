@@ -12,17 +12,12 @@ shipped.
   keyboard, and gfx_showmenu.
 - State (@serialize) is saved with the preset and comes back with it.
 - A script that reports latency (PDC) has it compensated in the chain.
-- A script that overruns its time budget is bypassed automatically and says so
-  on the card. Re-enable puts it back.
-- Details shows how close to the deadline each script is running.
+- A script that overruns its time budget is bypassed automatically, and the
+  card says by how much. Re-enable puts it back.
 - Imported scripts can be deleted again.
 - Settings has Adaptive and Pixel Perfect for how a canvas is sized.
 Three sample scripts are bundled with this beta so there is something to try
 without hunting for one. They do not ship in the App Store version.
-
-Audio Units
-AU plug-ins run in the position where you put them in the chain, not tacked on
-at the end. Several at once. The vendor is shown separately in the picker.
 
 Graphs
 - Full-screen spectrogram.
@@ -30,12 +25,12 @@ Graphs
   colours were corrected.
 - FIR PEQ points can be dragged, and it has the same band header as the other
   band strips.
-- Phase Select EQ no longer collapses its graph.
 - The 1/60 hairlines and the Note Spectrogram background were fixed.
 
 The chain
-- Reordering is decided by how the cards actually overlap, so a card no longer
-  runs away from your finger. You can scroll while reordering.
+- Reordering compares a card's edge with its neighbour's centre, so a tall card
+  swaps after a short move and cards no longer flip back and forth.
+- Hold a card with one finger and scroll with another.
 - Sections were rebuilt. The terminator is its own thing now, an unnamed
   section collapses, and a section imported from EffeTune is read as written
   rather than guessed at.
@@ -43,7 +38,6 @@ The chain
 - Search covers every pane.
 
 Presets and files
-- IRs referenced by a preset are reloaded when the preset is.
 - Audio files can be sent in from the share sheet.
 - Pasted links are taken on import.
 
@@ -55,12 +49,9 @@ Power
   discovery stops.
 
 Settings
-- Reporting a problem prefills the diagnostics and the last 1 MB of the log.
+- Reporting a problem prefills the diagnostics and the end of the log (up to
+  about 4,000 characters). Attach log shares the whole log.
 - Twitter (@ainemut) was added as a lighter way to report something.
-- Licenses moved to their own page.
-- The text about picking EffectDeck when it will not stick was rewritten from
-  what actually happens on the device: pick it while audio is playing, and if
-  it drops back to the speaker a moment later, try again.
 
 Known
 - YouTube and Spotify can refuse to hand audio over. That is iOS deciding a
