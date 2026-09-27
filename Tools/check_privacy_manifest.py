@@ -46,6 +46,10 @@ BUNDLES = {
 }
 SHIPPED_TYPES = {"application", "app-extension", "extensionkit-extension", "framework"}
 FOLDED_TYPES = {"library.static"}
+# sources:のパスが無くても落とさない所。Vendor/はsubmodule（--require-vendorで落とす）、
+# Generated/はScripts/setup.shが作る（.gitignore。新しいcloneには無い）。それ以外で無いのは書き違い
+VENDOR_PREFIX = "Vendor/"
+GENERATED_PREFIXES = ("Generated/",)
 
 PREFIX = "NSPrivacyAccessedAPICategory"
 # 分類 -> 使ってよい理由（Appleの表）。
@@ -70,6 +74,9 @@ SDK_ONLY = {"0A2A.1", "C56D.1"}
 #                          その末尾がReport a problemのメール・GitHub issueの本文に入り、人が見て
 #                          送るかを決める。t=をアプリの開始からの秒にすれば35F9.1だけで済む
 #                          （Tests/Toolsのtest_uptime_in_report_log_declares_bug_report_reasonが見張る）
+#                          **Attach logは3D61.1の外。**ログの全体（最大1MB）を中身を見せずに共有シートへ
+#                          渡すので、「報告の一部として人に目立つように見せる」を満たさない。直すのは
+#                          AudioIOのt=（アプリの開始からの秒にする）。そうすれば3D61.1ごと外せる
 #   UserDefaults   CA92.1  UserDefaults.standardだけ。App Groupのsuiteは使っていない（1C8F.1は要らない）
 
 # このアプリの約束（site/src/text.jsのPRIVACY）。集めるものを足すなら、先にそちらを直してからここを変える。
@@ -147,33 +154,98 @@ def _strip_yaml_comment(line):
 
 
 _KEY = re.compile(r"""^("[^"]*"|'[^']*'|[^\s"'\[{#-][^:]*?|<<|-[^\s:][^:]*?):(?:\s+(.*))?$""")
+# 「script: |」の類（中身は次の行から、鍵より深い段に続く）
+_BLOCK_SCALAR = re.compile(r"^[|>](?:[1-9][-+]?|[-+][1-9]?)?$")
+
+
+def _unanchor(text):
+    """「&錨 値」の値。錨だけなら空。"""
+    text = text.strip()
+    if text.startswith("&"):
+        text = text.split(None, 1)[1] if " " in text else ""
+    return text
+
+
+def _flow(text, i, key=False):
+    """[a, b] / {k: v} / "字" / 字 を1つ読む。戻りは(値, 次の位置)。"""
+    n = len(text)
+    while i < n and text[i] in " \t":
+        i += 1
+    if i >= n:
+        return None, i
+    c = text[i]
+    if c in "[{":
+        close, items, out = "]" if c == "[" else "}", [], {}
+        i += 1
+        while True:
+            while i < n and text[i] in " \t":
+                i += 1
+            if i >= n:
+                raise ValueError("閉じていない %s: %s" % (c, text))
+            if text[i] == close:
+                return (items if c == "[" else out), i + 1
+            if c == "[":
+                value, i = _flow(text, i)
+                items.append(value)
+            else:
+                k, i = _flow(text, i, key=True)
+                while i < n and text[i] in " \t":
+                    i += 1
+                value = None
+                if i < n and text[i] == ":":
+                    value, i = _flow(text, i + 1)
+                out[k] = value
+            while i < n and text[i] in " \t":
+                i += 1
+            if i < n and text[i] == ",":
+                i += 1
+            elif i < n and text[i] != close:
+                raise ValueError("読めない字 %r: %s" % (text[i], text))
+    if c in "\"'":
+        j, buf = i + 1, []
+        while j < n:
+            if c == "'" and text.startswith("''", j):
+                buf.append("'")
+                j += 2
+            elif c == '"' and text[j] == "\\" and j + 1 < n:
+                buf.append(text[j + 1])
+                j += 2
+            elif text[j] == c:
+                return "".join(buf), j + 1
+            else:
+                buf.append(text[j])
+                j += 1
+        raise ValueError("閉じていない引用: %s" % text)
+    j = i
+    while j < n and text[j] not in ",]}" and not (
+            key and text[j] == ":" and (j + 1 == n or text[j + 1] in " \t,]}")):
+        j += 1
+    return text[i:j].strip(), j
 
 
 def _scalar(text):
-    text = text.strip()
-    if text.startswith("&"):  # 錨。値は後ろ
-        text = text.split(None, 1)[1] if " " in text else ""
-    if text.startswith("[") and text.endswith("]"):
-        items, cur, quote = [], "", None
-        for c in text[1:-1]:
-            if quote:
-                cur += c
-                if c == quote:
-                    quote = None
-            elif c in "\"'":
-                quote = c
-                cur += c
-            elif c == ",":
-                items.append(cur)
-                cur = ""
-            else:
-                cur += c
-        if cur.strip():
-            items.append(cur)
-        return [_scalar(i) for i in items]
+    text = _unanchor(text)
+    if text[:1] in ("[", "{"):
+        value, end = _flow(text, 0)
+        if text[end:].strip():
+            raise ValueError("読めない: %s" % text)
+        return value
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         return text[1:-1]
     return text
+
+
+def _block_scalar(lines, pos, parent):
+    """「|」「>」の中身。親の段（parent）より深い行が続くあいだ。"""
+    texts = []
+    while pos < len(lines) and lines[pos][0] > parent:
+        texts.append(lines[pos][1])
+        pos += 1
+    return "\n".join(texts), pos
+
+
+def _unreadable(line):
+    return ValueError("project.ymlの%d行目が読めない: %s" % (line[2], line[1]))
 
 
 def _block(lines, pos, indent):
@@ -187,9 +259,11 @@ def _block(lines, pos, indent):
             rest = lines[pos][1][1:].strip()
             if not rest:
                 value, pos = _block(lines, pos + 1, ind + 1)
+            elif _BLOCK_SCALAR.match(_unanchor(rest)):
+                value, pos = _block_scalar(lines, pos + 1, ind)
             elif _KEY.match(rest):
                 # 「- path: X」の続きの鍵は、pathと同じ段（ind + 2）に並ぶ
-                lines[pos] = (ind + 2, rest)
+                lines[pos] = (ind + 2, rest, lines[pos][2])
                 value, pos = _block(lines, pos, ind + 2)
             else:
                 value, pos = _scalar(rest), pos + 1
@@ -199,9 +273,12 @@ def _block(lines, pos, indent):
     while pos < len(lines) and lines[pos][0] == ind and not lines[pos][1].startswith("- "):
         m = _KEY.match(lines[pos][1])
         if not m:
-            raise ValueError("project.ymlの%d段目が読めない: %s" % (ind, lines[pos][1]))
+            raise _unreadable(lines[pos])
         key, rest = _scalar(m.group(1)), (m.group(2) or "").strip()
         pos += 1
+        if _BLOCK_SCALAR.match(_unanchor(rest)):
+            out[key], pos = _block_scalar(lines, pos, ind)
+            continue
         if rest and not (rest.startswith("&") and " " not in rest):
             out[key] = _scalar(rest)
             continue
@@ -215,12 +292,15 @@ def _block(lines, pos, indent):
 
 
 def parse_yaml(text):
+    """読めない形があれば黙って飛ばさずValueErrorにする（後ろのターゲットが消えて見えるため）。"""
     lines = []
-    for raw in text.replace("\r\n", "\n").split("\n"):
+    for number, raw in enumerate(text.replace("\r\n", "\n").split("\n"), 1):
         line = _strip_yaml_comment(raw).rstrip()
         if line.strip():
-            lines.append((len(line) - len(line.lstrip(" ")), line.strip()))
-    value, _ = _block(lines, 0, 0)
+            lines.append((len(line) - len(line.lstrip(" ")), line.strip(), number))
+    value, pos = _block(lines, 0, 0) if lines else ({}, 0)
+    if pos < len(lines):
+        raise _unreadable(lines[pos])
     return value or {}
 
 
@@ -256,9 +336,11 @@ def _matches(rel, patterns):
 
 def source_files(repo, entry):
     """1件のsources:から、コンパイルされるファイル（リポジトリからの相対）を返す。
-    戻りの2つ目は「無い（submoduleを取っていない・生成前）」かどうか。"""
+    戻りの2つ目は「無い・空（submoduleを取っていない・生成前）」かどうか。"""
     if isinstance(entry, str):
         entry = {"path": entry}
+    if not isinstance(entry, dict):
+        raise ValueError("sourcesの項目が読めない: %r" % (entry,))
     if entry.get("buildPhase") == "resources" or entry.get("type") == "folder":
         return [], False
     rel = str(entry.get("path", "")).rstrip("/")
@@ -286,7 +368,7 @@ def source_files(repo, entry):
 
 
 def bundle_sources(repo, targets, name, seen=None):
-    """バンドルに積まれるファイルと、無かったパス。静的ライブラリの依存は畳み込む。"""
+    """バンドルに積まれるファイルと、無い・空だったsources:の項目。静的ライブラリの依存は畳み込む。"""
     seen = seen if seen is not None else set()
     if name in seen:
         return [], []
@@ -297,7 +379,7 @@ def bundle_sources(repo, targets, name, seen=None):
         got, absent = source_files(repo, entry)
         files += got
         if absent:
-            missing.append(entry if isinstance(entry, str) else str(entry.get("path")))
+            missing.append({"path": entry} if isinstance(entry, str) else entry)
     for dep in _as_list(target.get("dependencies")):
         dep_name = dep.get("target") if isinstance(dep, dict) else None
         if dep_name and (targets.get(dep_name) or {}).get("type") in FOLDED_TYPES:
@@ -524,16 +606,25 @@ def check_sources(repo, strict=False, require_vendor=False, verbose=False):
             print("ERROR BUNDLESの%sがproject.ymlに無い" % name)
             failed = True
     for name in sorted(n for n in BUNDLES if n in targets):
-        files, missing = bundle_sources(repo, targets, name)
+        try:
+            files, missing = bundle_sources(repo, targets, name)
+        except ValueError as e:
+            print("check_privacy_manifest: project.ymlが読めない: %s" % e, file=sys.stderr)
+            return 2
         used = {}
         for rel in sorted(set(files)):
             for cat, place, text in scan_file(repo / rel, rel):
                 used.setdefault(cat, []).append((place, text))
         declared, errors = read_manifest(repo / BUNDLES[name])
-        for m in missing:
-            vendor = m.startswith("Vendor/")
+        for entry in missing:
+            m = str(entry.get("path", "")).rstrip("/")
+            vendor = m.startswith(VENDOR_PREFIX)
+            optional = str(entry.get("optional", "")).lower() in ("true", "yes")
             if vendor and require_vendor:
                 errors.append("%sが無い（submoduleを取ってから走らせる）" % m)
+            elif not (vendor or optional or m.startswith(GENERATED_PREFIXES) or (repo / m).exists()):
+                # xcodegenも無いパスでは止まる（optional: trueを除く）。書き違いを黙って読まないままにしない
+                errors.append("sourcesの%sが無い（xcodegenも止まる）" % m)
             else:
                 print("NOTE %s: %sが無い・空なので読んでいない%s" % (
                     name, m, "（--require-vendorで落とす）" if vendor else ""))
