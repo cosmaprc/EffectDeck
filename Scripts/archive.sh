@@ -1,5 +1,18 @@
 #!/bin/bash
 # 配布用の書庫を作る。
+#
+#   bash Scripts/archive.sh                            紫（TestFlight 行き。ET_BETA）
+#   bash Scripts/archive.sh EffeTuneLive EffeTuneLive  青（店へ出す版）
+#
+# 先に Scripts/setup.sh を通す（パッチ・カタログ・プリセット・note-models・版・プロジェクト）。
+# 前は gen_version と xcodegen しか走らせず、書庫が正しいかは、前のビルドが木を
+# 整えていたかどうか次第だった。
+#
+# 書庫は $ARCHIVE_DIR/<scheme>.xcarchive（既定 /tmp。Scripts/ship.sh と archive_install.sh が
+# そこを読む）。作る前に前の書庫を消す。残っていると、書庫に失敗しても古い書庫が
+# 書き出されたり実機に入ったりする。
+#
+# 全部 archive.log へ。判定は "ARCHIVE SUCCEEDED" の行と、このスクリプトの終了値。
 set -u
 export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.." || exit 1
@@ -24,15 +37,27 @@ else
   SWIFT_FLAGS='$(inherited)'
 fi
 LOG="$PWD/archive.log"
-{
+ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
+
+main() {
   echo "=== start $(date) === icon=$APPICON"
-  python3 Tools/gen_version.py 2>&1 | tail -1
-  xcodegen generate --spec project.yml 2>&1 | tail -1
+  # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
+  bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
+  rm -rf "$ARCHIVE"
   /usr/bin/xcodebuild -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
     -configuration Release -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
     ET_APPICON="$APPICON" \
     SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_FLAGS" \
-    archive -archivePath "/tmp/$SCHEME.xcarchive" 2>&1 \
+    archive -archivePath "$ARCHIVE" 2>&1 \
     | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|errSec" | tail -10
+  local code="${PIPESTATUS[0]}"
+  [ "$code" -eq 0 ] || { echo "!! xcodebuild archive が落ちた (exit $code)"; return 1; }
+  echo "書庫: $ARCHIVE"
   echo "=== done $(date) ==="
-} > "$LOG" 2>&1
+  return 0
+}
+
+main > "$LOG" 2>&1
+CODE=$?
+echo "FINISHED: $LOG (exit=$CODE)"
+exit "$CODE"

@@ -30,7 +30,8 @@ find_device() {
 # SSH から叩くと codesign が鍵に届かず、拡張の署名だけが
 #   .../EffeTuneLiveExtension.debug.dylib: errSecInternalComponent
 # で落ちる。コンパイルは通るので out/*.app は出来るが、中身が署名されておらず
-# install が「not a valid bundle」になる。README にも同じことを書いてある。
+# install が「not a valid bundle」になる。GUI の Terminal に走らせる形は
+# Mac 側の ~/gui_build.sh（osascript で Terminal に渡す。リポジトリには無い）。
 #
 # 下の grep に errSec と CodeSign failed を足したのは、一度これを取りこぼして
 # 「BUILD FAILED」としか出ず、原因を見失ったため
@@ -54,6 +55,8 @@ build_one() {
     CONFIGURATION_BUILD_DIR="$ROOT/out" build 2>&1 \
     | grep -E "error:|errSec|CodeSign failed|Undefined symbols|referenced from:|ld: |symbol\(s\) not found|BUILD SUCCEEDED|BUILD FAILED|not found and could not|doesn't (support|include)" \
     | tail -25
+  # 終了値は xcodebuild のもの（grep と tail のものではない）。
+  return "${PIPESTATUS[0]}"
 }
 
 # 入れ替えは上書きで行う。
@@ -80,16 +83,21 @@ install_one() {
     sleep 1
   fi
   echo "--- install $2 ---"
-  xcrun devicectl device install app --device "$DEV_ID" "$1" 2>&1     | grep -E "App installed|bundleID|error" | head -5
+  xcrun devicectl device install app --device "$DEV_ID" "$1" 2>&1 \
+    | grep -E "App installed|bundleID|error" | head -5
+  return "${PIPESTATUS[0]}"
 }
 
-{
+# 落ちたらそこで止めて、終了値を返す。最後の行は "FINISHED: build.log (exit=N)"。
+# 前は setup.sh が落ちても先へ進み、いつも FINISHED で 0 を返していた
+# （落ちたことは build.log を読まないと分からなかった）。
+main() {
   echo "=== start $(date) ==="
   /usr/bin/xcodebuild -version | head -1
 
   if [ ! -d Vendor/effetune/dsp ]; then
     echo "!! Vendor/effetune が無い。git submodule update --init --depth 1 を先に。"
-    exit 1
+    return 1
   fi
 
   DEV_ID="${DEV_ID:-$(find_device)}"
@@ -98,9 +106,9 @@ install_one() {
   echo "--- 掃除 ---"
   rm -rf out build EffeTuneLive.xcodeproj
 
-  bash Scripts/setup.sh
+  bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。建てずに止める"; return 1; }
 
-  build_one EffeTuneLive
+  build_one EffeTuneLive || { echo "!! xcodebuild が落ちた (exit $?)"; return 1; }
 
   echo "--- 成果物 ---"
   ls -d out/*.app 2>&1
@@ -112,9 +120,13 @@ install_one() {
       xcrun devicectl device uninstall app --device "$DEV_ID" "$old" >/dev/null 2>&1
     done
   fi
-  install_one "out/EffectDeck.app"        ai.nemut.effetune
+  install_one "out/EffectDeck.app"        ai.nemut.effetune || { echo "!! 入れられなかった"; return 1; }
 
   echo "=== done $(date) ==="
-} > "$LOG" 2>&1
+  return 0
+}
 
-echo "FINISHED: $LOG"
+main > "$LOG" 2>&1
+CODE=$?
+echo "FINISHED: $LOG (exit=$CODE)"
+exit "$CODE"
