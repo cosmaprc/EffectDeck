@@ -1,6 +1,6 @@
 //  EffectDeck — Media Device Extension (iOS 27+)
 //
-//  ルートピッカーに EffeTune を1台出し、選ばれたらシステム音声のサンプルを受け取る。
+//  ルートピッカーに EffectDeck（ET_ROUTE_NAME）を 1 台出し、選ばれたらシステム音声のサンプルを受け取る。
 //  API は Xcode 27 の MediaDevice.swiftinterface から起こしたもので、推測は含まない。
 //
 //  CoreAudio/AudioServerPlugIn.h に書かれている制約:
@@ -97,11 +97,10 @@ final class EffeTuneLiveExtension: MediaDeviceExtension, RealtimeSampleHandling 
     static let deviceUUID = UUID(uuidString: "6E656D75-7400-4E00-A000-000000000001")!
 
     /// 本体（EffeTuneLive）の ETLinkReceiver が bind している口。
-    /// Sources/Shared/LocalLink.h:23-24 の ET_LINK_PORT / ET_LINK_HOST と同じもの。
+    /// Sources/Shared/LocalLink.h の ET_LINK_PORT / ET_LINK_HOST と同じもの。
     /// 数字を写さずマクロを引くのは、片方だけ変えられるのを防ぐため。
-    /// ET_LINK_PORT は bridging header 経由（Extension-Bridging-Header.h:2）。
-    /// もし `cannot find 'ET_LINK_PORT' in scope` で止まったら 47101 を直に書く。
-    /// ビルドしていないのでここだけは確かめていない。
+    /// ET_LINK_PORT は bridging header 経由（Extension-Bridging-Header.h が LocalLink.h を読む）。
+    /// この形のまま TestFlight へ出したビルド（3eafecb の build 26 ほか）が建っている。
     static let linkEndpoint: NWEndpoint = .hostPort(
         host: .ipv4(.loopback),
         port: NWEndpoint.Port(rawValue: UInt16(ET_LINK_PORT)) ?? 47101
@@ -134,7 +133,7 @@ final class EffeTuneLiveExtension: MediaDeviceExtension, RealtimeSampleHandling 
     /// 127.0.0.1:47101 なら実在していて、拡張から実際に繋がっている:
     ///   et.log:9681 EffeTuneLiveExtension[564] ET connect 成功 port=47101（7 回）
     ///   et.log:65193 EffectDeck[601] ET receiver 待ち受け開始 port=47101
-    ///   Sources/Shared/LocalLink.m:285-300（本体側の bind/listen）
+    ///   Sources/Shared/LocalLink.m の -[ETLinkReceiver start]（本体側の bind/listen）
     /// 音はこの口を通らない（AudioServerPlugIn 経由で来る）。名乗るためだけに使う。
     ///
     /// **確かめていないこと**: 0 番が revert の原因だと書いてある行は無い。確定は
@@ -198,7 +197,7 @@ final class EffeTuneLiveExtension: MediaDeviceExtension, RealtimeSampleHandling 
             // **空のまま。**
             // コントロールセンターの行は 2 行とも displayName が出る。
             // 2 行目をこちらから変える口は無い（2026-09-17 に 3 つとも実機で外した。
-            // docs/connect-log.md の「2 行目は選べない」）。
+            // 手元のログ docs/connect-log.md の「2 行目は選べない」。リポジトリには入っていない）。
             txtRecords: [],
             supportsSimultaneousSessions: false
         )
@@ -376,7 +375,7 @@ final class EffeTuneLiveExtension: MediaDeviceExtension, RealtimeSampleHandling 
         // その 2 つが来ないまま配送が止まっている窓の長さには上限が無い。
         //
         // **即座には落とさない。**stop は _fd を閉じるので、受け手は切断として
-        // 扱い、再接続で溜め直し（SETTLE_FRAMES）と "no audio" の点滅を買う。
+        // 扱い、再接続で溜め直し（ET_LINK_SETTLE_FRAMES）と "no audio" の点滅を買う。
         // 系が停止と再開を短い間に往復させる回では、それが毎回起きる。
         senderStopWork?.cancel()
         let work = DispatchWorkItem {
