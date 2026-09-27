@@ -24,6 +24,13 @@ enum ETLayout {
     static var chainMaxWidth: CGFloat {
         UIDevice.current.userInterfaceIdiom == .pad ? 440 : .infinity
     }
+
+    /// 2列（左に一覧、右に全部開いたカード）のときのカードの幅の上限。
+    ///
+    /// **ScrollViewの内側で絞る。**外で絞ると両脇の余白が鎖の外になり、
+    /// そこに指を置いても送れず、ピッカーからつまんだものも落とせない。
+    /// 名前と値の行が読める幅はchainMaxWidthの話と同じで、図を広げても情報は増えない。
+    static let detailMaxWidth: CGFloat = 672
 }
 
 struct PipelineView: View {
@@ -48,14 +55,17 @@ struct PipelineView: View {
     }
 
     @State private var sheet: Sheet?
-    /// ピッカーが開く面。**取り込んだJSFXはPluginsで見せる**（show・openLinkが指してから開く）。
+    /// ピッカーが開く面。**取り込んだJSFXはPluginsで見せる**（show・openLinkがopenPickerに渡す）。
     /// ピッカーが閉じたらEffectsへ戻すので、+や空の鎖から開けば今までどおりEffects。
+    /// シートでもpopoverでも同じ値を見る（ETPickerHost）。
     @State private var pickerPane: EffectPickerView.Pane = .effects
     /// 取り込んだばかりのJSFX（id）。ピッカーがその作者の見出しへ送り、行を塗る。
     @State private var freshJSFX: String?
-    /// 次にピッカーで選んだものを差し込む位置（鎖の添字）。
-    /// nil なら末尾。ツールバーの「Add Effect」から開いたときは常に nil。
-    @State private var insertAt: Int?
+    /// 2列の+（popoverの付け先）がもう画面に居るか。PipelineToolbarが立てる。
+    @State private var pickerAnchored = false
+    /// 2列で、ピッカーをpopoverでなく根のシートで出しているか。
+    /// **出すときに決め、閉じるまで変えない**（openPicker）。
+    @State private var pickerInSheet = false
     /// 「Reset chain」の確認を出しているか。
     /// ツールバーは ToolbarContent で View ではないから .confirmationDialog を
     /// 持てない。押されたことだけ Binding で受け取り、出すのは下の List 側。
@@ -94,6 +104,52 @@ struct PipelineView: View {
     @State private var hasPeer = false
     @State private var processingRate: Double = 48000
 
+    // MARK: - 並べ方（1列/2列）
+    //
+    // iPadの広い窓では2列にする。左に鎖の一覧（ChainMinimap）、右に鎖を全部開いて並べる。
+    // iPhoneと狭い窓は今までどおりの1列で、道筋も同じ（stack(_:)）。
+    // 2列はiPhoneの開閉の覚え（dsp.expanded / dsp.collapsedFully）を読まず、書きもしない。
+    // 窓を狭めると、iPhoneで最後に置いた開閉のまま出る。
+
+    @Environment(\.horizontalSizeClass) private var hSize
+    /// 窓の幅が2列に足りるか。**640で立て、620を切るまで落とさない。**
+    /// 1本の線にすると、Stage Managerで窓の端を引いているあいだ行き来する。
+    /// 書くのは跨いだときだけ（updateWideEnough）。
+    @State private var wideEnough = true
+    /// 画面に出している並べ方。起きた直後（nil）だけwantsSplitにそのまま従う。
+    ///
+    /// **切り替えは1回遅らせる。**切り替える前に、掴みを離す・払いを閉じる・
+    /// ピッカーを閉じる・読んでいた位置を覚える、を前の並べ方のうちに済ませる（flip(to:)）。
+    /// 同じ回で切り替えると、前の並べ方の行がもう居ない。
+    @State private var layoutSplit: Bool?
+    /// 左の一覧を出しているか。システムのサイドバーのボタンが切り替える。
+    @State private var columns: NavigationSplitViewVisibility = .all
+    /// 右と左を繋ぐもの（ChainViewport.swift）。
+    @State private var viewport = ETChainViewport()
+    /// 行の矩形（ChainViewport.swift）。観測しない。
+    @State private var geometry = ETRowGeometry()
+    /// 左の一覧で押したときに、慣性で流れている右を止めてから飛ぶ。
+    @State private var brake = ETScrollBrake()
+    /// 2列の右で、上のカードの高さが変わっても読んでいる位置を保つ（ChainViewport.swift）。観測しない。
+    @State private var keeper = ETReadingKeeper()
+
+    /// 2列にしたい状態か。
+    ///
+    /// **iPadに限る。**Pro Maxの横置きもregularを返すので、幅だけで決めるとiPhoneが2列になる。
+    /// 撮影のときは1列（iPhoneの幅で撮るため）。`-ETLayout wide`のときだけ2列で撮る。
+    private var wantsSplit: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+            && hSize == .regular
+            && wideEnough
+            && (ETScreenshotSeed.requested == nil || ETScreenshotSeed.wideLayout)
+    }
+
+    /// 2列を出しているか。
+    private var usesSplit: Bool { layoutSplit ?? wantsSplit }
+
+    /// その行を開いて出すか。2列では全部開く。iPhoneの覚えは書き換えない。
+    private func isOpen(_ id: UUID) -> Bool { usesSplit || expanded.contains(id) }
+
     // MARK: - 並べ替え
     //
     // **Shortcuts と同じ形にしてある。**あちらは WorkflowEditor.framework の中で
@@ -117,8 +173,12 @@ struct PipelineView: View {
     @State private var anchorRect: CGRect = .zero
     /// 指の縦の移動量。
     @State private var dragShift: CGSize = .zero
-    /// 行ごとの矩形。落とし先の判定に使う。
-    @State private var rowRects: [UUID: CGRect] = [:]
+    /// 行の高さの合計（行の間を含む）。**変わったときだけ書く。**
+    ///
+    /// 行ごとの矩形そのものは観測しない箱（geometry）に入れてある。矩形は送るたびに
+    /// 変わるので、@Stateに置くと1コマごとにbodyが走り直していた。高さの合計は
+    /// 送っても変わらないので、ここに置いても送るだけでは書かれない。
+    @State private var rowsHeight: CGFloat = 0
     /// 器の高さ。最後の帯をどこまで伸ばすかに使う。背面で測る。
     @State private var listHeight: CGFloat = 0
 
@@ -129,10 +189,8 @@ struct PipelineView: View {
     /// なった（画面より短い鎖でも上下に送れ、途中で止まった）。
     /// **高さの合計**なら送っても動かない。
     private var tailHeight: CGFloat {
-        guard listHeight > 0, !rowRects.isEmpty else { return 96 }
-        let content = rowRects.values.reduce(0) { $0 + $1.height }
-            + CGFloat(rowRects.count) * 10   // 行の間
-        return max(96, listHeight - content)
+        guard listHeight > 0, rowsHeight > 0 else { return 96 }
+        return max(96, listHeight - rowsHeight)
     }
 
     /// 左スワイプを開いている行。
@@ -144,6 +202,8 @@ struct PipelineView: View {
 
     /// 鎖の中での座標。行の位置も指の位置もこれで測る。
     private static let chainSpace = "chain"
+    /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
+    private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
     private static let swipeWidth: CGFloat = 78
     /// 行と赤い面のあいだ。カードどうしの間と同じだけ空ける。
@@ -157,173 +217,125 @@ struct PipelineView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        NavigationStack {
-            chainList
-                // iPad は ETLayout が絞る。撮影のときは -ETWidth で上書きできる
-                // （iPad で撮るのは高さが要るからで、幅まで iPad になると
-                // 実機の見え方にならない）。
-                .frame(maxWidth: ETScreenshotSeed.requested == nil
-                                 ? ETLayout.chainMaxWidth : ETScreenshotSeed.phoneWidth)
-                .frame(maxWidth: .infinity)
-                .overlay {
-                    if sheet == .picker {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                insertAt = nil
-                                sheet = nil
-                            }
-                    }
-                }
-            // タイトルは出さない。アプリの中でアプリ名を読む人は居ないし、
-            // その 1 行ぶん鎖が見える。
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { PipelineToolbar(sheet: $sheet, confirmingReset: $confirmingReset,
-                                       dsp: dsp, io: io, hasPeer: hasPeer) }
-            .sheet(item: $sheet, onDismiss: runAfterSheet) { which in
-                switch which {
-                case .picker:
-                    EffectPickerView(onPick: { spec in
-                        dsp.add(spec, at: insertAt)
-                        insertAt = nil
-                        // **閉じるのはこちら。** ピッカーの中の dismiss() は
-                        // 検索が出ている間、シートではなく検索を閉じる。
-                        // 検索から選んだときだけ閉じない、という形になっていた。
-                        sheet = nil
-                    }, onPickAU: { entry in
-                        let instanceID = UUID().uuidString
-                        guard let externalIndex = try? ETAUExternalBridge.shared.reserve(
-                            instanceID: instanceID) else { return }
-                        dsp.addExternal(id: entry.id, instanceID: instanceID,
-                                        name: entry.name,
-                                        category: "Audio Units",
-                                        externalIndex: externalIndex, at: insertAt)
-                        ETAUHost.shared.create(entry, instanceID: instanceID)
-                        insertAt = nil
-                        sheet = nil
-                    }, onPickJSFX: { entry in
-                        let instanceID = UUID().uuidString
-                        let insertion = insertAt
-                        insertAt = nil
-                        sheet = nil
-                        ETJSFXHost.shared.prepare(entry, instanceID: instanceID) { result in
-                            switch result {
-                            case .success(let externalIndex):
-                                dsp.addExternal(id: entry.id, instanceID: instanceID,
-                                                name: entry.name, category: "JSFX",
-                                                externalIndex: externalIndex, at: insertion)
-                            case .failure(let error): pluginError = error.localizedDescription
+        // 1 回だけ組む。⋯ の Move Up / Move Down が「画面の何行目か」と
+        // 「画面の行数」の両方を要るので、行ごとに組み直すと本数ぶん無駄になる。
+        // 2列では左の一覧も同じ並びから作る。onMoveの数え方がmove(_:to:)と揃う。
+        let visible = rows
+
+        // **GroupではなくZStack。**本物の器なので、onAppear / onDisappearは1回ずつ来る。
+        // Groupは枝ごとに配るので、並べ方が切り替わると、新しい枝が汲み始めた後に
+        // 古い枝が汲むのを止めることがある。
+        // シート・確認・警告と汲む仕組みも、どちらの枝でもなくここに付ける。
+        // 並べ方を切り替えても消えないように。
+        ZStack {
+            if usesSplit {
+                split(visible)
+            } else {
+                stack(visible)
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { updateWideEnough($0) }
+        .sheet(item: presentedSheet, onDismiss: runAfterSheet) { which in
+            switch which {
+            case .picker:
+                ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
+                             pane: $pickerPane, fresh: $freshJSFX)
+            case .settings:
+                SettingsView(io: io)
+            case .routing:
+                RoutingView(dsp: dsp)
+            case .presets:
+                PresetsView(dsp: dsp)
+            case .ir:
+                IRLibraryView()
+            // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
+            case .tips:
+                NavigationStack {
+                    ConnectionTipsView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { sheet = nil }
                             }
                         }
-                    }, onPickPreset: { name, items in
-                        // 名前の付いた Section に包んで挿す。置き換えない。
-                        // 鎖ごと置き換えたいときは Presets 画面のほう。
-                        dsp.addPreset(named: name, items: items, at: insertAt)
-                        insertAt = nil
-                        sheet = nil
-                    }, pane: $pickerPane, fresh: $freshJSFX)
-                    // 次に開くときはEffectsから。Pluginsを指して開くのは取り込みの口だけ。
-                    .onDisappear {
-                        pickerPane = .effects
-                        freshJSFX = nil
-                    }
-                case .settings:
-                    SettingsView(io: io)
-                case .routing:
-                    RoutingView(dsp: dsp)
-                case .presets:
-                    PresetsView(dsp: dsp)
-                case .ir:
-                    IRLibraryView()
-                // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
-                case .tips:
-                    NavigationStack {
-                        ConnectionTipsView()
-                            .toolbar {
-                                ToolbarItem(placement: .confirmationAction) {
-                                    Button("Done") { sheet = nil }
-                                }
-                            }
-                    }
                 }
             }
-            // 鎖ごと捨てるのは 1 本ずつのスワイプ削除と違って取り消せないので、
-            // ⋯ から直接は走らせず一度確かめる。シートと違って重ねても
-            // 潰し合わないので、上の .sheet とは別に付けてある。
-            .confirmationDialog("Reset chain?",
-                                isPresented: $confirmingReset,
-                                titleVisibility: .visible) {
-                Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Removes every effect and leaves a single Level Meter.")
+        }
+        // 鎖ごと捨てるのは 1 本ずつのスワイプ削除と違って取り消せないので、
+        // ⋯ から直接は走らせず一度確かめる。シートと違って重ねても
+        // 潰し合わないので、上の .sheet とは別に付けてある。
+        .confirmationDialog("Reset chain?",
+                            isPresented: $confirmingReset,
+                            titleVisibility: .visible) {
+            Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Removes every effect and leaves a single Level Meter.")
+        }
+        .confirmationDialog("Replace chain?",
+                            isPresented: Binding(
+                                get: { pendingChain != nil },
+                                set: { if !$0 { pendingChain = nil } }),
+                            titleVisibility: .visible) {
+            Button("Replace chain", role: .destructive) {
+                if let items = pendingChain { dsp.replaceChain(with: items) }
+                pendingChain = nil
             }
-            .confirmationDialog("Replace chain?",
-                                isPresented: Binding(
-                                    get: { pendingChain != nil },
-                                    set: { if !$0 { pendingChain = nil } }),
-                                titleVisibility: .visible) {
-                Button("Replace chain", role: .destructive) {
-                    if let items = pendingChain { dsp.replaceChain(with: items) }
-                    pendingChain = nil
-                }
-                Button("Cancel", role: .cancel) { pendingChain = nil }
-            } message: {
-                if !pendingReport.isEmpty { Text(pendingReport) }
+            Button("Cancel", role: .cancel) { pendingChain = nil }
+        } message: {
+            if !pendingReport.isEmpty { Text(pendingReport) }
+        }
+        .alert(alertTitle, isPresented: Binding(
+            get: { pluginError != nil || linkError != nil || importError != nil },
+            set: { if !$0 { clearErrors() } })) {
+                Button("OK", role: .cancel) { clearErrors() }
+            } message: { Text(linkError ?? importError ?? pluginError ?? "Unknown error") }
+        // 切ってある Section を外すと、止まっていた段がその場で鳴り出す。
+        // 配下の ON/OFF は書き換えないので（about が保つと言っている）、
+        // 起きることを先に出しておく。
+        .confirmationDialog("Remove this section?",
+                            isPresented: Binding(
+                                get: { confirmingSectionRemoval != nil },
+                                set: { if !$0 { confirmingSectionRemoval = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                if let id = confirmingSectionRemoval { removeConfirmed(id) }
+                confirmingSectionRemoval = nil
             }
-            .alert(alertTitle, isPresented: Binding(
-                get: { pluginError != nil || linkError != nil || importError != nil },
-                set: { if !$0 { clearErrors() } })) {
-                    Button("OK", role: .cancel) { clearErrors() }
-                } message: { Text(linkError ?? importError ?? pluginError ?? "Unknown error") }
-            // 切ってある Section を外すと、止まっていた段がその場で鳴り出す。
-            // 配下の ON/OFF は書き換えないので（about が保つと言っている）、
-            // 起きることを先に出しておく。
-            .confirmationDialog("Remove this section?",
-                                isPresented: Binding(
-                                    get: { confirmingSectionRemoval != nil },
-                                    set: { if !$0 { confirmingSectionRemoval = nil } }),
-                                titleVisibility: .visible) {
-                Button("Remove", role: .destructive) {
-                    if let id = confirmingSectionRemoval { removeConfirmed(id) }
-                    confirmingSectionRemoval = nil
-                }
-                Button("Cancel", role: .cancel) { confirmingSectionRemoval = nil }
-            } message: {
-                Text("The effects inside it will start playing again.")
+            Button("Cancel", role: .cancel) { confirmingSectionRemoval = nil }
+        } message: {
+            Text("The effects inside it will start playing again.")
+        }
+        .onAppear {
+            // **案内の画面は持たない。**
+            // 「2 本構成で、他のアプリの音を寄越す」という形が読めないだろう、
+            // と思って 1 枚置いていた。いまは鎖の頭の帯（ConnectBanner）が
+            // 「コントロールセンターで EffectDeck を選ぶ」と言っていて、
+            // 音が来ていないあいだ出たままになる。
+            // 読む場所が 2 つあっても片方しか読まれない。
+            //
+            // ConnectionTipsView は案内ではない。選んでも繋がらなかったときに
+            // 開く画面で、始め方は書いていない。
+            //
+            // 撮るシートを指定されていればそれを出す。
+            // ピッカーはpresentPickerを通す。2列ではまだ+が無いので、popoverにすると落ちる。
+            if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name) {
+                if which == .picker { presentPicker() } else { sheet = which }
             }
-            .onAppear {
-                // **案内の画面は持たない。**
-                // 「2 本構成で、他のアプリの音を寄越す」という形が読めないだろう、
-                // と思って 1 枚置いていた。いまは鎖の頭の帯（ConnectBanner）が
-                // 「コントロールセンターで EffectDeck を選ぶ」と言っていて、
-                // 音が来ていないあいだ出たままになる。
-                // 読む場所が 2 つあっても片方しか読まれない。
-                //
-                // ConnectionTipsView は案内ではない。選んでも繋がらなかったときに
-                // 開く画面で、始め方は書いていない。
-                //
-                // 撮るシートを指定されていればそれを出す。
-                if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name) {
-                    sheet = which
+            // 動きを撮るために、しばらくしてから自分で開く。
+            // **4 秒待つ。**シミュレータは画面が出るまで 3 秒以上かかることが
+            // あり、1.5 秒だと描いていない間に開き終わって動きが撮れない。
+            if ETScreenshotSeed.autoExpand {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    let effects = dsp.chain.filter { !$0.isSection }
+                    let at = ETScreenshotSeed.autoExpandIndex
+                    if effects.indices.contains(at) { cycle(effects[at]) }
                 }
-                // 動きを撮るために、しばらくしてから自分で開く。
-                // **4 秒待つ。**シミュレータは画面が出るまで 3 秒以上かかることが
-                // あり、1.5 秒だと描いていない間に開き終わって動きが撮れない。
-                if ETScreenshotSeed.autoExpand {
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 4_000_000_000)
-                        let effects = dsp.chain.filter { !$0.isSection }
-                        let at = ETScreenshotSeed.autoExpandIndex
-                        if effects.indices.contains(at) { cycle(effects[at]) }
-                    }
-                }
-                // 写した値の初期合わせ。購読の初回配信に頼らない。
-                running = io.running
-                hasPeer = io.hasPeer
-                processingRate = io.processingRate
             }
+            // 写した値の初期合わせ。購読の初回配信に頼らない。
+            running = io.running
+            hasPeer = io.hasPeer
+            processingRate = io.processingRate
         }
         .onReceive(slow) { _ in io.tick() }
         // 図は画面の描き直しに合わせて汲む。タイマーで回すと面と揃わず、
@@ -331,6 +343,8 @@ struct PipelineView: View {
         .onAppear {
             ETDisplayPump.shared.start { io.pollTelemetry() }
             drainShared()
+            // 起きた直後の並べ方をここで固める。この先の切り替えはflip(to:)を通す。
+            if layoutSplit == nil { layoutSplit = wantsSplit }
         }
         .onDisappear { ETDisplayPump.shared.stop() }
         // **背景に回ったら汲むのをやめる。**
@@ -368,10 +382,11 @@ struct PipelineView: View {
         .onChange(of: dsp.chain.count) { _, _ in
             ETCardSelection.shared.prune(keeping: dsp.chain.map(\.id))
         }
-        // **ピッカーを出さないまま別のシートへ行ったら、面を戻す。**共有の拡張にJSFXとIRが
-        // 溜まっていると、sheetは同じ回で.pickerを経て.irになり、ピッカーは出ない。onDisappearが
-        // 来ないので、次に+で開くとPluginsのまま、行も塗られたままだった。
-        // 出ていたピッカーから替わるときはonDisappearに任せる（閉じる途中で面が替わって見える）。
+        // **ピッカーを出さないまま別のシートへ行ったら、面を戻す。**sheetが同じ回で.pickerを経て
+        // 別のシートになると（JSFXのリンクと共有のIRが同じ回に届いたときなど。共有に溜まっていた
+        // JSFXとIRは、今はdrainSharedが最後の1つしか開かない）、ピッカーは出ずonDisappearが来ないので、
+        // 次に+で開くとPluginsのまま、行も塗られたままだった。
+        // 出ていたピッカーから替わるときはETPickerHostのonDisappearに任せる（閉じる途中で面が替わって見える）。
         .onChange(of: sheet) { old, new in
             guard old != .picker, new != .picker else { return }
             pickerPane = .effects
@@ -381,6 +396,299 @@ struct PipelineView: View {
         .onReceive(io.$running) { running = $0 }
         .onReceive(io.$hasPeer) { hasPeer = $0 }
         .onReceive(io.$processingRate) { processingRate = $0 }
+        // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
+        .onChange(of: wantsSplit) { _, now in flip(to: now) }
+        // 鎖の並び。左の一覧の「右で一番上のカード」と、足したカードを見せるのに使う。
+        .onChange(of: dsp.chain.map(\.id), initial: true) { old, new in
+            viewport.setOrder(new)
+            if old != new { revealNew(old, new) }
+        }
+    }
+
+    /// 2列。左に鎖の一覧、右に鎖を全部開いて並べる。
+    ///
+    /// **標準のNavigationSplitView。**サイドバーのボタン、材質、列の幅はシステムに任せる。
+    /// `.balanced`にして、縦置きでも一覧をカードの上に被せず横に並べる。
+    private func split(_ visible: [Row]) -> some View {
+        NavigationSplitView(columnVisibility: $columns) {
+            ChainMinimap(items: minimapItems(visible), dsp: dsp, viewport: viewport,
+                         move: { move($0, to: $1) },
+                         insert: { _ = addDropped($0, at: $1) })
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        } detail: {
+            chainList(visible, split: true)
+                .environment(\.etCardsPinnedOpen, true)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { chainToolbar(pickerAsPopover: true) }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    /// 1列。iPhoneと、iPadの狭い窓。**今までの形そのまま。**
+    private func stack(_ visible: [Row]) -> some View {
+        NavigationStack {
+            chainList(visible, split: false)
+                // iPad は ETLayout が絞る。撮影のときは -ETWidth で上書きできる
+                // （iPad で撮るのは高さが要るからで、幅まで iPad になると
+                // 実機の見え方にならない）。
+                .frame(maxWidth: ETScreenshotSeed.requested == nil
+                                 ? ETLayout.chainMaxWidth : ETScreenshotSeed.phoneWidth)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    if sheet == .picker {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { sheet = nil }
+                    }
+                }
+            // タイトルは出さない。アプリの中でアプリ名を読む人は居ないし、
+            // その 1 行ぶん鎖が見える。
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { chainToolbar(pickerAsPopover: false) }
+        }
+    }
+
+    private func chainToolbar(pickerAsPopover: Bool) -> PipelineToolbar {
+        PipelineToolbar(sheet: $sheet, confirmingReset: $confirmingReset,
+                        dsp: dsp, io: io, hasPeer: hasPeer,
+                        pickerAsPopover: pickerAsPopover,
+                        pickerAnchored: $pickerAnchored, pickerInSheet: $pickerInSheet,
+                        pickerPane: $pickerPane, freshJSFX: $freshJSFX,
+                        pluginError: $pluginError, afterSheet: $afterSheet)
+    }
+
+    /// 根の.sheetに渡すもの。**2列ではピッカーを普通はここへ出さない。**+に付けたpopoverが出す。
+    /// +がまだ居ないうちに開いたときだけ、ここへ出す（pickerInSheet）。
+    /// 1列では$sheetそのものと同じ。
+    private var presentedSheet: Binding<Sheet?> {
+        Binding(get: { usesSplit && sheet == .picker && !pickerInSheet ? nil : sheet },
+                set: { sheet = $0 })
+    }
+
+    /// ピッカーを出す。空の鎖のAdd Effect、取り込んだJSFX、JSFXのリンク、撮影の-ETSheetはここを通す。
+    ///
+    /// 2列ではpopoverなので、**別のシートが出ていたら先に畳む。**シートが出ている上に
+    /// popoverは出せない。1列は今までどおり、出ているシートと入れ替える。
+    ///
+    /// `fresh`は取り込んだばかりのJSFX（id）。渡すとPluginsで開き、その行を塗る。
+    /// **面は開くときに指す（openPicker）。**先に指すと、2列で畳むのを待つ間に
+    /// onChange(of: sheet)がEffectsへ戻してしまう（出ていたシート→nilはピッカーを経ない）。
+    private func presentPicker(fresh: String? = nil) {
+        guard usesSplit, let open = sheet, open != .picker else {
+            openPicker(fresh: fresh)
+            return
+        }
+        afterClosingSheet { openPicker(fresh: fresh) }
+    }
+
+    /// ピッカーを立てる。**2列で+がまだ画面に居なければ、popoverでなくシートで出す。**
+    ///
+    /// popoverは+を付け先にする。付け先が無いうちに出すと、UIKitが
+    /// 「sourceViewかbarButtonItemが要る」（NSGenericException）で落とす。
+    /// 起きた直後に共有の拡張がJSFXを置いていた（onAppearのdrainShared）、
+    /// JSFXのリンクで起こされた（onOpenURL）、-ETSheet pickerで起こした、のどれもここへ来る。
+    /// どちらで出すかは開くときに決め、閉じるまで変えない。途中で+が現れても、
+    /// 出ているシートを畳んでpopoverへ出し直すことはしない。
+    /// 既に出ているなら面だけをその場で替える（取り込んだJSFXが届いたとき）。
+    private func openPicker(fresh: String? = nil) {
+        if let fresh {
+            pickerPane = .plugins
+            freshJSFX = fresh
+        }
+        guard sheet != .picker else { return }
+        pickerInSheet = usesSplit && !pickerAnchored
+        sheet = .picker
+    }
+
+    /// シートを出す。2列でピッカーのpopoverが出ていたら、先に畳んでから出す。
+    /// popoverが畳み終わる前にシートを出すと、出ないまま残る。1列は今までどおり入れ替える。
+    private func presentSheet(_ which: Sheet) {
+        guard usesSplit, sheet == .picker else {
+            sheet = which
+            return
+        }
+        afterClosingSheet { sheet = which }
+    }
+
+    /// 窓の幅。**跨いだときだけ書く。**同じ値を書いても、送るたびの組み直しは起きないが、
+    /// 窓の端を引いている間ずっと書くことになる。
+    private func updateWideEnough(_ width: CGFloat) {
+        // iPhoneは2列にしないので、測っても書かない。
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        if wideEnough, width < 620 {
+            wideEnough = false
+        } else if !wideEnough, width >= 640 {
+            wideEnough = true
+        }
+    }
+
+    /// 並べ方を切り替える（回したとき、Stage Managerで窓を広げ・狭めたとき、Split Viewの境を動かしたとき）。
+    ///
+    /// **前の並べ方が出ているうちに片付ける。**切り替えると行が全部作り直されるので、
+    /// 掴んでいる行・払って開いている行はそのまま居なくなる。
+    ///   - 掴みはその場で離す。戻る動きを待たない（戻る先の行がもう居ない）
+    ///   - 払いは閉じる
+    ///   - ピッカーは閉じる。1列ではシート、2列ではpopoverで、出し方が違う
+    ///   - 読んでいたカードを覚え、新しい並べ方で上端へ戻す（restoreAnchor）
+    /// 古い行の認識器から後で届くmovedは、行の側のguardが捨てる。
+    private func flip(to split: Bool) {
+        guard layoutSplit != split else { return }
+        if dragging != nil {
+            dragging = nil
+            dragExternalSnapshot = nil
+            dragShift = .zero
+        }
+        if swiping != nil {
+            swipeX = 0
+            swiping = nil
+        }
+        if sheet == .picker { sheet = nil }
+        // 新しい並べ方の+が出るまでは付け先が無い。出れば+の側が立て直す。
+        pickerAnchored = false
+        let showing = usesSplit
+        viewport.arm(split: showing)
+        viewport.forget(split: showing)
+        // 覚えた位置は前の並べ方のもの。新しい並べ方では選び直す。
+        keeper.reset()
+        geometry.reset()
+        rowsHeight = 0
+        layoutSplit = split
+    }
+
+    /// 足したカードが画面に無ければ、上端へ出す。**2列のときだけ。**
+    ///
+    /// 押して足す・落とす・JSFXが後から入る・プリセット・鎖ごとの入れ替えの全部が
+    /// 鎖の並びの変化として来るので、足す口の側には何も書かない。
+    /// 見えているかは行が測れてから決める（measured）。掴んでいる最中は触らない
+    /// （組から出すときに無名のSectionが入る）。
+    private func revealNew(_ old: [UUID], _ new: [UUID]) {
+        guard usesSplit, dragging == nil else { return }
+        let before = Set(old)
+        let shown = Set(rows.map(\.node.id))
+        guard let id = new.first(where: { !before.contains($0) && shown.contains($0) }) else { return }
+        // **先に測れていたらここで決める。**新しい行の最初の測りとこのonChangeの
+        // どちらが先に来るかは決まっていない。測りが先だと、待ちが残ったまま次に
+        // 送ったときに消化され、人が送っている最中に飛んでいた。
+        if let rect = geometry[id] {
+            reveal(id, rect)
+        } else {
+            geometry.pendingReveal = id
+        }
+    }
+
+    /// 行が測れた。並べ替えの判定と最後の帯の高さ、足したカードの確かめに使う。
+    private func measured(_ id: UUID, _ rect: CGRect) {
+        geometry.record(id, rect)
+        let height = geometry.contentHeight
+        if rowsHeight != height { rowsHeight = height }
+        if geometry.pendingReveal == id {
+            geometry.pendingReveal = nil
+            reveal(id, rect)
+        }
+    }
+
+    /// 行の中身の中での上端が変わった（送っただけでは来ない）。**2列のときだけ。**
+    /// 読んでいるカードなら、動いたぶん送り直す（ETReadingKeeper）。
+    ///
+    /// **測れたその場で直す。**次の回へ回すと、その間はずれた位置のまま描かれうる。
+    private func contentMoved(_ id: UUID, _ top: CGFloat) {
+        guard usesSplit else { return }
+        let scroll = brake.scrollView
+        let least = -(scroll?.adjustedContentInset.top ?? 0)
+        let offset = scroll?.contentOffset.y ?? 0
+        /// 送り直してよいか。読んでいるカードのときだけ聞かれる。
+        func keeps() -> Bool {
+            guard let scroll else { return false }
+            let touched = scroll.isTracking || scroll.isDragging || scroll.isDecelerating
+            return !touched && viewport.anchor == nil && offset > least + 0.5
+        }
+        let moved = keeper.moved(id, to: top, order: dsp.chain.map(\.id), keeps: keeps())
+        guard moved != 0, let scroll else { return }
+        // 上が縮んだときは一番上より上へは送らない。
+        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(least, offset + moved)),
+                                animated: false)
+    }
+
+    /// 読んでいるカードを選び直す。**2列のときだけ。**止まったときと、左の一覧で飛んだときに呼ぶ。
+    ///
+    /// `id`を渡せばそのカード。渡さなければ、上端が画面に入っている一番上のカード
+    /// （無ければ、画面の上端にかかっているカード）。
+    /// 上端にかかっているだけのカードは、見えていない上の部分が伸びても読む位置は動かないので、
+    /// 上端が見えているカードのほうを選ぶ。
+    ///
+    /// 選ぶのに使う矩形は前の回のものでよい。位置は中身の中での上端（ETReadingKeeper）で持つので、
+    /// 選び違えても送りを取り違えることはない。
+    private func followReading(_ id: UUID? = nil) {
+        guard usesSplit else { return }
+        let order = dsp.chain.map(\.id)
+        var chosen = id
+        if chosen == nil, let scroll = brake.scrollView {
+            let visibleTop = scroll.adjustedContentInset.top
+            let present = Set(order)
+            var below: (id: UUID, y: CGFloat)?
+            var above: (id: UUID, y: CGFloat)?
+            for (row, rect) in geometry.rects where present.contains(row) {
+                if rect.minY >= visibleTop - 1 {
+                    if rect.minY < listHeight, rect.minY < (below?.y ?? .infinity) {
+                        below = (row, rect.minY)
+                    }
+                } else if rect.minY > (above?.y ?? -.infinity) {
+                    above = (row, rect.minY)
+                }
+            }
+            chosen = below?.id ?? above?.id
+        }
+        keeper.follow(chosen, order: order)
+    }
+
+    /// 足したカードが画面の外なら、そこへ飛ぶ。
+    private func reveal(_ id: UUID, _ rect: CGRect) {
+        // 矩形はScrollViewに付けた座標なので、0からlistHeightが見えている範囲。
+        if rect.maxY <= 0 || rect.minY >= listHeight { viewport.request(id) }
+    }
+
+    /// 左の一覧から頼まれた所へ飛ぶ。**動かさない。**
+    /// 動かすと通り道のカードが全部画面に入り、図が次々に起きる。
+    /// 慣性で流れているとscrollToが効かないので、先に止める（ETScrollBrake）。
+    private func jumpTo(_ jump: ETJump, _ proxy: ScrollViewProxy) {
+        guard let id = jump.id else { return }
+        // 飛んだ先を読んでいるカードにする。この後で上のカードが伸びても、そこに留まる。
+        followReading(id)
+        brake.jump {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo(id, anchor: .top) }
+        }
+    }
+
+    /// 覚えたカードを上端へ戻す。覚えていなければ何もしない。
+    /// 切り替えた直後と、中身の高さが変わるたびに呼ぶ（AUの画面は遅れて大きさを決める）。
+    private func restoreAnchor(_ proxy: ScrollViewProxy) {
+        guard let id = viewport.anchor else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { proxy.scrollTo(id, anchor: .top) }
+    }
+
+    /// 左の一覧の行。右と同じ並びから作る。
+    private func minimapItems(_ visible: [Row]) -> [ETMinimapItem] {
+        visible.map { row in
+            let node = row.node
+            let name = node.isSection
+                ? (node.sectionName.isEmpty ? "Section" : node.sectionName)
+                : node.etDisplayName
+            return ETMinimapItem(id: node.id,
+                                 index: row.index,
+                                 name: name,
+                                 isSection: node.isSection,
+                                 // 右で左に線が付く行（Sectionの配下）と同じ行を字下げする。
+                                 indented: !node.isSection && row.block != .alone,
+                                 enabled: node.enabled,
+                                 muted: node.isMuted,
+                                 levelTap: node.spec.type == "LevelMeterPlugin" ? node.tapId : nil)
+        }
     }
 
     /// 取り込んだ結果を出す。「このアプリで開く」と共有の拡張で同じ出し方にする。
@@ -388,15 +696,14 @@ struct PipelineView: View {
     /// 断るときはシートを畳んでから出す（afterClosingSheet）。シートの上には警告が出ない。
     private func show(_ received: ETInbox.Received, unsupported: String) {
         switch received {
-        case .ir: sheet = .ir
+        case .ir: presentSheet(.ir)
         // 取り込んだ JSFX は一覧に入る。そこから鎖へ足してもらう。
         // **Pluginsで開く。**Effectsで開くと、入ったものを探させることになる。
-        // ピッカーが開いていればsheetは変わらず、面だけがその場で替わる。
-        case .jsfx(let id):
-            pickerPane = .plugins
-            freshJSFX = id
-            sheet = .picker
+        // ピッカーが開いていればsheetは変わらず、面だけがその場で替わる（openPicker）。
+        // 2列で別のシートが出ていれば、畳んでからpopoverで開く（presentPicker）。
+        case .jsfx(let id): presentPicker(fresh: id)
         // **黙って落とさない。**押しても何も起きないのと見分けが付かない。
+        // 2列のピッカーのpopoverもafterClosingSheetが畳み、閉じてから出す（runAfterPopover）。
         case .failed(let why): afterClosingSheet { pluginError = why }
         case .unsupported: afterClosingSheet { importError = unsupported }
         }
@@ -427,26 +734,30 @@ struct PipelineView: View {
     /// afterClosingSheetが閉じる。SwiftUIには開きも閉じもしなかったことになってonDismissが来ず、
     /// 警告は出ないまま残り、関係の無い次のシートを閉じたときに出ていた（2本溜まっていたとき）。
     /// 取り込めたものがあれば、そのシートは閉じさせず、閉じられた後に出す。
+    ///
+    /// **開くのは最後の1つだけ。**1列では、前のものは同じ回で次のsheetに上書きされて出ない。
+    /// 2列では、次のものが前のものを畳んでから出ようとする（presentSheet・presentPicker）が、
+    /// 前のものはまだ出ていないので閉じた知らせが来ず、どちらも出ないまま残っていた。
     private func drainShared() {
         guard let root = ETShareInbox.root else { return }
         let received = ETShareInbox.drain(in: root, { ETInbox.receive($0) })
-        var opened = false
+        var opener: ETInbox.Received?
         for item in received {
             switch item {
             case .ir, .jsfx:
-                show(item, unsupported: ETInbox.unsupportedLink)
-                opened = true
+                opener = item
             case .failed, .unsupported:
                 break
             }
         }
+        if let opener { show(opener, unsupported: ETInbox.unsupportedLink) }
         for item in received {
             switch item {
             case .ir, .jsfx:
                 break
             case .failed, .unsupported:
-                if opened {
-                    afterSheet = { show(item, unsupported: ETInbox.unsupportedLink) }
+                if opener != nil {
+                    afterOpened { show(item, unsupported: ETInbox.unsupportedLink) }
                 } else {
                     show(item, unsupported: ETInbox.unsupportedLink)
                 }
@@ -454,11 +765,24 @@ struct PipelineView: View {
         }
     }
 
-    private var chainList: some View {
-        // 1 回だけ組む。⋯ の Move Up / Move Down が「画面の何行目か」と
-        // 「画面の行数」の両方を要るので、行ごとに組み直すと本数ぶん無駄になる。
-        let visible = rows
+    /// 開いたシート（2列ではピッカーのpopoverのことも）が閉じてから出す。
+    ///
+    /// **afterSheetを上書きしない。**2列では、出ていたシートを畳んでから開くので
+    /// （presentPicker・presentSheet）、開く側がもうafterSheetで待っていることがある。
+    /// 上書きするとピッカーが出なくなる。後ろへ繋ぎ、開いたものが出たらそれが閉じるのを待つ。
+    private func afterOpened(_ next: @escaping () -> Void) {
+        guard let opening = afterSheet else {
+            afterSheet = next
+            return
+        }
+        afterSheet = {
+            opening()
+            if sheet != nil { afterSheet = next } else { next() }
+        }
+    }
 
+    /// 鎖。1列でも2列でも同じもの。`split`は2列の右に置くときに真。
+    private func chainList(_ visible: [Row], split: Bool) -> some View {
         // **List ではなく ScrollView + VStack。**
         //
         // List は行の高さを動かす間も中身を切るので掴んだカードが欠ける。
@@ -468,7 +792,11 @@ struct PipelineView: View {
         // その代わり .swipeActions が使えない（List の行でしか効かない）ので、
         // 左スワイプの削除はここで自前でやる。判定は ETDragHandle の
         // UIPanGestureRecognizer（横向きのときだけ立つ）。
-        return ScrollView {
+        //
+        // 2列でもVStackのまま（LazyVStackにしない）。画面の外の行を畳むと
+        // AUやJSFXの画面が外れ、並べ替えに要る矩形も消える。
+        ScrollViewReader { proxy in
+        ScrollView {
             VStack(spacing: 0) {
             ClipboardBanner(dsp: dsp)
                 .padding(.horizontal, 14)
@@ -491,11 +819,13 @@ struct PipelineView: View {
             }
 
             if dsp.chain.isEmpty {
-                EmptyChainRow { insertAt = nil; sheet = .picker }
+                EmptyChainRow { presentPicker() }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
             } else {
                 ForEach(visible) { row in
+                    // 見えているかを左の一覧へ知らせ、2列では見えていない図を止める。
+                    ETLiveRow(id: row.node.id, split: split, viewport: viewport) {
                     // **配下だと分かる印。**左に線を引いて内側へ寄せる。
                     // 続く行で線が繋がるので、Section から次の Section の手前までが
                     // 一組に見える。囲まないし、行間も詰めない。
@@ -520,9 +850,10 @@ struct PipelineView: View {
                         index: row.index,
                         node: row.node,
                         dsp: dsp,
-                        isExpanded: expanded.contains(row.node.id),
-                        isCollapsedFully: dsp.collapsedFully.contains(row.node.id),
-                        toggleExpanded: { cycle(row.node) },
+                        // 2列では全部開く。iPhoneの開閉の覚えは読まない。
+                        isExpanded: isOpen(row.node.id),
+                        isCollapsedFully: !split && dsp.collapsedFully.contains(row.node.id),
+                        toggleExpanded: split ? {} : { cycle(row.node) },
                         // 隣は鎖の隣ではなく**画面の隣**。畳んだ Section の配下と
                         // 入れ替わって行が消えないように、ドラッグと同じ道を通す。
                         moveUp: { moveRow(row.visible, to: row.visible - 1) },
@@ -550,16 +881,26 @@ struct PipelineView: View {
                         .offset(x: swiping == row.node.id ? swipeX : 0)
                         .background(alignment: .trailing) { deleteAction(row) }
                         // 落とし先の判定に要る。開閉で高さが変わるたびに来る。
+                        // 送るたびにも来るが、観測しない箱へ書くだけなのでbodyは走らない。
                         .onGeometryChange(for: CGRect.self) {
                             $0.frame(in: .named(Self.chainSpace))
-                        } action: { rowRects[row.node.id] = $0 }
+                        } action: { measured(row.node.id, $0) }
+                        // 中身の中での上端。送っても変わらず、上の行の高さが変わったときだけ来る。
+                        // 使うのは2列の右だけ。
+                        .onGeometryChange(for: CGFloat.self) {
+                            $0.frame(in: .named(Self.contentSpace)).minY
+                        } action: { if split { contentMoved(row.node.id, $0) } }
                                 .opacity(dragging == row.node.id ? 0 : 1)
                         // 掴みは UIKit の長押しで受ける（DragHandle.swift の頭）。
                         // 面は素通しなので、カードのタップも下へ届く。
+                        // 2列の右では掴まない。並べ替えは左の一覧でやる。
                         .overlay {
                             ETDragHandle(
+                                reorders: !split,
                                 began: { beginDrag(row) },
                                 moved: { d in
+                                    // 並べ方を切り替えた後に、古い行の認識器から届いたものは捨てる。
+                                    guard dragging == row.node.id else { return }
                                     dragShift = d
                                     settle(row.node.id)
                                 },
@@ -577,6 +918,9 @@ struct PipelineView: View {
                         }
                     if row.block == .bottom { ETGroupRule() }
                     }
+                    }
+                    // 左の一覧から飛ぶ先。
+                    .id(row.node.id)
                 }
 
 
@@ -597,11 +941,24 @@ struct PipelineView: View {
                     }
             }
             }
+            .coordinateSpace(name: Self.contentSpace)
+            .modifier(ETDetailColumn(split: split, brake: brake))
+        }
+        // 触れたら戻す先の覚えを外す。そこから先は人が読む位置を決める。
+        .onScrollPhaseChange { _, phase in
+            if phase == .tracking || phase == .interacting { viewport.anchor = nil }
+            // 止まったところで、読んでいるカードを選び直す（2列だけ）。
+            if split, phase == .idle { followReading() }
+        }
+        // 覚えている間は、中身の高さが変わるたびに戻す（遅れて大きさを決めるAUの画面）。
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
+            restoreAnchor(proxy)
         }
         // **器の背面で落とし先を受ける。**鎖が短いと、最後の段より下は
         // どの行にも属さない余白になる。中身を画面の高さまで伸ばす手もあるが、
         // GeometryReader で包むと外側の寸法の決まり方が変わって余白が崩れた。
         // 背面なら、行に落ちたものは行が先に受け、余った所だけここへ来る。
+        // 2列の両脇の余白もここへ落ちる。
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -630,14 +987,14 @@ struct PipelineView: View {
                         // controller as the real card. Doing so reparents the
                         // controller into the overlay and leaves the row blank
                         // after drop until it is collapsed and reopened.
-                        isExpanded: expanded.contains(row.node.id),
-                        isCollapsedFully: dsp.collapsedFully.contains(row.node.id),
+                        isExpanded: isOpen(row.node.id),
+                        isCollapsedFully: !split && dsp.collapsedFully.contains(row.node.id),
                         toggleExpanded: {}, moveUp: {}, moveDown: {},
                         canMoveUp: false, canMoveDown: false,
                         externalSnapshot: dragExternalSnapshot,
                         isDragPreview: true, block: row.block)
                 }
-                // 行と同じ余白を付ける。rowRects は余白の外側で測っているので、
+                // 行と同じ余白を付ける。矩形は余白の外側で測っているので、
                 // 付けないと左右に広く見える。
                 .padding(.leading,
                          row.showsBracket ? ETSectionBracket<EmptyView>.inset : 14)
@@ -649,6 +1006,19 @@ struct PipelineView: View {
                         y: anchorRect.minY + dragShift.height)
                 .allowsHitTesting(false)
             }
+        }
+        // 右の幅が変わった（回した、左の一覧を出し入れした）。読んでいたカードを上端に保つ。
+        // 1列（iPhone）では何もしない。
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { old, new in
+            guard split, old > 0, old != new else { return }
+            // 覚えている最中なら覚え直さない。切り替えた直後は列が広がる間に何度も来て、
+            // そのときの見えている範囲はまだ新しい並べ方のものではない。
+            if viewport.anchor == nil { viewport.arm(split: true) }
+            restoreAnchor(proxy)
+        }
+        .onChange(of: viewport.jump) { _, jump in jumpTo(jump, proxy) }
+        // 並べ方を切り替えた直後。行が並んでから戻すので次の回に回す。
+        .onAppear { Task { @MainActor in restoreAnchor(proxy) } }
         }
     }
 
@@ -819,7 +1189,7 @@ struct PipelineView: View {
             dragExternalSnapshot = nil
         }
         dragging = row.node.id
-        anchorRect = rowRects[row.node.id] ?? .zero
+        anchorRect = geometry[row.node.id] ?? .zero
         dragShift = .zero
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
     }
@@ -842,7 +1212,7 @@ struct PipelineView: View {
     /// 時間で必ず畳む。
     private func endDrag() {
         guard let id = dragging else { return }
-        let slot = rowRects[id] ?? anchorRect
+        let slot = geometry[id] ?? anchorRect
         withAnimation(.snappy(duration: Self.returnDuration)) {
             anchorRect = slot
             dragShift = .zero
@@ -881,7 +1251,7 @@ struct PipelineView: View {
     /// 918pt のカードを掴んだだけで 500pt 運ばされる。手本（Shortcuts）は大きいものを
     /// 掴んでもわずかな移動で入れ替わる。端で比べれば a が式から消える。
     ///
-    /// **入れ替えの動き（0.22 秒）の最中も安全。**`rowRects` はその間ずっと中間の値を
+    /// **入れ替えの動き（0.22 秒）の最中も安全。**行の矩形（`geometry`）はその間ずっと中間の値を
     /// 返すが、相手は上（下）へ動いていく途中なので、相手の中心は逆条件から
     /// **遠ざかる向きにしか動かない**（動き始めの瞬間が等号で、判定は `<` / `>`）。
     /// 閾値でやっていたときに往復していたのは、ここを勘定に入れていなかったため。
@@ -894,11 +1264,11 @@ struct PipelineView: View {
         // 判定は縦だけ見る。鎖は 1 列なので横は絵の都合でしかない。
         let moving = anchorRect.offsetBy(dx: 0, dy: dragShift.height)
 
-        if at > 0, let above = rowRects[visible[at - 1].node.id], moving.minY < above.midY {
+        if at > 0, let above = geometry[visible[at - 1].node.id], moving.minY < above.midY {
             swap(at, to: at - 1)
             return
         }
-        if at < visible.count - 1, let below = rowRects[visible[at + 1].node.id] {
+        if at < visible.count - 1, let below = geometry[visible[at + 1].node.id] {
             if moving.maxY > below.midY {
                 // **組の最後から下へ出ようとしたら、組を閉じる。**
                 // そのまま入れ替えると、次の組の見出しを飛び越えて
@@ -907,7 +1277,7 @@ struct PipelineView: View {
                 // 下へは 2 つ先。move(_:to:) は List の onMove と同じ数え方。
                 swap(at, to: at + 2)
             }
-        } else if visible[at].block == .bottom, let mine = rowRects[id],
+        } else if visible[at].block == .bottom, let mine = geometry[id],
                   moving.midY > mine.maxY {
             // 鎖の末尾。下に行が無いので入れ替えでは外に出られない。
             // 自分の枠の下端を中心が越えたら、で s > a/2。前の書き方
@@ -1022,7 +1392,7 @@ struct PipelineView: View {
         var hidden: Set<Int> = []
         for i in chain.indices {
             if chain[i].isRootReset { hidden.insert(i); continue }
-            guard chain[i].isSection, !expanded.contains(chain[i].id) else { continue }
+            guard chain[i].isSection, !isOpen(chain[i].id) else { continue }
             for member in a.members(of: chain[i].id) {
                 if let at = indexOf[member] { hidden.insert(at) }
             }
@@ -1061,7 +1431,7 @@ struct PipelineView: View {
             let node = chain[shown[$0]]
             return Row(visible: $0, index: shown[$0], node: node,
                        block: position($0),
-                       isCollapsed: node.isSection && !expanded.contains(node.id))
+                       isCollapsed: node.isSection && !isOpen(node.id))
         }
     }
 
@@ -1151,9 +1521,7 @@ struct PipelineView: View {
                 // ``` の囲いを探して切ると別の 1 本になる。
                 let entry = try ETJSFXHost.shared.importSource(source)
                 // ファイルで受けたときと同じくPluginsで開く（showの.jsfx）。
-                pickerPane = .plugins
-                freshJSFX = entry.id
-                sheet = .picker
+                presentPicker(fresh: entry.id)
             } catch {
                 // 読めた上で取り込めなかった（この版では JSFX を閉じている、など）。
                 let why = error.localizedDescription
@@ -1171,6 +1539,9 @@ struct PipelineView: View {
     /// sheet = nil と出す側を同じ更新で立てると、畳む途中で出す側が落ちても
     /// 気づけない（鎖の確認なら、押したリンクが何もしなかった形になる）。
     /// 続きは .sheet の onDismiss（runAfterSheet）が走らせる。
+    ///
+    /// 2列のピッカーはpopoverで、onDismissを持たない。そちらはpopoverの中身が
+    /// 消えたとき（PipelineToolbarのonDisappear）に、提示が片付くのを待ってから走らせる。
     private func afterClosingSheet(_ show: @escaping () -> Void) {
         guard sheet != nil else { show(); return }
         afterSheet = show
@@ -1246,7 +1617,7 @@ struct PipelineView: View {
             guard visible.indices.contains(offset) else { continue }
             let i = visible[offset].index
             moving.insert(i)
-            if visible[offset].node.isSection && !expanded.contains(visible[offset].node.id) {
+            if visible[offset].node.isSection && !isOpen(visible[offset].node.id) {
                 // 畳んだ組を動かすと配下も付いてくる。配下は Analysis が持つ。
                 for member in dsp.analysis.members(of: visible[offset].node.id) {
                     if let at = dsp.chain.firstIndex(where: { $0.id == member }) {
@@ -1306,12 +1677,51 @@ private struct PipelineToolbar: ToolbarContent {
     let io: AudioIO
     /// 拡張が繋がっているか。繋がっていないあいだマスターを沈める。
     let hasPeer: Bool
+    /// 2列のとき。+はシートではなく、自分に付けたpopoverでピッカーを出す。
+    /// 閉じた後の続き（afterSheet）もこちらで走らせる。popoverはonDismissを持たないので。
+    let pickerAsPopover: Bool
+    /// +が画面に居るか。**立てるのはこちら**、読むのは親のopenPicker。
+    @Binding var pickerAnchored: Bool
+    /// 親がピッカーを根のシートで出したか。そのあいだpopoverは出さない。
+    @Binding var pickerInSheet: Bool
+    /// popoverのピッカーの面と、取り込んだばかりのJSFX。根のシートと同じ値（持ち主は親）。
+    @Binding var pickerPane: EffectPickerView.Pane
+    @Binding var freshJSFX: String?
+    @Binding var pluginError: String?
+    @Binding var afterSheet: (() -> Void)?
+
+    /// popoverを出しているか。中身はsheetの.pickerで、根の.sheetはそれを見ない（presentedSheet）。
+    /// 親がシートで出したときは偽のまま。
+    private var pickerShown: Binding<Bool> {
+        Binding(get: { sheet == .picker && !pickerInSheet },
+                set: { if !$0, sheet == .picker, !pickerInSheet { sheet = nil } })
+    }
 
     /// マスターの読み上げ。入切と、沈めている理由の両方を言う。
     /// 沈んでいることは目には見えても、読み上げには何も出ないため。
     private var voiceOverValue: String {
         let state = dsp.bypass ? "Bypassed" : "On"
         return hasPeer ? state : state + ", no audio"
+    }
+
+    /// popoverが閉じた後の続き（「Replace chain?」やJSFXの警告）を走らせる。
+    ///
+    /// **畳み終わるのを待つ。**popoverの中身のonDisappearは、畳む動きが終わる前に
+    /// 来ることがある。その最中に確認や警告を出すと、出ないまま残る
+    /// （シートのほうはonDismissで畳み終わりを待っている。afterClosingSheet）。
+    private func runAfterPopover() {
+        guard afterSheet != nil else { return }
+        let after = $afterSheet
+        let shown = $sheet
+        Task { @MainActor in
+            await ETPresentation.settled()
+            // 別のシートへ替わっただけなら、それを閉じるまで待つ（runAfterSheetと同じ）。
+            // 続きはそのシートのonDismiss（runAfterSheet）が走らせる。
+            guard shown.wrappedValue == nil else { return }
+            let next = after.wrappedValue
+            after.wrappedValue = nil
+            next?()
+        }
     }
 
     var body: some ToolbarContent {
@@ -1357,7 +1767,33 @@ private struct PipelineToolbar: ToolbarContent {
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button("Presets", systemImage: "square.stack") { sheet = .presets }
-            Button("Add Effect", systemImage: "plus") { sheet = .picker }
+            if pickerAsPopover {
+                // **+から出す。**選ぶたびに閉じる。つまんで運ぶと自分で閉じ、
+                // 右のカード・余白、左の一覧の行の間のどれへでも落とせる。
+                // 押せたなら+は画面に居る。popoverで出す。
+                Button("Add Effect", systemImage: "plus") {
+                    pickerInSheet = false
+                    sheet = .picker
+                }
+                    .popover(isPresented: pickerShown) {
+                        ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
+                                     pane: $pickerPane, fresh: $freshJSFX,
+                                     waitsForDismissal: true)
+                            .frame(minWidth: 380, idealWidth: 420,
+                                   minHeight: 520, idealHeight: 720)
+                            .onDisappear { runAfterPopover() }
+                    }
+                    // **付け先ができたことを親へ知らせる。1回遅らせる。**
+                    // 出てきた同じ回ではツールバーの項目がまだ組み上がっていないことがあり、
+                    // 起きた直後のonAppear（drainSharedなど）もその回に走る。
+                    // それより前に開いたものは親がシートで出す（openPicker）。
+                    .onAppear {
+                        Task { @MainActor in pickerAnchored = true }
+                    }
+                    .onDisappear { pickerAnchored = false }
+            } else {
+                Button("Add Effect", systemImage: "plus") { sheet = .picker }
+            }
             // IR Library はここに出さない。IR Reverb のカードから開く。
             Menu {
                 Button("Settings", systemImage: "gearshape") { sheet = .settings }
@@ -1381,6 +1817,102 @@ private struct PipelineToolbar: ToolbarContent {
             }
             .accessibilityIdentifier("moreMenu")
         }
+    }
+}
+
+/// ピッカーと、選んだものを鎖へ足す4つの口。**シートでもpopoverでも同じものを出す。**
+///
+/// 足すのはいつも末尾（落として位置を決めるほうはPipelineView.addDropped）。
+/// 閉じるのはこちら。ピッカーの中のdismiss()は、検索が出ている間シートではなく
+/// 検索を閉じる。検索から選んだときだけ閉じない、という形になっていた。
+struct ETPickerHost: View {
+    let dsp: EffeTuneDSP
+    @Binding var sheet: PipelineView.Sheet?
+    @Binding var pluginError: String?
+    /// 上の段階のどれを出すかと、取り込んだばかりのJSFX（EffectPickerViewのpane・fresh）。
+    /// 持ち主はPipelineView。取り込みの口がPluginsを指して開く（openPicker）。
+    @Binding var pane: EffectPickerView.Pane
+    @Binding var fresh: String?
+    /// popoverで出しているとき。足せなかった警告を、popoverが畳み終わってから出す。
+    /// JSFXは音の準備が無いとその場で失敗し、閉じる途中に警告を立てると出ないまま残る。
+    /// シート（1列）は今までどおりその場で立てる。
+    var waitsForDismissal = false
+
+    var body: some View {
+        EffectPickerView(onPick: { spec in
+            dsp.add(spec, at: nil)
+            sheet = nil
+        }, onPickAU: { entry in
+            let instanceID = UUID().uuidString
+            guard let externalIndex = try? ETAUExternalBridge.shared.reserve(
+                instanceID: instanceID) else { return }
+            dsp.addExternal(id: entry.id, instanceID: instanceID,
+                            name: entry.name,
+                            category: "Audio Units",
+                            externalIndex: externalIndex, at: nil)
+            ETAUHost.shared.create(entry, instanceID: instanceID)
+            sheet = nil
+        }, onPickJSFX: { entry in
+            let instanceID = UUID().uuidString
+            sheet = nil
+            ETJSFXHost.shared.prepare(entry, instanceID: instanceID) { result in
+                switch result {
+                case .success(let externalIndex):
+                    dsp.addExternal(id: entry.id, instanceID: instanceID,
+                                    name: entry.name, category: "JSFX",
+                                    externalIndex: externalIndex, at: nil)
+                case .failure(let error): report(error.localizedDescription)
+                }
+            }
+        }, onPickPreset: { name, items in
+            // 名前の付いた Section に包んで挿す。置き換えない。
+            // 鎖ごと置き換えたいときは Presets 画面のほう。
+            dsp.addPreset(named: name, items: items, at: nil)
+            sheet = nil
+        }, pane: $pane, fresh: $fresh)
+        // 次に開くときはEffectsから。Pluginsを指して開くのは取り込みの口だけ。
+        // シートでもpopoverでも、閉じたらここで戻す。
+        .onDisappear {
+            pane = .effects
+            fresh = nil
+        }
+    }
+
+    private func report(_ why: String) {
+        guard waitsForDismissal else {
+            pluginError = why
+            return
+        }
+        Task { @MainActor in
+            await ETPresentation.settled()
+            pluginError = why
+        }
+    }
+}
+
+/// 窓の上の提示（シート・popover・確認）が片付くのを待つ。
+@MainActor
+enum ETPresentation {
+    /// 何も出ていなくなるまで待つ。最長1秒。**待つのは畳む動きの終わりだけ。**
+    /// 決め打ちの時間で待つと、速い端末では余計に待たせ、遅い端末では足りない。
+    static func settled() async {
+        for _ in 0..<50 where busy {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private static var busy: Bool {
+        guard let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })?
+            .keyWindow?.rootViewController else { return false }
+        return presents(root)
+    }
+
+    /// 自分か子のどれかが何かを出しているか。2列では列ごとに子の器があり、
+    /// popoverを出すのが根ではなく列の器のことがあるので、子まで見る。
+    private static func presents(_ controller: UIViewController) -> Bool {
+        controller.presentedViewController != nil || controller.children.contains { presents($0) }
     }
 }
 
@@ -1501,5 +2033,25 @@ private struct EmptyChainRow: View {
                 .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// 2列の右の鎖の列。**ScrollViewの内側で**カードの幅を絞り、左の一覧から飛ぶための止め具を付ける。
+/// 内側で絞るので、両脇の余白も一緒に送れて、落とし先にもなる。
+/// 1列では何もしない（今までの形のまま。440の絞りは外側、stack(_:)が付ける）。
+private struct ETDetailColumn: ViewModifier {
+    let split: Bool
+    let brake: ETScrollBrake
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if split {
+            content
+                .frame(maxWidth: ETLayout.detailMaxWidth)
+                .frame(maxWidth: .infinity)
+                .etScrollBrake(brake)
+        } else {
+            content
+        }
     }
 }

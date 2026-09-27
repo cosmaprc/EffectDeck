@@ -80,7 +80,7 @@ private struct PitchMeterGraph: View {
     let maximum: Double
     let reference: Double
     let color: ETPitchColor
-    @ObservedObject private var telemetry = Telemetry.shared
+    @ETTelemetryFeed private var telemetry
     @State private var history: [ETPitchPoint] = []
     /// Heatmap の目盛り。Note Spectrogram と同じ追従（pitch_meter.js v2.11.0:287-293）。
     @State private var level = ETLevelReference()
