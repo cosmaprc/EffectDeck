@@ -90,6 +90,15 @@ struct EffectPickerView: View {
     /// 一覧を払うと追従し、帯を押すと一覧が飛ぶ。両方向で繋がる。
     @State private var current = ""
 
+    /// Pluginsで帯から飛んだ後、まだ指で払っていないか。立っている間は見出しでcurrentを書き換えない。
+    /// 末尾の作者は行が少なく、着いた先で下の作者の見出しも画面に入るので、押した作者の塗りが奪われていた。
+    @State private var jumping = false
+    /// Pluginsの一覧を、払った直後の慣性中でも飛ばす（ETScrollBrake）。
+    @State private var brake = ETScrollBrake()
+    /// Pluginsの一覧の枠から安全領域を除いた高さ。末尾に空ける量を決める。
+    /// 行が見えるのは下の検索欄の上端までで、それよりは低い（シミュレータで284ptに対し370pt）。
+    @State private var pluginListHeight: CGFloat = 0
+
     /// 出すもの。カーネルとして登録されている型に Section を足したもので、
     /// 中身は dsp が決めている（EffeTuneDSP.swift:142）。
     /// Section だけカーネルが無いのは、音を触らないから
@@ -256,6 +265,7 @@ struct EffectPickerView: View {
             .onChange(of: pane) { _, selected in
                 current = firstCategory(for: selected)
                 jump = Jump()
+                jumping = false
             }
             .searchable(text: $query, isPresented: $searching, prompt: "Search effects")
             .navigationTitle("Available Effects")
@@ -469,21 +479,9 @@ struct EffectPickerView: View {
                             }
                             ForEach(pluginVendors, id: \.self) { vendor in
                                 Section {
-                                    let entries = audioUnits(vendor: vendor)
-                                    ForEach(Array(entries.enumerated()), id: \.element.id) {
-                                        offset, entry in
-                                        auRow(entry)
-                                            .id(offset == 0 ? Self.jumpTarget(vendor)
-                                                            : "au-entry-" + entry.id)
-                                    }
+                                    ForEach(audioUnits(vendor: vendor)) { auRow($0) }
                                     let scripts = jsfxEntries(vendor: vendor)
-                                    ForEach(Array(scripts.enumerated()), id: \.element.id) {
-                                        offset, entry in
-                                        jsfxRow(entry)
-                                            .id(entries.isEmpty && offset == 0
-                                                ? Self.jumpTarget(vendor)
-                                                : "jsfx-entry-" + entry.id)
-                                    }
+                                    ForEach(scripts) { jsfxRow($0) }
                                     // **消す口。**行は Button で onDrag も付いているので、
                                     // 自前のスワイプを重ねるとタップ・ドラッグ・払いの 3 つが
                                     // 同じ行で競合する。List の onDelete なら List 側の
@@ -497,17 +495,40 @@ struct EffectPickerView: View {
                                 } header: {
                                     Text(vendor)
                                         .onScrollVisibilityChange(threshold: 0.1) { visible in
-                                            if visible { current = vendor }
+                                            if visible && !jumping { current = vendor }
                                         }
+                                        // 流れる面の中に付ける（ETScrollBrake）。
+                                        .etScrollBrake(brake)
+                                        // **帯からの飛び先は見出しに付ける。**JSFXの行は頭がHStack（名前と…）で、
+                                        // 頭がHStackの行に付けたidはscrollToが見つけられない（iOS 27のシミュレータで、
+                                        // 画面に出ている行でも動かなかった）。chokeholdやnemut.aiのようにJSFXしか無い
+                                        // 作者は飛び先がJSFXの行になるので、帯を押しても一覧が全く動かなかった。
+                                        .id(Self.jumpTarget(vendor))
                                 }
                             }
                         }
                         .listStyle(.plain)
+                        // **末尾の作者も上端まで上がれるよう、下を空ける。**
+                        // JSFXの作者（chokehold・nemut.ai）はAppleの後ろに並び、行が少ない。
+                        // 一覧は下端より先へ流れないので、押しても上端まで来ず、下に居ると全く動かなかった。
+                        .contentMargins(.bottom, pluginTailRoom, for: .scrollContent)
+                        .onGeometryChange(for: CGFloat.self) {
+                            $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom
+                        } action: { pluginListHeight = $0 }
+                        .onScrollPhaseChange { _, phase in
+                            if phase == .interacting { jumping = false }
+                        }
+                        // 検索から戻ると一覧は作り直される。立てたままだと、新しい一覧の見出しで塗りが動かない。
+                        .onDisappear { jumping = false }
                     }
                     .onChange(of: jump) { _, now in
                         guard !now.name.isEmpty else { return }
-                        withAnimation {
-                            proxy.scrollTo(Self.jumpTarget(now.name), anchor: .top)
+                        jumping = true
+                        // 払った直後の慣性中はscrollToが効かない。止めてから飛ぶ。
+                        brake.jump {
+                            withAnimation {
+                                proxy.scrollTo(Self.jumpTarget(now.name), anchor: .top)
+                            }
                         }
                     }
                 }
@@ -525,6 +546,17 @@ struct EffectPickerView: View {
         Array(Set(audioUnitVendors + jsfx.entries.map { jsfxVendor($0) })).sorted {
             $0.localizedStandardCompare($1) == .orderedAscending
         }
+    }
+
+    /// Pluginsの一覧の下に空ける量。最後の作者の見出しが上端まで上がれるだけ空ける。
+    /// **見積もり。**行は44pt（実際は62pt前後）で数えて見出しは数えず、pluginListHeightも
+    /// 行が見える高さより低い。シミュレータ（iPhone 17・0.75の高さ）では、最後の作者が3行なら
+    /// 上端まで届き、2行で10pt、1行で30ptほど手前で止まった（1行のときは前の作者の見出しが上に残る）。
+    /// 一覧の高さぶん丸ごと空けると、一番下まで払ったときに画面が空になる。
+    private var pluginTailRoom: CGFloat {
+        guard let last = pluginVendors.last else { return 0 }
+        let rows = audioUnits(vendor: last).count + jsfxEntries(vendor: last).count
+        return max(0, pluginListHeight - CGFloat(rows) * ETMetrics.hitTarget)
     }
 
     private func vendorName(_ entry: ETAUHost.Entry) -> String {
@@ -582,10 +614,14 @@ struct EffectPickerView: View {
                     .foregroundStyle(.tint)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
+                    // 折り返さない（jsfxPickButtonと同じ）。
                     Text(entry.name).font(.system(size: 15)).foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(pluginDetail(format: "AUv3", author: entry.manufacturer))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -625,10 +661,15 @@ struct EffectPickerView: View {
                     .foregroundStyle(.tint)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
+                    // 折り返さない。幅が足りないときは縮める（EffectCardViewの名前と同じ）。
+                    // 右の…に44pt取られるので、長い名前が2行に折れて行の高さが崩れていた。
                     Text(entry.name).font(.system(size: 15)).foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(pluginDetail(format: "JSFX", author: entry.author))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -858,9 +899,14 @@ struct EffectPickerView: View {
     /// `newEffects.isEmpty` を見る）。上流が新しいものを足したときに、
     /// その型をここへ並べる。**一度足したら、次の版で必ず外すこと。**
     /// いつまでも「New」と出ていると意味を失う。
-    /// 直前に居たのは dsp 0.10.0 で足された 3 つ（Pitch Meter /
-    /// TV Audio Simulator / Spatial Mapper）。もう新しくないので外した。
-    static let newTypes: [String] = []
+    /// いまは dsp 0.11.0（EffeTune 2.11.0）で足された 4 つ。
+    /// dsp 0.10.0 の 3 つ（Pitch Meter / TV Audio Simulator / Spatial Mapper）は外した。
+    static let newTypes = [
+        "AttackTonalBalancePlugin",
+        "BassExtenderPlugin",
+        "BassManagementPlugin",
+        "ChromaSpiralPlugin",
+    ]
     static let newKey = "__new"
 
     private var newEffects: [ETEffect] {
@@ -904,11 +950,21 @@ struct EffectPickerView: View {
         catalog.filter { $0.category == category }.sorted { $0.name < $1.name }
     }
 
-    /// JSFXをChatGPTに書かせるページ。
+    /// ChatGPTを開いて、JSFXを書く依頼を入れておく。
     ///
-    /// **依頼の文面と有料版の案内はページ側に置く。**アプリには札だけ置き、
-    /// 説明を持ち込まない。文面を直すのにアプリを出し直さなくて済む。
-    static let writeJSFX = URL(string: "https://effectdeck.nemut.ai/write")!
+    /// **chatgpt.comを直に開く。**`/?q=`はChatGPTのapple-app-site-associationに
+    /// 載っているので、アプリが入っていればそちらで開く。以前はeffectdeck.nemut.ai/writeを
+    /// 挟んでいたが、ブラウザを1枚余計に通るうえ、長い依頼文が途中（"so keep"）で切れていた。
+    /// **決め事はJSFX.mdに書き、依頼には書かない。**依頼が渡すのは積んでいるDSPの版だけで、
+    /// 内蔵のエフェクトで済むかどうかはJSFX.mdがその版の一覧で見させる。
+    static let writeJSFX: URL = {
+        var c = URLComponents(string: "https://chatgpt.com/")!
+        c.queryItems = [URLQueryItem(name: "q", value:
+            "Write a JSFX effect for EffectDeck (EffeTune DSP v\(ETUpstreamVersion)). " +
+            "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
+            "and follow it. Then ask me what effect I want.")]
+        return c.url!
+    }()
 
     /// クリップボードの字をJSFXとして入れる。ChatGPTの返事をコピーして戻ってきたとき。
     /// 読むのは押したときだけ（貼り付けの許可はこの操作に対して出る）。

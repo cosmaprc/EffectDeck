@@ -134,12 +134,14 @@ await test("no release status in the text: no TestFlight or beta outside the foo
   assert.ok(FAQ.some((f) => /free and open source under the MIT license/.test(f.a)), "FAQ says FOSS");
 });
 
-// /writeで見せる依頼文（links.jsの頭）。アプリはこのページを開くだけ。
-await test("/write text: the app's request, linked from home and llms.txt", async () => {
+// /writeで見せる依頼文（links.jsの頭）。決め事はJSFX.mdにあり、依頼は短く保つ。
+await test("/write text: a short request that points at JSFX.md, linked from home and llms.txt", async () => {
   assert.equal(decodeURIComponent(CHATGPT.slice("https://chatgpt.com/?q=".length)), CHATGPT_Q);
-  assert.ok(CHATGPT_Q.startsWith("Write a JSFX effect for EffectDeck, an iOS app that runs single-file JSFX. First read "));
+  assert.ok(CHATGPT_Q.startsWith("Write a JSFX effect for EffectDeck. First read "));
   assert.ok(CHATGPT_Q.includes(JSFX_MD));
-  assert.ok(CHATGPT_Q.endsWith("give the whole script, not only the part you changed: as one downloadable .jsfx file if you can create files, otherwise in one code block."));
+  assert.ok(CHATGPT_Q.endsWith("Then ask me what effect I want."));
+  assert.ok(CHATGPT_Q.length < 200, "long requests get cut off on the way into ChatGPT");
+  assert.ok(!CHATGPT_Q.includes("@"), "no @ in the request");
   assert.ok(!/\s{2}|\n/.test(CHATGPT_Q), "joined lines");
   assert.equal(TEXT.writeTitle, "Write a JSFX effect with ChatGPT");
   assert.match(TEXT.writePlan, /^A paid ChatGPT plan is recommended/);

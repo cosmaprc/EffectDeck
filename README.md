@@ -10,7 +10,7 @@
 
 [![Release](https://img.shields.io/github/v/release/satomasahiro2005/EffectDeck?label=release&color=3B82F6)](https://github.com/satomasahiro2005/EffectDeck/releases)
 [![iOS](https://img.shields.io/badge/iOS-27%2B-000000?logo=apple&logoColor=white)](#building)
-![EffeTune DSP](https://img.shields.io/badge/EffeTune%20DSP-0.10.0-3B82F6)
+![EffeTune DSP](https://img.shields.io/badge/EffeTune%20DSP-0.11.0-3B82F6)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 <a href="https://apps.apple.com/app/effectdeck/id6812467517">
@@ -109,8 +109,8 @@ states the requirements in the order they are usually violated, and there is a
 checklist to run a generated script against before you try to import it.
 
 In the app, **Write JSFX with ChatGPT** (Plugins, or the Import JSFX menu) opens
-[effectdeck.nemut.ai/write](https://effectdeck.nemut.ai/write), which hands ChatGPT a
-request that points it at `JSFX.md` and asks what you want to build. Import the file it
+ChatGPT with a short request that names the EffeTune DSP version, points it at
+`JSFX.md`, and asks what you want to build. Import the file it
 returns with **Import JSFX → From Files**, or copy the script and use **From Clipboard**.
 Use a paid ChatGPT plan: it reads the
 linked file and reasons through the code, while the free tier may skip the link and
