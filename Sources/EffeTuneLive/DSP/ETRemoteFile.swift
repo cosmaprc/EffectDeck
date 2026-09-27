@@ -187,10 +187,19 @@ enum ETRemoteFile {
         return loose.count == 1 ? loose[0] : nil
     }
 
+    /// 網へ出る口と、上限と、落としかけを書く場所。**本体と共有の拡張は既定のまま使う。**
+    /// 単体テスト（RemoteFileDownloadTests）は網の代わり（URLProtocol を差した session）、
+    /// 小さい上限、空のフォルダを渡し、断ったときに書きかけが残らないことまで見る。
+    struct Transfer {
+        var session: URLSession = .shared
+        var limit: Int = ETRemoteFile.limit
+        var scratch: URL = FileManager.default.temporaryDirectory
+    }
+
     /// 落として、端末の一時置き場へ書く。**名前は向こうが言うものを使う。**
     /// 拡張子で振り分けてはいないが、取り込み先が複製の名前に使う。
-    static func fetch(_ address: URL) async throws -> URL {
-        let (part, name) = try await download(address)
+    static func fetch(_ address: URL, via transfer: Transfer = Transfer()) async throws -> URL {
+        let (part, name) = try await download(address, via: transfer)
 
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("inbox", isDirectory: true)
@@ -208,7 +217,8 @@ enum ETRemoteFile {
     /// **溜めずにファイルへ流す。上限は届いている途中で切る。**
     /// 共有の拡張は 120 MB ほどで OS に落とされる。全部を Data に溜めてから
     /// 大きさを見る形だと、上限を超えるものを渡されたときに判定の前に落ちる。
-    static func download(_ address: URL) async throws -> (file: URL, name: String) {
+    static func download(_ address: URL,
+                         via transfer: Transfer = Transfer()) async throws -> (file: URL, name: String) {
         // gistの中の1本。一覧を引いて、印に合う名前（印が無ければ名前の順で最初）の
         // raw_urlを取りに行く。一覧の`content`は大きいと切られる（truncated）ので使わない。
         // **共有の拡張もここを通るので、fetch ではなくこちらで引く。**
@@ -218,28 +228,29 @@ enum ETRemoteFile {
             } ?? ""
             let files: [(name: String, raw: URL)]
             do {
-                files = try await gistListing(address)
+                files = try await gistListing(address, via: transfer)
             } catch Failure.http(let code) where code == 403 || code == 429 {
                 // **APIに断られたら画面から引く。**未認証のAPIは1つのIPから1時間に60回までで、
                 // 同じIPを大勢で使う回線では自分が呼んでいなくても尽きている（開発機でも
                 // `403 rate limit exceeded`が返った）。画面のRawの行き先にも本当の名前が載っている。
                 // `<gist>/raw`へは逃げない。持ち主の名前の無いリンクだと404で、あっても先頭の1本ではない。
-                files = try await gistPageListing(id: address.lastPathComponent)
+                files = try await gistPageListing(id: address.lastPathComponent, via: transfer)
             }
             let names = files.map { $0.name }
             guard let name = anchor.isEmpty ? firstGistFile(among: names)
                                             : gistFile(named: anchor, among: names),
                   let raw = files.first(where: { $0.name == name })?.raw
             else { throw Failure.noSuchFile }
-            let (part, _) = try await stream(raw)
+            let (part, _) = try await stream(raw, via: transfer)
             return (part, ETShareInbox.safeName(name))
         }
-        return try await stream(address)
+        return try await stream(address, via: transfer)
     }
 
     /// APIの一覧から名前とraw_urlを引く。
-    private static func gistListing(_ address: URL) async throws -> [(name: String, raw: URL)] {
-        let (file, _) = try await stream(address)
+    private static func gistListing(_ address: URL,
+                                    via transfer: Transfer) async throws -> [(name: String, raw: URL)] {
+        let (file, _) = try await stream(address, via: transfer)
         defer { try? FileManager.default.removeItem(at: file) }
         let listing = try Data(contentsOf: file)
         guard let root = try? JSONSerialization.jsonObject(with: listing) as? [String: Any],
@@ -251,37 +262,38 @@ enum ETRemoteFile {
     }
 
     /// gistの画面から引く。`gist.github.com/<id>`は持ち主の名前の付いた先へ飛ばされる。
-    private static func gistPageListing(id: String) async throws -> [(name: String, raw: URL)] {
+    private static func gistPageListing(id: String,
+                                        via transfer: Transfer) async throws -> [(name: String, raw: URL)] {
         var page = URLComponents()
         page.scheme = "https"
         page.host = "gist.github.com"
         page.path = "/" + id
         guard let url = page.url else { throw Failure.noSuchFile }
-        let (file, _) = try await stream(url)
+        let (file, _) = try await stream(url, via: transfer)
         defer { try? FileManager.default.removeItem(at: file) }
         let data = try Data(contentsOf: file)
         let html = String(decoding: data, as: UTF8.self)
         return gistRawLinks(inPage: html, id: id)
     }
 
-    private static func stream(_ address: URL) async throws -> (file: URL, name: String) {
+    private static func stream(_ address: URL, via transfer: Transfer) async throws -> (file: URL, name: String) {
         var request = URLRequest(url: address)
         // GitHub は User-Agent が無いと断ることがある。
         request.setValue("EffectDeck", forHTTPHeaderField: "User-Agent")
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await transfer.session.bytes(for: request)
 
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             bytes.task.cancel()
             throw Failure.http(http.statusCode)
         }
         // 向こうが大きさを言っているなら、本文を受ける前に断る。
-        if response.expectedContentLength > Int64(limit) {
+        if response.expectedContentLength > Int64(transfer.limit) {
             bytes.task.cancel()
             throw Failure.tooLarge
         }
 
         let fm = FileManager.default
-        let part = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let part = transfer.scratch.appendingPathComponent(UUID().uuidString)
         guard fm.createFile(atPath: part.path, contents: nil) else {
             bytes.task.cancel()
             throw CocoaError(.fileWriteUnknown)
@@ -297,12 +309,12 @@ enum ETRemoteFile {
                 buffer.append(byte)
                 guard buffer.count == chunk else { continue }
                 total += buffer.count
-                guard total <= limit else { throw Failure.tooLarge }
+                guard total <= transfer.limit else { throw Failure.tooLarge }
                 try handle.write(contentsOf: buffer)
                 buffer.removeAll(keepingCapacity: true)
             }
             total += buffer.count
-            guard total <= limit else { throw Failure.tooLarge }
+            guard total <= transfer.limit else { throw Failure.tooLarge }
             guard total > 0 else { throw Failure.empty }
             try handle.write(contentsOf: buffer)
         } catch {

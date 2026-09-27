@@ -11,7 +11,8 @@
 //    3. 畳み込みのレートへ伸縮し、上流と同じ下ごしらえ（頭の無音・Direct Cut・正規化）を
 //       かけ、32MiBに収まる長さへ切ってAssetUpload.sendへ渡す
 //
-//  2と3の計算はIRPreparation.swift（Foundationだけ。単体テストで上流の答えと照合している）。
+//  1はIRDecode.swift、2と3の計算はIRPreparation.swift（どちらもFoundationだけで単体テストに入る。
+//  IRPreparationは上流の答えと照合している）。
 //  解決規則は js/ir-library/ir-plugin-contract.js:104-206
 //  (resolveIrProcessingConfig) をそのまま写したもの。推測は入れていない。
 //
@@ -21,7 +22,6 @@
 //  上流で知られている。channelMode が auto のとき、4ch かつ処理幅 2ch なら
 //  自動で True Stereo になる（同 :150-155）。
 
-import AVFoundation
 import Foundation
 import os
 
@@ -63,69 +63,16 @@ enum ETIRLoader {
                          convolutionRate: convolutionRate)
     }
 
-    /// 読み込んだ IR。面ごとに分かれた float と、その素材のレート。
-    struct Decoded {
-        var channels: [[Float]]
-        var sampleRate: Double
-        var frames: Int
-    }
+    /// 読み込んだ IR。面ごとに分かれた float と、その素材のレート（IRDecode.swift）。
+    typealias Decoded = ETIRDecoded
 
     // MARK: - 読む
 
-    /// ファイルを float の面へ読む。
-    ///
-    /// **ここでは伸縮しない。** 素材のレートのまま返す。
-    /// 合わせるのは load の側（カーネルは「処理レート ÷ rate_divider」で
-    /// 書かれていることを検算するので、そこへ合わせる必要がある）。
+    /// ファイルを float の面へ読む。素材のレートのまま返す。
+    /// 中身は IRDecode.swift（ETIRDecode.decode）。幅・長さ・レートの門と、非有限を 0 にする
+    /// ところは単体テストで見ている（IRDecodeTests）。
     static func decode(_ url: URL) throws -> Decoded {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        let file: AVAudioFile
-        do {
-            file = try AVAudioFile(forReading: url)
-        } catch {
-            throw ETIRLoadError.cannotOpen(error.localizedDescription)
-        }
-
-        let format = file.processingFormat
-        let channelCount = Int(format.channelCount)
-        guard channelCount >= 1, channelCount <= 16 else {
-            throw ETIRLoadError.tooManyChannels(channelCount)
-        }
-        let frames = Int(file.length)
-        guard frames > 0 else { throw ETIRLoadError.emptyFile }
-        guard format.sampleRate > 0 else { throw ETIRLoadError.unsupportedRate(format.sampleRate) }
-
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
-                                            frameCapacity: AVAudioFrameCount(frames)) else {
-            throw ETIRLoadError.cannotOpen("could not allocate a buffer")
-        }
-        do {
-            try file.read(into: buffer)
-        } catch {
-            throw ETIRLoadError.cannotOpen(error.localizedDescription)
-        }
-        let read = Int(buffer.frameLength)
-        guard read > 0 else { throw ETIRLoadError.emptyFile }
-
-        // processingFormat は常に deinterleaved float32 なので面がそのまま取れる。
-        guard let data = buffer.floatChannelData else {
-            throw ETIRLoadError.cannotOpen("the decoder did not return float samples")
-        }
-        var channels = [[Float]]()
-        channels.reserveCapacity(channelCount)
-        for ch in 0..<channelCount {
-            let plane = data[ch]
-            var out = [Float](repeating: 0, count: read)
-            out.withUnsafeMutableBufferPointer { dst in
-                dst.baseAddress?.update(from: plane, count: read)
-            }
-            // 非有限が 1 つでもあると makePayload が弾くので、ここで潰す。
-            for i in 0..<read where !out[i].isFinite { out[i] = 0 }
-            channels.append(out)
-        }
-        return Decoded(channels: channels, sampleRate: format.sampleRate, frames: read)
+        try ETIRDecode.decode(url)
     }
 
     // MARK: - 送る
@@ -212,14 +159,8 @@ enum ETIRLoader {
         return line
     }
 
-    /// ir_reverb.js:1746-1756 の _channelModeName と同じ出し方。
+    /// ir_reverb.js:1746-1756 の _channelModeName と同じ出し方（IRDecode.swift）。
     static func displayName(_ mode: String) -> String {
-        switch mode {
-        case "mono": return "Mono"
-        case "indep": return "Independent"
-        case "true": return "True Stereo"
-        case "multi": return "Multi-channel"
-        default: return mode
-        }
+        ETIRDecode.displayName(mode)
     }
 }
