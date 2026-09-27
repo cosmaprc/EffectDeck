@@ -223,13 +223,15 @@ has the exact commands.
 
 | Suite | Runs on | Command |
 |---|---|---|
-| Logic tests (all of `Tests/Unit`, JSFX included) | Mac with Xcode, simulator | `bash Scripts/test.sh` |
+| Logic tests (all of `Tests/Unit`, JSFX included) | Mac with Xcode, simulator | `bash Scripts/test.sh`, or the `Logic` scheme in Xcode |
 | The Foundation-only part of the Logic tests | Linux or WSL with Swift | `bash Tests/Linux/run.sh --name local` |
 | Native C tests (`Tests/Native`) | Linux, macOS or WSL with CMake | `cd Tests/Native && cmake --preset asan && cmake --build --preset asan && ctest --preset asan` |
 | Website (`site/`) | Node 22 | `cd site && npm ci && npm test` |
+| Generators and checks (`Tools/`, `Tests/Tools`) | Python 3.10+ and Node 22, any OS | `python3 -m unittest discover -s Tests/Tools` |
+| UI tests (`Tests/UI`) | Mac with Xcode, simulator | `bash Scripts/uitest.sh` |
 
-GitHub Actions runs all of them, and checks that generated files are up to date, on every
-push to `main` and every pull request ([CI](CONTRIBUTING.md#ci)).
+GitHub Actions runs all of them but the UI tests, and checks that generated files are up to
+date, on every push to `main` and every pull request ([CI](CONTRIBUTING.md#ci)).
 
 ### Launch arguments
 

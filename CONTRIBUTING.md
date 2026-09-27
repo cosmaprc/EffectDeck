@@ -35,7 +35,8 @@ generates the Xcode project. Both are in the README under **Building**.
 Run the tests that cover what you changed. If you change a generator in `Tools/`, or
 anything a generator reads, run `bash Scripts/setup.sh` and commit what it regenerates
 (`Sources/EffeTuneLive/Generated/`, `chain/`); CI fails when the committed files differ
-from a fresh run.
+from a fresh run. The same goes for the golden files under `Tests/Fixtures` (see
+**Golden files** below).
 
 `site/` is the official website (a Cloudflare Worker). You do not need it to build the app.
 
@@ -47,6 +48,7 @@ from a fresh run.
 | Linux harness | Swift 6 on Linux or WSL | The Foundation-only part of the same tests |
 | Native tests | CMake 3.24, gcc or clang | The plain C code under `Sources/` |
 | Website | Node 22 | `site/` |
+| Tool and script tests | Python 3.10+, Node 22, bash | The generators and checks in `Tools/`, and the simulator helpers in `Scripts/` |
 | UI tests | Mac, Xcode 27, xcodegen | The app on a simulator, without the extension |
 
 ### Logic tests (Mac)
@@ -60,8 +62,19 @@ SIM="iPhone 17 Pro" bash Scripts/test.sh      # another simulator, by exact name
 
 This runs the `Logic` scheme (`EffeTuneLiveUnitTests`) on one simulator. It runs
 `Scripts/setup.sh` first (patches, generated files, xcodegen); `SKIP_SETUP=1` skips all of
-that except xcodegen. `SAN=address`, `SAN=thread` or `SAN=undefined` turns on a sanitizer.
+that except xcodegen. `SAN=address`, `SAN=thread` or `SAN=undefined` turns on a sanitizer;
+`SAN=address,undefined` combines two, but address and thread cannot run together.
+`DRY_RUN=1` prints what would run and changes nothing.
+
+The default simulator is `iPad Pro 13-inch (M5)`, the one CI uses. `SIM` takes a name,
+which must match exactly, or a UDID; when nothing matches, the script stops and lists the
+simulators it found. `SIM_OS=27.0` picks between two simulators with the same name.
 Other simulators that are running are shut down, so that Xcode never starts a second one.
+
+From Xcode: run `bash Scripts/setup.sh`, open `EffeTuneLive.xcodeproj`, pick the **Logic**
+scheme and an iOS 27 simulator, and press ⌘U. The scheme builds only the test bundle, not
+the app or the extension. Run `setup.sh` again after pulling: the JSFX sandbox tests
+exercise the ysfx patch it applies, and a tree without it runs different code.
 
 The whole log is `test.log` and the result bundle is `build/Logic.xcresult`. The run
 passed when the script exits 0 and `test.log` says `** TEST SUCCEEDED **`.
@@ -102,7 +115,7 @@ C and C++ files and `JSFX*Tests`, which need ysfx and the Mac. `os`, `Accelerate
 cd Tests/Native
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan        # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan        # TSan, threaded tests only
-cmake --preset engine && cmake --build --preset engine && ctest --preset engine  # also the real engine
+cmake --preset engine && cmake --build --preset engine --parallel && ctest --preset engine  # also the real engine
 ```
 
 These build the plain C files under `Sources/` with gcc or clang, without Xcode. The presets
@@ -113,7 +126,10 @@ MSVC. Build directories are `build/native-<preset>` at the top of the repository
   submodule must be checked out.
 - `engine` also builds the pinned EffeTune engine with the patches from `Patches/` applied
   to a copy under the build directory; `Vendor/effetune` itself is not touched. It needs a
-  POSIX system.
+  POSIX system. It unpacks the pinned revision with `Tools/golden/extract_pin.sh`, which
+  reads the submodule's git objects, so it runs in a clone; elsewhere, pass an unpacked
+  copy with `-DET_NATIVE_EFFETUNE_ROOT=<dir>` (the directory that contains `dsp/`). It
+  compiles all of upstream's DSP under ASan, so keep `--parallel`.
 - If a sanitizer dies at startup on a kernel with 32 bits of mmap randomization (Ubuntu
   24.04 does this), run `sudo sysctl -w vm.mmap_rnd_bits=28` first; CI does the same.
 
@@ -127,17 +143,65 @@ npm test
 
 wrangler and miniflare need Node 22 or later.
 
+### Tool and script tests
+
+```bash
+python3 -m unittest discover -s Tests/Tools   # the generators and checks in Tools/
+node --test Tools/*.test.mjs                  # the Node tools in Tools/
+python3 Tools/check_repo.py                   # facts that must agree across the repository
+bash Tests/Scripts/sim_test.sh                # Scripts/lib/sim.sh and the scripts that use it
+```
+
+None of them need the submodules, a Mac or a network, and all of them run on Windows too
+(the last one in Git Bash or WSL). Run them in a clone: `check_repo.py` asks git which
+paths are ignored.
+
+- `Tests/Tools` runs the generators and checks in `Tools/` on small inputs in a temporary
+  directory. Nothing tracked is written. Three tests of the privacy-manifest check compile a small binary and
+  skip when `cc` and `nm` are missing, as on Windows.
+- `check_repo.py` compares facts that are written in more than one place: the EffeTune
+  version in the README badge, `CHAIN.md` and `chain/`; the URLs in the app against what
+  `site/` serves; the bundled components against `NOTICE.md`; the repository paths that
+  documents and comments cite. The top of the file lists every check, and
+  `--only chain,urls` runs just the named ones. `--version-guard` also compares with the
+  `dsp-v*` tag of the pinned `Vendor/effetune`, so it needs that submodule.
+- `sim_test.sh` replaces `xcrun`, `xcodegen` and `setup.sh` with fakes and runs
+  `Scripts/test.sh`, `Scripts/uitest.sh` and the other simulator scripts against them, so
+  the way they pick a simulator and stop on failure is checked without a Mac.
+
+### Golden files
+
+Some Logic tests compare the Swift code with what upstream's JavaScript computes for the
+same input. The expected values are JSON files under `Tests/Fixtures`, made by the
+generators in `Tools/golden/` and `Tools/ir_prepare_golden.mjs`. To make them again:
+
+```bash
+root=$(bash Tools/golden/extract_pin.sh)
+for f in Tools/golden/*_golden.mjs Tools/ir_prepare_golden.mjs; do
+  EFFETUNE_ROOT="$root" node "$f"
+done
+```
+
+`extract_pin.sh` unpacks upstream at the revision the repository pins (`git archive`), not
+the working tree of `Vendor/effetune`, which `setup.sh` has patched. The generators write
+sorted, deterministic JSON, so running them again on the same pin changes nothing. The
+`generated` job in CI does exactly this and fails on any difference.
+
 ### UI tests (Mac)
 
 ```bash
-bash Scripts/uitest.sh                   # the smoke tests
-bash Scripts/uitest.sh MenuProbe         # one class
+bash Scripts/uitest.sh                                    # SmokeTests
+bash Scripts/uitest.sh MenuProbe                          # one class (several may follow)
+bash Scripts/uitest.sh DynamicProbe/test03ExpandCollapse  # one test
 ```
 
 The simulator SDK has no `MediaDevice.framework`, so the app is built from a simulator
-project without the extension (`Tools/gen_sim_spec.py` writes `project-sim.yml`). The same
-`SIM`, `SKIP_SETUP` and `DRY_RUN` variables as `Scripts/test.sh` apply. The log is
-`uitest.log` and the result bundle is `build/UITest.xcresult`.
+project without the extension: `Tools/gen_sim_spec.py` writes `project-sim.yml`, and
+xcodegen makes `EffeTuneLiveSim.xcodeproj` from it. Open that project, not
+`EffeTuneLive.xcodeproj`, to run the UI tests from Xcode. The same `SIM`, `SIM_OS`,
+`SKIP_SETUP`, `XCODEBUILD_EXTRA` and `DRY_RUN` variables as `Scripts/test.sh` apply. The app
+is reinstalled before the run. The log is `uitest.log`, the result bundle is
+`build/UITest.xcresult` and the build goes to `DerivedData/`.
 
 ## CI
 
@@ -161,6 +225,13 @@ deployment target is 27.0). It is a preview image, so the workflow pins the Xcod
 `xcode-select` and stops if the iOS 27 SDK is missing. The label is in one place, the
 `runs-on` of the `macos` job; the comment at the top of `ci.yml` says what to change
 with it.
+
+`macos (logic)` runs the same scheme on the same simulator as `Scripts/test.sh`, so
+`XCODEBUILD_EXTRA="CODE_SIGNING_ALLOWED=NO" bash Scripts/test.sh` is the local equivalent.
+CI retries a failed test once (`-retry-tests-on-failure`); the script does not.
+
+The UI tests and `Tests/Scripts/sim_test.sh` are not run in CI. Run them yourself when you
+change what they cover.
 
 `.github/workflows/dsp.yml` runs upstream's own DSP test suite on `Vendor/effetune` with
 our patches applied, in Debug and with ASan+UBSan. It runs nightly and when `Patches/`,
