@@ -36,7 +36,8 @@ targets:
 
   # ------------------------------------------------------------------
   # 本体。UI・DSP・スピーカー出力。ユーザーが開くのはこれ。
-  # 拡張を同梱していないので音を出せる。
+  # Media Device Extensionと共有の拡張もここに同梱する。同梱していても
+  # 音を出せる訳は下のdependenciesに書いてある。
   # ------------------------------------------------------------------
   EffeTuneLive:
     type: application
@@ -46,6 +47,8 @@ targets:
         script: bash "$SRCROOT/Scripts/embed_debug_jsfx.sh"
         basedOnDependencyAnalysis: false
     sources:
+      # PrivacyInfo.xcprivacyもここで拾われる。xcodegenは知らない拡張子のファイルを
+      # Copy Bundle Resourcesへ入れる（SourceGenerator.getDefaultBuildPhase）ので、名指しの項目は要らない。
       - path: Sources/EffeTuneLive
         excludes: ["**/*.icon/**"]
       # Icon Composer のファイル。.xcassets の外に置き、
@@ -72,7 +75,7 @@ targets:
         includes: ["**/*.c", "**/*.h"]
         excludes: ["**/*test*"]
       # Note Spectrogram はモデルを実行ファイルへ埋め込む。
-      # Scripts/build.sh が embed_models.py を走らせてここへ吐く。
+      # Scripts/setup.sh が embed_models.py を走らせてここへ吐く。
       - path: Generated/note-models
         includes: ["**/*.S", "**/*.h"]
     settings:
@@ -173,14 +176,14 @@ targets:
           - $(SRCROOT)/Vendor/ysfx/thirdparty/dr_libs
 
   # ------------------------------------------------------------------
-  # 入れ物。Media Device Extension を運ぶためだけに在る。
-  # 拡張を同梱したアプリは AVAudioSession が '!pla' で拒否されるので、
-  # ここに UI も DSP も置けない。だからアプリが 2 本要る。
+  # Media Device Extension。本体（EffeTuneLive）に同梱して運ぶ。
+  # 同梱していても本体が音を出せる訳は本体のdependenciesに書いてある。
   # ------------------------------------------------------------------
   EffeTuneLiveExtension:
     type: extensionkit-extension
     platform: iOS
     sources:
+      # 拡張のPrivacyInfo.xcprivacyはこのフォルダから資源として拾われる（本体と同じ）。
       - path: Sources/Extension
       # 拡張は DSP コアを積まないので、et_* を呼ぶものは除く。
       # ファイルを 1 本ずつ書くと XcodeGen が拾わないことがあったので、
@@ -218,6 +221,7 @@ targets:
     type: app-extension
     platform: iOS
     sources:
+      # 共有の拡張のPrivacyInfo.xcprivacyはこのフォルダから資源として拾われる（本体と同じ）。
       - path: Sources/ShareExtension
       - path: Sources/EffeTuneLive/DSP/ETRemoteFile.swift
       - path: Sources/EffeTuneLive/DSP/ETShareInbox.swift
@@ -231,15 +235,13 @@ targets:
       - sdk: UniformTypeIdentifiers.framework
 
   # ------------------------------------------------------------------
-  # UI の当たり判定を機械で確かめるためのもの。製品には入らない。
-  # ------------------------------------------------------------------
-  # ------------------------------------------------------------------
   # 実機を使わずに測れるものはここで測る。
   #
   # **アプリを建てない。** 対象のファイルをこのバンドルへ直接コンパイルする。
   # アプリを建てると拡張＝MediaDevice.framework が要り、
-  # それはシミュレータの SDK に無いので建たない（docs/connect-log.md の冒頭）。
+  # それはシミュレータの SDK に無いので建たない（Tools/gen_sim_spec.py の頭）。
   # ここに置けるのは「OS に触らない判断」だけ。触るものは実機で測る。
+  # Foundationだけのものは、Tests/Linux/run.shがこの一覧を読んでLinuxでも走らせる。
   # ------------------------------------------------------------------
   EffeTuneLiveUnitTests:
     type: bundle.unit-test
@@ -268,6 +270,9 @@ targets:
       - path: Sources/EffeTuneLive/Audio/ETJSFXLoader.swift
       # ソース表示の行分けと色分け。Foundationだけ（JSFXSourceSyntaxTests）。
       - path: Sources/EffeTuneLive/Audio/JSFXSourceSyntax.swift
+      # 取り込み直したJSFXで前の版を置き換える規則（同じ1本かの判定・付け替えの表・置き場の見直し）。
+      # Foundationだけ（JSFXReplaceTests）。ファイルを動かすのはETJSFXHostで、ここには入れない。
+      - path: Sources/EffeTuneLive/Audio/JSFXReplace.swift
       # 図に重ねるスペクトラムの平滑。SwiftUI にも et_* にも触らないので、
       # この 1 本だけをここへ入れれば数で照合できる。
       - path: Sources/EffeTuneLive/DSP/SpectrumSmoothing.swift
@@ -316,6 +321,78 @@ targets:
       - path: chain
         type: folder
         buildPhase: resources
+      # 鎖に並ぶ1個（元はEffeTuneDSP.Node）。EffeTuneDSPはosとet_*に触るので外へ出してある。
+      # 下のChainEditing・ETShareLink・EffectPresetStoreCoreが引く。
+      - path: Sources/EffeTuneLive/DSP/ETChainNode.swift
+      # 鎖をいじるときの決まり（プリセットの足し方・外部の段の付け直し・選択肢をoffsetで読む・
+      # descriptorの中身）。Foundationだけ（ChainEditingTests）。
+      - path: Sources/EffeTuneLive/DSP/ChainEditing.swift
+      # 共有リンクの読み書き（ShareLinkTests）。
+      - path: Sources/EffeTuneLive/DSP/ETShareLink.swift
+      # 実機で見るための鎖。名前が目録と一字も違わないかを見る（DebugPresetsTests）。
+      - path: Sources/EffeTuneLive/DSP/DebugPresets.swift
+      # プリセット・iCloud・バックアップ・設定の中身。入れ物はETKeyValueStorageで受け、テストは
+      # ETMemoryStorageを渡す（PresetStoreTests・CloudMirrorTests・BackupTests・PreferencesValuesTests）。
+      - path: Sources/EffeTuneLive/DSP/KeyValueStorage.swift
+      - path: Sources/EffeTuneLive/DSP/PresetStoreCore.swift
+      - path: Sources/EffeTuneLive/DSP/EffectPresetStoreCore.swift
+      - path: Sources/EffeTuneLive/DSP/CloudMirrorCore.swift
+      - path: Sources/EffeTuneLive/DSP/ETBackupFormat.swift
+      - path: Sources/EffeTuneLive/PreferencesValues.swift
+      # Status節とツールバーの帯が出す数字と言い回し。両方が同じ関数で丸める（StatusReadingsTests）。
+      - path: Sources/EffeTuneLive/Views/StatusReadings.swift
+      # AudioIOから出した、値だけで決まる判断（本数・レート・組み直し・中断・出力の書き出し・外部の枠・
+      # ロック画面・休む判断・撮影用の音）。AVAudioSessionにもCoreAudioにも触らない
+      # （ProcessingChannels・SampleRateRules・PeerFollow・FeedbackLoop・AudioLifecycle・RouteRebuildRule・
+      # AudioBufferOps・ExternalSlotAllocator・NowPlayingMode・PowerGate・MockSourceのTests）。
+      - path: Sources/EffeTuneLive/Audio/AudioSessionRules.swift
+      - path: Sources/EffeTuneLive/Audio/AudioLifecycle.swift
+      - path: Sources/EffeTuneLive/Audio/RouteRebuildRule.swift
+      - path: Sources/EffeTuneLive/Audio/AudioBufferOps.swift
+      - path: Sources/EffeTuneLive/Audio/ExternalSlotAllocator.swift
+      - path: Sources/EffeTuneLive/Audio/NowPlayingMode.swift
+      - path: Sources/EffeTuneLive/Audio/PowerPolicy.swift
+      - path: Sources/EffeTuneLive/Audio/MockSource.swift
+      # FeedbackLoopTestsがET_NAME_STEMをSwiftの写しと照らすために読む。コンパイルはしない。
+      - path: Sources/Shared/ETNames.h
+        buildPhase: resources
+      # FIRの設計の道具（実FFT・窓・最小位相など）と、FIR系7種へ送る資産の並びと見積り。
+      # FIRDesignはAccelerateのvDSPを使う（LinuxではTests/Linux/Shimsの代役なので、詰め方の照合はMacで数える）。
+      # 見本はTools/golden/fir_golden.mjs・asset_golden.mjsが上流に作らせる（FIRDesignTests・AssetPayloadTests）。
+      - path: Sources/EffeTuneLive/DSP/FIRDesign.swift
+      - path: Sources/EffeTuneLive/DSP/AssetPayload.swift
+      - path: Tests/Fixtures/FIR/fir-golden.json
+        buildPhase: resources
+      - path: Tests/Fixtures/Asset/asset-golden.json
+        buildPhase: resources
+      # FIR系の設計の半分（Foundationだけ）。カーネルへ送り込む半分は各*Designer.swiftに残してある。
+      # 見本はTools/golden/designers_a_golden.mjs（5Band FIR PEQ・FIR Crossover・Bass Management）と
+      # designers_b_golden.mjs（Group Delay EQ・PEQ・Crosstalk・Room EQ）。**見本はファイルで入れる。**
+      # TestResource.urlはsubdirectoryなしでバンドルの根を引くので、type: folderにしない。
+      - path: Sources/EffeTuneLive/DSP/Designers/BassManagementSettings.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/BandFIRPEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/FIRCrossoverDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/BassManagementDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/GroupDelayEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/GroupDelayPEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/CrosstalkDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/RoomEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/CrosstalkMeasurementCore.swift
+      - path: Tests/Fixtures/Designers/designers-a-golden.json
+        buildPhase: resources
+      - path: Tests/Fixtures/Designers/designers-b-golden.json
+        buildPhase: resources
+      # 共有の拡張が受けたものの扱い・Inboxの振り分け・IRの読み方と置き場の鍵
+      # （ShareModelTests・InboxTests・IRDecodeTests・IRLibraryKeyTests・IRLibraryFilesTests）。
+      # NSItemProviderとAVAudioFileに触る所は#if canImportの中で、Macのバンドルだけで走る。
+      # **ShareModelは1本だけ名指しで入れる。**Sources/ShareExtensionをフォルダで入れると、
+      # 共有の拡張の画面とPrivacyInfo.xcprivacyまでこのバンドルに入る。
+      - path: Sources/ShareExtension/ShareModel.swift
+      - path: Sources/EffeTuneLive/DSP/ETInboxRouting.swift
+      - path: Sources/EffeTuneLive/DSP/IRDecode.swift
+      - path: Sources/EffeTuneLive/DSP/IRLibraryFiles.swift
+      - path: Tests/Fixtures/IR/ir-library-id-golden.json
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.nemut.effetune.unittests
@@ -335,6 +412,9 @@ targets:
       - sdk: CoreText.framework
       - sdk: CoreGraphics.framework
 
+  # ------------------------------------------------------------------
+  # UI の当たり判定を機械で確かめるためのもの。製品には入らない。
+  # ------------------------------------------------------------------
   EffeTuneLiveUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -349,8 +429,9 @@ targets:
       - target: EffeTuneLive
 
 schemes:
-  # 実機なしで走るもの。
-  #   xcodebuild test -scheme Logic -destination 'platform=iOS Simulator,name=iPhone 17'
+  # 実機なしで走るもの。Scripts/test.sh が xcodegen から xcodebuild test まで回す
+  # （端末は既定で "iPad Pro 13-inch (M5)"。Scripts/lib/sim.sh）。
+  #   xcodebuild test -scheme Logic -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
   Logic:
     build:
       targets:
