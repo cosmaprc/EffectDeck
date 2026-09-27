@@ -35,6 +35,10 @@ enum ETInbox {
     /// 「Import → From Link」と共有の拡張の両方で出す。
     static let unsupportedLink = "That link is neither a JSFX source nor an impulse response."
 
+    /// 「このアプリで開く」で来たファイルが音でもJSFXでもなかったときの字（PDFなど）。
+    /// JSFXには決まった拡張子が無いので、Info.plistでpublic.itemを名乗っていて何でも来る。
+    static let unsupportedFile = "That file is neither a JSFX source nor an impulse response."
+
     /// 1 本受ける。
     ///
     /// **security scope を開いてから読む。**共有シートから来る URL は自分の

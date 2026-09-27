@@ -48,6 +48,11 @@ struct PipelineView: View {
     }
 
     @State private var sheet: Sheet?
+    /// ピッカーが開く面。**取り込んだJSFXはPluginsで見せる**（show・openLinkが指してから開く）。
+    /// ピッカーが閉じたらEffectsへ戻すので、+や空の鎖から開けば今までどおりEffects。
+    @State private var pickerPane: EffectPickerView.Pane = .effects
+    /// 取り込んだばかりのJSFX（id）。ピッカーがその作者の見出しへ送り、行を塗る。
+    @State private var freshJSFX: String?
     /// 次にピッカーで選んだものを差し込む位置（鎖の添字）。
     /// nil なら末尾。ツールバーの「Add Effect」から開いたときは常に nil。
     @State private var insertAt: Int?
@@ -56,6 +61,9 @@ struct PipelineView: View {
     /// 持てない。押されたことだけ Binding で受け取り、出すのは下の List 側。
     @State private var confirmingReset = false
     @State private var pluginError: String?
+    /// 受けたファイルやリンクが音でもJSFXでもなかった（ETInboxの.unsupported）。
+    /// pluginErrorと同じ.alertで出し、題だけ変える（JSFXを足そうとしたわけではないので）。
+    @State private var importError: String?
     /// 開いたリンクが読めなかった（鎖が空、/j の中身が壊れている）。pluginError と同じ .alert で出す
     /// （同じ View に .alert を 2 枚積むと先に付いたほうが出なくなる）。
     @State private var linkError: String?
@@ -214,7 +222,12 @@ struct PipelineView: View {
                         dsp.addPreset(named: name, items: items, at: insertAt)
                         insertAt = nil
                         sheet = nil
-                    })
+                    }, pane: $pickerPane, fresh: $freshJSFX)
+                    // 次に開くときはEffectsから。Pluginsを指して開くのは取り込みの口だけ。
+                    .onDisappear {
+                        pickerPane = .effects
+                        freshJSFX = nil
+                    }
                 case .settings:
                     SettingsView(io: io)
                 case .routing:
@@ -259,11 +272,11 @@ struct PipelineView: View {
             } message: {
                 if !pendingReport.isEmpty { Text(pendingReport) }
             }
-            .alert(linkError != nil ? "Could Not Open Link" : "Could Not Add JSFX", isPresented: Binding(
-                get: { pluginError != nil || linkError != nil },
-                set: { if !$0 { pluginError = nil; linkError = nil } })) {
-                    Button("OK", role: .cancel) { pluginError = nil; linkError = nil }
-                } message: { Text(linkError ?? pluginError ?? "Unknown error") }
+            .alert(alertTitle, isPresented: Binding(
+                get: { pluginError != nil || linkError != nil || importError != nil },
+                set: { if !$0 { clearErrors() } })) {
+                    Button("OK", role: .cancel) { clearErrors() }
+                } message: { Text(linkError ?? importError ?? pluginError ?? "Unknown error") }
             // 切ってある Section を外すと、止まっていた段がその場で鳴り出す。
             // 配下の ON/OFF は書き換えないので（about が保つと言っている）、
             // 起きることを先に出しておく。
@@ -347,7 +360,8 @@ struct PipelineView: View {
             // **ファイル以外は ETInbox へ渡さない。**https の URL を渡すと
             // IRLibrary が Data(contentsOf:) で画面を止めたまま取りに行く。
             guard url.isFileURL else { return }
-            show(ETInbox.receive(url))
+            // 音でもJSFXでもなかったときも黙らない（PDFなど。共有の拡張と同じ出し方）。
+            show(ETInbox.receive(url), unsupported: ETInbox.unsupportedFile)
         }
         // 鎖から外れた段ぶんの「畳んでも消えない選択」を捨てる。
         // MatrixRouting が MatrixView の onAppear でやっているのと同じ掃除。
@@ -361,15 +375,35 @@ struct PipelineView: View {
     }
 
     /// 取り込んだ結果を出す。「このアプリで開く」と共有の拡張で同じ出し方にする。
-    private func show(_ received: ETInbox.Received, unsupported: String? = nil) {
+    ///
+    /// 断るときはシートを畳んでから出す（afterClosingSheet）。シートの上には警告が出ない。
+    private func show(_ received: ETInbox.Received, unsupported: String) {
         switch received {
         case .ir: sheet = .ir
         // 取り込んだ JSFX は一覧に入る。そこから鎖へ足してもらう。
-        case .jsfx: sheet = .picker
+        // **Pluginsで開く。**Effectsで開くと、入ったものを探させることになる。
+        // ピッカーが開いていればsheetは変わらず、面だけがその場で替わる。
+        case .jsfx(let id):
+            pickerPane = .plugins
+            freshJSFX = id
+            sheet = .picker
         // **黙って落とさない。**押しても何も起きないのと見分けが付かない。
-        case .failed(let why): pluginError = why
-        case .unsupported: if let unsupported { pluginError = unsupported }
+        case .failed(let why): afterClosingSheet { pluginError = why }
+        case .unsupported: afterClosingSheet { importError = unsupported }
         }
+    }
+
+    /// 出している警告の題。
+    private var alertTitle: String {
+        if linkError != nil { return "Could Not Open Link" }
+        if importError != nil { return "Could Not Import" }
+        return "Could Not Add JSFX"
+    }
+
+    private func clearErrors() {
+        pluginError = nil
+        linkError = nil
+        importError = nil
     }
 
     /// 共有の拡張（EffectDeckShare）が App Group に置いたものを拾う。
@@ -1081,7 +1115,10 @@ struct PipelineView: View {
             do {
                 // **importText ではなく importSource。**リンクの中身は送り手のソースそのもので、
                 // ``` の囲いを探して切ると別の 1 本になる。
-                try ETJSFXHost.shared.importSource(source)
+                let entry = try ETJSFXHost.shared.importSource(source)
+                // ファイルで受けたときと同じくPluginsで開く（showの.jsfx）。
+                pickerPane = .plugins
+                freshJSFX = entry.id
                 sheet = .picker
             } catch {
                 // 読めた上で取り込めなかった（この版では JSFX を閉じている、など）。

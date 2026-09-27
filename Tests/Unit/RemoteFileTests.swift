@@ -38,8 +38,24 @@ final class RemoteFileTests: XCTestCase {
         XCTAssertNil(ETRemoteFile.gistFile(named: "a-b", among: ["a.b", "a-b"]))
     }
 
-    func testBareGistStillTakesTheFirstFile() {
-        XCTAssertEqual(ETRemoteFile.address(from: gist)?.absoluteString, gist + "/raw")
+    /// 名指しの無いリンクも一覧から引く。`<gist>/raw`はこのgistでconvert.pyを返し、
+    /// 画面の先頭（atmos_4ch_ffmpeg.wav）ではなかった。
+    func testBareGistGoesThroughTheListing() {
+        let url = ETRemoteFile.address(from: gist)
+        XCTAssertEqual(url?.absoluteString, "https://api.github.com/gists/c542880fc52d3874404998b440e931b5")
+        XCTAssertNil(url?.fragment)
+        // ユーザー名の無い形も同じ。印でないfragmentは捨てる。
+        XCTAssertEqual(ETRemoteFile.address(from: "https://gist.github.com/c542880fc52d3874404998b440e931b5#comments")?
+                        .absoluteString,
+                       "https://api.github.com/gists/c542880fc52d3874404998b440e931b5")
+    }
+
+    /// 名指しが無ければ名前の順で最初の1本（gistの画面の並び）。一覧の並びには頼らない。
+    func testBareGistTakesTheFirstFileByName() {
+        let listed = ["convert.py", "ssc_ny_4ch_plain.wav", "dh++_4ch_ffmpeg.wav", "atmos_4ch_plain.wav",
+                      "atmos_4ch_ffmpeg.wav", "ssc_ny_4ch_ffmpeg.wav", "dh++_4ch_plain.wav"]
+        XCTAssertEqual(ETRemoteFile.firstGistFile(among: listed), "atmos_4ch_ffmpeg.wav")
+        XCTAssertNil(ETRemoteFile.firstGistFile(among: []))
     }
 
     /// Raw を押した先を貼られたら、そのまま取りに行く（/raw を足さない）。

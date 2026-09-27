@@ -21,6 +21,12 @@ struct EffectPickerView: View {
     let onPickJSFX: (ETJSFXHost.Entry) -> Void
     /// プリセットを選んだ。名前と中身を渡す。受けた側が Section に包んで挿す。
     let onPickPreset: (String, [PipelineStore.Loaded]) -> Void
+    /// 上の段階のどれを出すか。**持ち主はPipelineView。**共有の拡張・「このアプリで開く」・
+    /// /jのリンクでJSFXが入ったとき、あちらがPluginsを指して開く（開いていればその場で替わる）。
+    /// ここに@Stateで持っていたときは、いつもEffectsで開き、入ったものを探させていた。
+    @Binding var pane: Pane
+    /// 取り込んだばかりのJSFX（id）。Pluginsでその作者の見出しへ送り、行を塗る。
+    @Binding var fresh: String?
 
     @StateObject private var presets = PresetStore.shared
 
@@ -66,7 +72,6 @@ struct EffectPickerView: View {
             }
         }
     }
-    @State private var pane: Pane = .effects
     /// 検索が出ているか。**畳むために持つ。**
     /// 検索が出ている間はシートを閉じられない（下の row のコメント）ので、
     /// 先にこれを false にしてから閉じる。`.searchable(text:isPresented:)` は
@@ -302,7 +307,7 @@ struct EffectPickerView: View {
                           allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
                 do {
                     guard let url = try result.get().first else { return }
-                    _ = try jsfx.importFile(url)
+                    fresh = try jsfx.importFile(url).id
                     pane = .plugins
                 } catch { alert = .failed(error.localizedDescription) }
             }
@@ -521,6 +526,14 @@ struct EffectPickerView: View {
                         // 検索から戻ると一覧は作り直される。立てたままだと、新しい一覧の見出しで塗りが動かない。
                         .onDisappear { jumping = false }
                     }
+                    // **取り込んだばかりのJSFXの作者へ送る。**開いたときにも、開いている間に届いたときにも走る。
+                    // 帯を押したときと同じ道（下のjump）を通す。行ではなく見出しへ送るのも同じ理由
+                    // （見出しの.idのコメント）。面が替わった回はonChange(of: pane)がjumpを空に戻す。
+                    // taskの中身は非同期で、その回を組み終えてから走るので、戻された後に入れることになる。
+                    .task(id: fresh) {
+                        guard let id = fresh, let entry = jsfx.entry(id: id) else { return }
+                        jump = Jump(name: jsfxVendor(entry), count: jump.count + 1)
+                    }
                     .onChange(of: jump) { _, now in
                         guard !now.name.isEmpty else { return }
                         jumping = true
@@ -645,6 +658,8 @@ struct EffectPickerView: View {
             jsfxPickButton(entry)
             jsfxMenu(entry)
         }
+        // 取り込んだばかりの1本は塗って見せる（fresh）。
+        .listRowBackground(entry.id == fresh ? Color.accentColor.opacity(0.12) : nil)
         // **両方plainにする。**Listは行の中の既定スタイルのボタンを行1つの当たりに
         // まとめるので、そのままだと…を押しても鎖へ足す側まで走りうる。
         // borderlessは不可。中の.primary・.secondaryがアクセント色の段になり、名前が青くなる。
@@ -991,7 +1006,7 @@ struct EffectPickerView: View {
             return
         }
         do {
-            _ = try jsfx.importText(text)
+            fresh = try jsfx.importText(text).id
             pane = .plugins
         } catch {
             alert = .failed(error.localizedDescription)
@@ -1011,7 +1026,8 @@ struct EffectPickerView: View {
             do {
                 let file = try await ETRemoteFile.fetch(address)
                 switch ETInbox.receive(file) {
-                case .jsfx:
+                case .jsfx(let id):
+                    fresh = id
                     pane = .plugins
                 case .ir:
                     // 音として入った。IR の一覧へ入るので、ここでは閉じるだけ。

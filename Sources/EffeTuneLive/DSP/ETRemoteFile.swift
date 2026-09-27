@@ -7,7 +7,7 @@
 //  **人が貼るのは見ているページの URL。**GitHub の `blob` は HTML の画面で、
 //  そのまま取ると `<!DOCTYPE html>` が落ちてくる。生のファイルは
 //  `raw.githubusercontent.com` にあるので、こちらで読み替える。
-//  gist も同じ（`/raw` を足す。1 本を名指ししたリンクは API で名前を引く）。
+//  gistはAPIの一覧から名前を引く（名指しが無ければ名前の順で最初の1本）。
 //
 //  **中身の判定はしない。**落としたものを ETInbox に渡すだけで、音か JSFX かは
 //  あちらが頭の印と中身で決める。ここは「取ってくる」だけを持つ。
@@ -44,8 +44,8 @@ enum ETRemoteFile {
     ///
     /// - `https://github.com/u/r/blob/main/a.jsfx` → `raw.githubusercontent.com/u/r/main/a.jsfx`
     /// - `https://github.com/u/r/raw/main/a.jsfx`  → 同じ（GitHub 自身が飛ばすが、先に直す）
-    /// - `https://gist.github.com/u/<id>`          → `<同じ>/raw`（先頭の 1 本）
-    /// - `https://gist.github.com/u/<id>#file-a-jsfx` → `api.github.com/gists/<id>#file-a-jsfx`（fetch が名前を引く）
+    /// - `https://gist.github.com/u/<id>`          → `api.github.com/gists/<id>`（downloadが名前の順で最初の1本を取る）
+    /// - `https://gist.github.com/u/<id>#file-a-jsfx` → `api.github.com/gists/<id>#file-a-jsfx`（downloadが名前を引く）
     /// - `https://gist.github.com/u/<id>/raw/…`    → そのまま
     /// - それ以外はそのまま
     static func address(from text: String) -> URL? {
@@ -55,7 +55,7 @@ enum ETRemoteFile {
               scheme == "http" || scheme == "https",
               let host = comps.host?.lowercased() else { return nil }
 
-        var parts = comps.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        let parts = comps.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         if host == "github.com" || host == "www.github.com" {
             // /<user>/<repo>/(blob|raw)/<ref>/<path...>
@@ -87,19 +87,19 @@ enum ETRemoteFile {
             // （`dh++_4ch.wav` → `file-dh-_4ch-wav`）で、戻す手が無い。以前は印を
             // そのまま /raw/ の後ろに付けていて、`.` を含む名前は全部 404 だった。
             // 本当の名前は API の一覧にしか無いので、そちらを指しておき、
-            // fetch で印と突き合わせる。印は fragment に残す（送られない）。
+            // downloadで印と突き合わせる。印はfragmentに残す（送られない）。
+            //
+            // **名指しの無いリンクも一覧から引く。**`<gist>/raw`は画面の先頭の1本を返すと
+            // 思っていたが違った。キットのgistでは画面の先頭はatmos_4ch_ffmpeg.wavなのに
+            // convert.pyが落ちてきて、「音でもJSFXでもない」と断っていた。
+            var api = URLComponents()
+            api.scheme = "https"
+            api.host = "api.github.com"
+            api.path = "/gists/" + id
             if let f = comps.fragment, f.hasPrefix("file-"), f.count > "file-".count {
-                var api = URLComponents()
-                api.scheme = "https"
-                api.host = "api.github.com"
-                api.path = "/gists/" + id
                 api.fragment = f
-                return api.url
             }
-            parts.append("raw")
-            comps.path = "/" + parts.joined(separator: "/")
-            comps.fragment = nil
-            return comps.url
+            return api.url
         }
 
         return comps.url
@@ -124,6 +124,13 @@ enum ETRemoteFile {
     /// 印の規則が外れたときの逃げ道。英数字だけで比べる。
     private static func looseKey(_ s: String) -> String {
         String(s.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
+    }
+
+    /// 名指しの無いgistのリンクで取る1本。**名前の順で最初のもの**（gistの画面の並び）。
+    /// 一覧の`files`はJSONの辞書で、JSONSerializationが並びを落とすので自分で並べる。
+    /// 比べ方は文字の値の順（大文字が小文字より先）。
+    static func firstGistFile(among names: [String]) -> String? {
+        names.sorted().first
     }
 
     /// gist の一覧から、印に合う 1 本の名前を選ぶ。**当たりが 2 本以上なら選ばない。**
@@ -156,17 +163,20 @@ enum ETRemoteFile {
     /// 共有の拡張は 120 MB ほどで OS に落とされる。全部を Data に溜めてから
     /// 大きさを見る形だと、上限を超えるものを渡されたときに判定の前に落ちる。
     static func download(_ address: URL) async throws -> (file: URL, name: String) {
-        // gist の中の 1 本。一覧を引いて、印に合う名前の raw_url を取りに行く。
-        // 一覧の `content` は大きいと切られる（truncated）ので使わない。
+        // gistの中の1本。一覧を引いて、印に合う名前（印が無ければ名前の順で最初）の
+        // raw_urlを取りに行く。一覧の`content`は大きいと切られる（truncated）ので使わない。
         // **共有の拡張もここを通るので、fetch ではなくこちらで引く。**
-        if address.host == "api.github.com", address.path.hasPrefix("/gists/"),
-           let anchor = address.fragment?.dropFirst("file-".count), !anchor.isEmpty {
+        if address.host == "api.github.com", address.path.hasPrefix("/gists/") {
+            let anchor = address.fragment.flatMap {
+                $0.hasPrefix("file-") ? String($0.dropFirst("file-".count)) : nil
+            } ?? ""
             let (listingFile, _) = try await stream(address)
             defer { try? FileManager.default.removeItem(at: listingFile) }
             let listing = try Data(contentsOf: listingFile)
             guard let root = try? JSONSerialization.jsonObject(with: listing) as? [String: Any],
                   let files = root["files"] as? [String: [String: Any]],
-                  let name = gistFile(named: String(anchor), among: Array(files.keys)),
+                  let name = anchor.isEmpty ? firstGistFile(among: Array(files.keys))
+                                            : gistFile(named: anchor, among: Array(files.keys)),
                   let raw = (files[name]?["raw_url"] as? String).flatMap(URL.init(string:))
             else { throw Failure.noSuchFile }
             let (part, _) = try await stream(raw)
