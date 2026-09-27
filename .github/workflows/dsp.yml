@@ -36,9 +36,14 @@ on:
 permissions:
   contents: read
 
+# ci.yml と同じ決まり。PR は新しく押せば前の回を止める（group は PR ごと）。
+# main に押した回・毎晩の回・手で回した回は、回ごとに別の group にして止めない（上流を壊した
+# コミットにもそのコミットの結果を残す）。**ref で束ねない。**毎晩の回も main の ref で走るので、
+# 束ねると押した回と毎晩の回が互いを止め、cancel-in-progress が false でも同じ group で待てる回は
+# 1 つだけなので、並んだ回が後から来た回に取り消される。
 concurrency:
-  group: dsp-${{ github.ref }}
-  cancel-in-progress: true
+  group: dsp-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -124,6 +129,8 @@ jobs:
           if [ -f Tests/Native/lsan.supp ]; then
             export LSAN_OPTIONS="suppressions=$PWD/Tests/Native/lsan.supp:print_suppressions=0"
           fi
+          # 環境は Tests/Native/CMakePresets.json の engine（asan を継ぐ）と同じ。debug の回では読まれない。
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:strict_string_checks=1
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           # engine の印の付いたものだけ（ほかは ci.yml の native が毎回走らせている）。
           ctest --test-dir build/native-engine -L engine --no-tests=error --parallel 4 --output-on-failure

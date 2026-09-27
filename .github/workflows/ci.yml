@@ -36,9 +36,13 @@ defaults:
   run:
     shell: bash
 
-# PR は新しく押せば前の回を止める。main は止めない（どのコミットにも結果を残す）。
+# PR は新しく押せば前の回を止める（group は PR ごと）。
+# main と手で回した回は、回ごとに別の group にする（どのコミットにも結果を残す）。
+# **ref で束ねない。**同じ group で待てる回は 1 つだけで、次の回が並ぶと待っている回は
+# cancel-in-progress が false でも取り消される（GitHub の concurrency の決まり）。main を続けて
+# 押すと、走っている回の後ろに並んだコミットには結果が残らない。
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -156,6 +160,9 @@ jobs:
         run: cmake --build build/native --parallel
       - name: ctest
         run: |
+          # 環境と「1 本も無ければ落とす」は Tests/Native/CMakePresets.json の試験のプリセット
+          # （asan・tsan）と同じにする。ASAN_OPTIONS は TSan の回では読まれない。
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:strict_string_checks=1
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           export TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
           # 意図して残している確保（ETPipeline の外部ノードの記述子）は Tests/Native/lsan.supp に書く。
@@ -168,7 +175,7 @@ jobs:
             if grep -rqE 'LABELS[^)]*tsan' Tests/Native --include=CMakeLists.txt; then no_tests=error; fi
             ctest --test-dir build/native -L tsan --no-tests="$no_tests" --output-on-failure
           else
-            ctest --test-dir build/native --parallel 4 --output-on-failure
+            ctest --test-dir build/native --parallel 4 --no-tests=error --output-on-failure
           fi
 
   linux-swift:

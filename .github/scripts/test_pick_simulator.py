@@ -23,14 +23,14 @@ def dev(name, udid, available=True):
 
 
 class PickSimulatorTests(unittest.TestCase):
-    def run_main(self, devices):
+    def run_main(self, devices, os_version="27.0"):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                          encoding="utf-8") as f:
             json.dump({"devices": devices}, f)
         self.addCleanup(os.unlink, f.name)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = pick_simulator.main(["--name", NAME, "--os", "27.0", "--json", f.name])
+            code = pick_simulator.main(["--name", NAME, "--os", os_version, "--json", f.name])
         return code, out.getvalue().strip(), err.getvalue()
 
     def test_exact_name_and_version(self):
@@ -59,15 +59,31 @@ class PickSimulatorTests(unittest.TestCase):
         code, udid, _ = self.run_main({IOS + "27-0": [dev("iPhone 17e", "C-17E")]})
         self.assertEqual((code, udid), (0, "C-17E"))
 
+    def test_fallback_takes_ipad_pro_before_plain_ipad(self):
+        # 名前の順では "iPad (" が "iPad Pro" より前に来る。iPad Pro を先に見ていないと iPad (A16) を取る。
+        code, udid, _ = self.run_main({IOS + "27-0": [
+            dev("iPad (A16)", "F-A16"), dev("iPad Pro 11-inch (M5)", "F-PRO11")]})
+        self.assertEqual((code, udid), (0, "F-PRO11"))
+
     def test_point_release_runtime_matches(self):
         code, udid, _ = self.run_main({IOS + "27-0-1": [dev(NAME, "P-PRO13")]})
         self.assertEqual((code, udid), (0, "P-PRO13"))
 
     def test_minor_version_does_not_match(self):
-        # 27.1 は 27.0 ではない（startswith("27.0") の取り違えを防ぐ）。
+        # 27.1 も 27.10 も 27.0 ではない（メジャーの版だけで比べる取り違えを防ぐ）。
         code, udid, err = self.run_main({IOS + "27-1": [dev(NAME, "M-PRO13")], IOS + "27-10": [dev(NAME, "M-PRO13-10")]})
         self.assertEqual((code, udid), (1, ""))
         self.assertIn("27.1", err)
+
+    def test_wanted_version_is_not_a_prefix_match(self):
+        # 27.1 を頼んで 27.10 しか無ければ止める（素の startswith("27.1") だと 27.10 を取る）。
+        code, udid, err = self.run_main({IOS + "27-10": [dev(NAME, "M-PRO13-10")]}, os_version="27.1")
+        self.assertEqual((code, udid), (1, ""))
+        self.assertIn("M-PRO13-10", err)
+        # 点の後の版（27.1.2）は 27.1 に合う。
+        code, udid, _ = self.run_main({IOS + "27-10": [dev(NAME, "M-PRO13-10")],
+                                       IOS + "27-1-2": [dev(NAME, "M-PRO13-1-2")]}, os_version="27.1")
+        self.assertEqual((code, udid), (0, "M-PRO13-1-2"))
 
     def test_unavailable_device_is_skipped(self):
         code, udid, _ = self.run_main({IOS + "27-0": [dev(NAME, "X-GONE", available=False), dev("iPad (A16)", "X-A16")]})
