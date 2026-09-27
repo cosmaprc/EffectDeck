@@ -427,7 +427,7 @@ final class ChainTextTests: XCTestCase {
 
     /// CHAIN.mdの見本（最初の```jsonの囲い）はそのまま通る。見本の鍵を変えたらここで分かる。
     func testChainMDExampleImportsCleanly() throws {
-        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "CHAIN", withExtension: "md"))
+        let file = try XCTUnwrap(TestResource.url("CHAIN", "md"))
         let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines)
         let open = try XCTUnwrap(lines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == "```json" },
                                  "CHAIN.mdに```jsonの見本が無い")
@@ -448,8 +448,7 @@ final class ChainTextTests: XCTestCase {
     /// CHAIN.mdはChatGPTにこれを読ませるので、ずれると無い鍵や範囲の外の値を書かせる。
     func testVocabularyMatchesCatalog() throws {
         let file = try XCTUnwrap(
-            Bundle(for: Self.self).url(forResource: "effects", withExtension: "json",
-                                       subdirectory: "chain/v\(ETUpstreamVersion)"),
+            TestResource.url("effects", "json", subdirectory: "chain/v\(ETUpstreamVersion)"),
             "chain/v\(ETUpstreamVersion)/effects.json が無い。Tools/gen_catalog.py を走らせる")
         let data = try Data(contentsOf: file)
         let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])

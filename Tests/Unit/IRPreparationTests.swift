@@ -51,7 +51,7 @@ final class IRPreparationTests: XCTestCase {
     }
 
     private func golden() throws -> Golden {
-        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "prepare-golden", withExtension: "json"))
+        let file = try XCTUnwrap(TestResource.url("prepare-golden", "json"))
         return try JSONDecoder().decode(Golden.self, from: Data(contentsOf: file))
     }
 

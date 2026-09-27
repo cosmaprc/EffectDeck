@@ -18,7 +18,7 @@ final class FXDLinkTests: XCTestCase {
     }
 
     private func vector() throws -> Vector {
-        let file = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "test-vector", withExtension: "json"))
+        let file = try XCTUnwrap(TestResource.url("test-vector", "json"))
         return try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
     }
 
