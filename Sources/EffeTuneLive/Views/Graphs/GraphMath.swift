@@ -6,6 +6,12 @@
 //  軸の取り方（周波数は対数、レベルは線形のdB）はGraphCanvas.swiftの頭を読むこと。
 
 import Foundation
+// iOSではCGRectの型だけFoundationから見え、init(x:y:width:height:)・minX・insetByはCoreGraphicsにある。
+// 同じモジュールの別ファイルがSwiftUIやXCTestを読んでいるので今は建つが、それに頼らない。
+// LinuxのFoundationは全部持っていてCoreGraphicsが無いので、ここは読まない。
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 // MARK: - 余白
 
