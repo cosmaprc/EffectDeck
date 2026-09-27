@@ -2,8 +2,9 @@
 //  AudioIO がセッションのレートから決める値（ETAudioSessionRules）。
 //
 //  リンクは 48kHz 固定。ハードウェアが別のレートで回っていると音程と速さがずれるので、
-//  黙って進めず status に出す。その字は SettingsModel.swift が "Running" の前方一致で
-//  読んでいるので、字そのものも見張る。
+//  黙って進めず status に出す。その字は StatusReadings.swift の ETRunState.current が
+//  失敗の前方一致（failurePrefixes）と "Interrupted" の完全一致で読むので、
+//  どちらにも当たらないことを ETRunState に通して見張る。
 
 import XCTest
 
@@ -41,9 +42,20 @@ final class SampleRateRulesTests: XCTestCase {
                        "Running at 44100 Hz, input is 48000 Hz")
         XCTAssertEqual(ETAudioSessionRules.runningStatus(sampleRate: 16000),
                        "Running at 16000 Hz, input is 48000 Hz")
-        // どちらも "Running" で始まる（SettingsModel が走っていると判る）。
-        for sr in [48000.0, 44100, 16000, 96000] {
-            XCTAssertTrue(ETAudioSessionRules.runningStatus(sampleRate: sr).hasPrefix("Running"))
+    }
+
+    /// Settings が読むのは ETRunState.current。鳴っているときの字が
+    /// 失敗（failurePrefixes）にも中断（"Interrupted"）にも読まれず、再生と出る。
+    func testRunningStatusReadsAsRunning() {
+        for sr in [48000.0, 44100, 16000, 32000, 96000, 192000] {
+            var s = ETAudioSnapshot()
+            s.status = ETAudioSessionRules.runningStatus(sampleRate: sr)
+            s.sampleRate = sr
+            s.hasPeer = true
+            s.running = true
+            s.route = "Speaker"
+            XCTAssertEqual(ETRunState.current(s), .playing(output: "Speaker"), s.status)
+            XCTAssertFalse(ETRunState.failurePrefixes.contains { s.status.hasPrefix($0) }, s.status)
         }
     }
 
@@ -58,6 +70,17 @@ final class SampleRateRulesTests: XCTestCase {
     func testBlockFramesNonFiniteIsZero() {
         XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: .nan, sampleRate: 48000), 0)
         XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: 0.01, sampleRate: .infinity), 0)
+    }
+
+    /// 有限でも Int に入らない大きさ（2^63 以上）は 0。Int(Double) はそこで落ちる。
+    /// 実機では起きないが、表示のための数で落ちる形は残さない。
+    func testBlockFramesBeyondIntIsZero() {
+        XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: 1e300, sampleRate: 48000), 0)
+        XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: 0x1p63, sampleRate: 1), 0)
+        XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: -1e19, sampleRate: 1), 0)
+        // 入る大きさはそのまま（2^63 のすぐ下の Double）。
+        XCTAssertEqual(ETAudioSessionRules.blockFrames(ioBufferDuration: 0x1p63.nextDown, sampleRate: 1),
+                       Int(0x1p63.nextDown))
     }
 
     /// 図を音に合わせる遅れ = 出力の遅延 + 1 ブロック + リサンプラの遅延 / レート。

@@ -69,24 +69,39 @@ final class ExternalSlotAllocatorTests: XCTestCase {
         XCTAssertEqual(a.reserve("x"), 0)
     }
 
+    /// 決まった目を出す乱数（SplitMix64）。**失敗したら同じ種で再現できる。**
+    private struct Seeded: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E3779B97F4A7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+            return z ^ (z >> 31)
+        }
+    }
+
     /// 番号は重ならない。混ぜて足し引きしても 1 つの番号に 2 つの id が乗らない。
     func testSlotsNeverCollide() {
-        var a = ETExternalSlotAllocator(capacity: 8)
-        var rng = SystemRandomNumberGenerator()
-        var live: Set<String> = []
-        for step in 0..<2000 {
-            let id = "id\(Int.random(in: 0..<14, using: &rng))"
-            if live.contains(id), Bool.random(using: &rng) {
-                a.release(id); live.remove(id)
-            } else if a.reserve(id) != nil {
-                live.insert(id)
-            } else {
-                XCTAssertEqual(a.slots.count, 8, "断るのは埋まっているときだけ (step \(step))")
+        for seed: UInt64 in 1...8 {
+            var a = ETExternalSlotAllocator(capacity: 8)
+            var rng = Seeded(state: seed)
+            var live: Set<String> = []
+            for step in 0..<2000 {
+                let at = "seed \(seed) step \(step)"
+                let id = "id\(Int.random(in: 0..<14, using: &rng))"
+                if live.contains(id), Bool.random(using: &rng) {
+                    a.release(id); live.remove(id)
+                } else if a.reserve(id) != nil {
+                    live.insert(id)
+                } else {
+                    XCTAssertEqual(a.slots.count, 8, "断るのは埋まっているときだけ (\(at))")
+                }
+                let values = Array(a.slots.values)
+                XCTAssertEqual(Set(values).count, values.count, at)
+                XCTAssertTrue(values.allSatisfy { $0 < 8 }, at)
+                XCTAssertEqual(Set(a.slots.keys), live, at)
             }
-            let values = Array(a.slots.values)
-            XCTAssertEqual(Set(values).count, values.count, "step \(step)")
-            XCTAssertTrue(values.allSatisfy { $0 < 8 })
-            XCTAssertEqual(Set(a.slots.keys), live)
         }
     }
 

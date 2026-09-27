@@ -54,7 +54,11 @@ enum ETAudioSessionRules {
     }
 
     /// 組み上がったときの AudioIO.status。
-    /// **字を変えないこと。** SettingsModel.swift が "Running" で始まるかどうかを見ている。
+    /// **字を変えるときは StatusReadings.swift の ETRunState.current を見ること。**
+    /// そこは failurePrefixes の前方一致で失敗、"Interrupted" の完全一致で中断と読む。
+    /// ここの字がどちらかに当たると、鳴っているのに Settings が失敗や中断を出す
+    /// （SampleRateRulesTests.testRunningStatusReadsAsRunning）。
+    /// レートの不一致は字ではなく sampleRate から ETIssue が出す。
     static func runningStatus(sampleRate: Double) -> String {
         matchesLinkRate(sampleRate)
             ? "Running"
@@ -62,9 +66,10 @@ enum ETAudioSessionRules {
     }
 
     /// 1 ブロックのフレーム数（Settings の表示）。値が無い間は 0。
+    /// Int に入らない値（NaN・無限・絶対値が 2^63 以上）も 0。Int(Double) はそこで落ちる。
     static func blockFrames(ioBufferDuration: Double, sampleRate: Double) -> Int {
         let frames = (ioBufferDuration * sampleRate).rounded()
-        guard frames.isFinite else { return 0 }
+        guard frames.isFinite, abs(frames) < Double(Int.max) else { return 0 }
         return Int(frames)
     }
 

@@ -97,7 +97,7 @@ enum ETNowPlayingText {
     static let title = "EffectDeck"
 
     /// 2 行目。鎖を通していれば効いている数、素通しなら "Bypassed"。
-    /// "Bypassed" は画面の帯と同じ字にしてある（Components.swift）。
+    /// "Bypassed" は鎖ぜんぶの電源の読み上げと同じ字にしてある（PipelineView.swift の voiceOverValue）。
     static func artist(active: Bool, count: Int) -> String {
         guard active else { return "Bypassed" }
         return count == 1 ? "1 effect" : "\(count) effects"
