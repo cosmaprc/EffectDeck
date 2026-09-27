@@ -94,6 +94,11 @@ extension Fuzz {
 ///   3. こちらのリンク（deckURL）に書いて読み戻すと段の数が同じ
 enum FormOracle {
     static func check(_ loaded: [PipelineStore.Loaded], _ context: String) {
+        // 範囲は見ないが、大きさは見る。上限の外は画面の Int(_:) が落とす（ETParamCoding.decode）。
+        for item in loaded {
+            Fuzz.oracle(item.values.allSatisfy { abs($0) <= ETParamCoding.magnitudeLimit },
+                        "\(context): \(item.spec.name) の値が ±\(ETParamCoding.magnitudeLimit) の外: \(item.values)")
+        }
         let short = PipelineStore.shortForm(loaded)
         guard let first = Fuzz.canonical(short) else {
             Fuzz.oracle(false, "\(context): shortForm が JSON に書けない: \(short)")

@@ -11,8 +11,7 @@
     - Tests/Unit のファイルは入れない（XCTest を連れてくる。fuzz は試験の道具を使わない）
     - 代わりに Tests/Fuzz/Harness/*.swift を入れ、1 本の実行ファイル EffectDeckFuzz にする。
       どの的を叩くかは環境変数 ET_FUZZ_TARGET で選ぶ（Harness/Entry.swift）
-- project.yml にまだ無いが的に要るファイル（EXTRA）は --add と同じ扱いで足す。
-  登録が済めば重なるだけで害は無い（collect が重複を落とす）
+- project.yml にまだ無いが的に要るファイルは --add で足す（Linux の make_package.py と同じ）
 - 資源（chain/ や見本の JSON）は入れない。的は資源を読まない
 """
 import argparse
@@ -23,19 +22,6 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 TARGET = "EffectDeckFuzz"
 HARNESS = "Tests/Fuzz/Harness"
-
-# project.yml の EffeTuneLiveUnitTests にまだ登録されていないが、的が引くもの。
-# wave 1 の各パッケージの REGISTER に載っているもので、統合で登録されれば要らなくなる。
-EXTRA = [
-    # 共有リンクの読み書き（P-Chain）。ETShareLink.url(for: [ETChainNode]) が引く 2 本も。
-    "Sources/EffeTuneLive/DSP/ETShareLink.swift",
-    "Sources/EffeTuneLive/DSP/ChainEditing.swift",
-    "Sources/EffeTuneLive/DSP/ETChainNode.swift",
-    # バックアップのファイルを読む（P-Stores）。PipelineStore.parse を素のまま通す口。
-    "Sources/EffeTuneLive/DSP/ETBackupFormat.swift",
-    # 取り込み直したJSFXの頭の読み方（desc: / author:）と付け替えの表（JSFX replace）。
-    "Sources/EffeTuneLive/Audio/JSFXReplace.swift",
-]
 
 
 def load_linux_packager():
@@ -95,8 +81,7 @@ def main():
     out = pathlib.Path(a.out)
     mp = load_linux_packager()
 
-    adds = [p for p in EXTRA if (repo / p).exists()] + list(a.add)
-    sources, _resources = mp.collect(repo, adds)
+    sources, _resources = mp.collect(repo, list(a.add))
     # 試験の道具（XCTest を引く）は入れない。代役のうちモジュールへ直接入るもの
     # （Tests/Linux/Shims/FoundationGaps）は collect が足してあるのでそのまま。
     sources = [s for s in sources if not s.startswith("Tests/Unit/")]

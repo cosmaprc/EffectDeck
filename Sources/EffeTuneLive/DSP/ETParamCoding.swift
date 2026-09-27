@@ -109,6 +109,14 @@ enum ETParamCoding {
     /// `type` は上流のプラグイン名。ETAllowedValues を引くのに使う。
     /// **許されない値は捨てて `defaults` の値を残す。** 上流の
     /// isAllowedEnum(value, allowed, previous)（plugins/plugin-base.js:1196-1198）と同じ。
+    /// NaN・無限も同じく捨てる（number が nil を返す）。
+    ///
+    /// **返す値はどれも ±magnitudeLimit の中に収める**（最後の bounded）。
+    /// 範囲の外の数は寄せない設計だが、Int に入らない大きさ（1e30）まで通すと、
+    /// 画面が生の値を Int(_:) にしたところでアプリごと落ちる（ChannelDividerView の bandCount、
+    /// ParameterRow の選択肢・整数の表示など）。tidy は落ちないので、その値は保存にも残る。
+    /// 寄せるのは ETUpstreamNormalize の後。Bass Management の rt・ri・su は
+    /// 2^53 以上を「前の値」に戻す（上流の Number.isSafeInteger）ので、先に寄せると変わる。
     static func decode(params: [ETParam], defaults: [Float],
                        from dict: [String: Any], type: String = "") -> [Float] {
         var values = defaults
@@ -118,7 +126,7 @@ enum ETParamCoding {
                 if let array = dict[key] as? [Any] {
                     for (i, item) in array.prefix(p.count).enumerated() {
                         let k = p.offset + i
-                        if values.indices.contains(k) { values[k] = number(item, p) }
+                        if values.indices.contains(k), let v = number(item, p) { values[k] = v }
                     }
                 }
                 continue
@@ -129,7 +137,7 @@ enum ETParamCoding {
                 for (i, row) in rows.enumerated() where i < p.count {
                     guard let item = row[member] else { continue }
                     let k = p.offset + i
-                    if values.indices.contains(k) { values[k] = number(item, p) }
+                    if values.indices.contains(k), let v = number(item, p) { values[k] = v }
                 }
                 continue
             }
@@ -141,7 +149,7 @@ enum ETParamCoding {
                     guard let item = dict[p.key + String(i)] else { continue }
                     hit = true
                     let k = p.offset + i
-                    if values.indices.contains(k) { values[k] = number(item, p) }
+                    if values.indices.contains(k), let v = number(item, p) { values[k] = v }
                 }
                 if hit { continue }
             }
@@ -153,7 +161,7 @@ enum ETParamCoding {
                 // 読めなくして作った鎖を失わないために残す。書くのはもうしない。
                 for (i, item) in arr.enumerated() where i < p.count {
                     let k = p.offset + i
-                    if values.indices.contains(k) { values[k] = number(item, p) }
+                    if values.indices.contains(k), let v = number(item, p) { values[k] = v }
                 }
             } else if p.isObjectMember {
                 // **単体の値は取らない。**
@@ -161,7 +169,7 @@ enum ETParamCoding {
                 // 入れるとバンド 1 だけが段の値に化け、残りが既定へ戻る。
                 continue
             } else if values.indices.contains(p.offset) {
-                let v = number(raw, p)
+                guard let v = number(raw, p) else { continue }
                 if let allowed = ETAllowedValues.upstream(type: type, key: p.key),
                    !allowed.contains(v) {
                     continue
@@ -170,7 +178,17 @@ enum ETParamCoding {
             }
         }
         return ETUpstreamNormalize.apply(type: type, params: params, previous: defaults,
-                                         values: values, from: dict)
+                                         values: values, from: dict).map(bounded)
+    }
+
+    /// decode が返す値の大きさの上限。2^24。
+    /// Float が整数をすべて正確に持てる上限で、catalog の範囲の端でいちばん大きい
+    /// 100000 の 160 倍余り。これより内なら、画面が Int(_:) にして何倍かしても落ちない。
+    static let magnitudeLimit: Float = 0x1p24
+
+    /// ±magnitudeLimit へ寄せる。
+    static func bounded(_ v: Float) -> Float {
+        min(max(v, -magnitudeLimit), magnitudeLimit)
     }
 
     /// 保存形式の値 → float。enum は選択肢の添字、bool は 0/1。
@@ -178,12 +196,16 @@ enum ETParamCoding {
     /// **順番を変えないこと。** Darwin では NSNumber(0/1) が `as? Bool` に通るので、
     /// Bool を先に見る。逆にすると toggle が 0/1 のまま素通りする。
     ///
-    /// **NaN・無限は既定にする**（読めないものと同じ扱い）。Float に収まらない数（1e39）は
-    /// floatValue で無限になり、Float(_:) は "nan" "inf" の字を NaN・無限として読む。
+    /// **NaN・無限は nil**（decode はその位置に `defaults` の値を残す）。Float に収まらない数
+    /// （1e39）は floatValue で無限になり、Float(_:) は "nan" "inf" の字を NaN・無限として読む。
     /// そのまま鎖に入ると DSP へ渡り、書き戻す shortForm が JSON に書けなくなっていた
-    /// （Tests/Fuzz の pipelineform。FuzzFindingsTests）。範囲の外の有限の数は今までどおり
-    /// そのまま（寄せるのは貼られた字だけ。ETChainText.prepare）。
-    static func number(_ raw: Any, _ p: ETParam) -> Float {
+    /// （Tests/Fuzz の pipelineform。FuzzFindingsTests）。
+    /// catalog の既定でなく `defaults` を残すのは、プリセットを当てるとき（EffectPresetApply）
+    /// の `defaults` が今の値だから。上流の parseFiniteNumber（plugin-base.js:1174-1194）も
+    /// 数でないものは前の値に戻す。
+    /// 数と読めない字・型は今までどおり catalog の既定。範囲の外の有限の数もそのまま
+    /// （寄せるのは貼られた字だけ。ETChainText.prepare。大きさの上限は decode の bounded）。
+    static func number(_ raw: Any, _ p: ETParam) -> Float? {
         let v: Float
         if let b = raw as? Bool { return b ? 1 : 0 }
         if let n = raw as? NSNumber {
@@ -192,11 +214,12 @@ enum ETParamCoding {
             if case .enumeration(let values) = p.kind, let i = values.firstIndex(of: s) {
                 return Float(i)
             }
-            v = Float(s) ?? p.defaultValue
+            guard let f = Float(s) else { return p.defaultValue }
+            v = f
         } else {
             return p.defaultValue
         }
-        return v.isFinite ? v : p.defaultValue
+        return v.isFinite ? v : nil
     }
 }
 

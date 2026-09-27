@@ -118,7 +118,12 @@ done
 
 bin=
 if [ "$swift_needed" = 1 ]; then
+  # 失敗の行を出してから止めるため、パイプの間だけ -e を外す（-e のままだと tee の行で黙って抜ける）。
+  set +e
   python3 "$here/make_package.py" --repo "$repo" --out "$work" 2>&1 | tee -a "$build_log"
+  status=${PIPESTATUS[0]}
+  set -e
+  [ "$status" = 0 ] || { echo "== make_package failed ($status). log $build_log"; exit "$status"; }
   # -parse-as-library: main は libFuzzer が持つ。-sanitize=fuzzer は計測（edge・比較の値）と
   # libFuzzer のリンクの両方。address で配列の外・解放済みを拾う。
   # **release（-O、WMO）で建てる。**debug の 10〜50 倍回る。WSL で約 5 分・約 700 MB。
@@ -140,12 +145,15 @@ if [ "$native_needed" = 1 ]; then
   mkdir -p "$work/native"
   gate="$work/native/jsfx_source_gate"
   # ysfx は宣言だけ使う（門は呼ばない）。未定義の参照はリンクで無視させる（jsfx_source_gate.cpp の頭）。
+  set +e
   "$cxx" -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
     -I "$repo/Sources/Shared" -I "$repo/Vendor/ysfx/include" \
     -I "$repo/Vendor/ysfx/thirdparty/WDL/source" \
     "$here/Native/jsfx_source_gate.cpp" -o "$gate" \
     -Wl,--unresolved-symbols=ignore-all 2>&1 | tee -a "$build_log"
-  [ "${PIPESTATUS[0]}" = 0 ] || { echo "== native build failed. log $build_log"; exit 1; }
+  status=${PIPESTATUS[0]}
+  set -e
+  [ "$status" = 0 ] || { echo "== native build failed ($status). log $build_log"; exit "$status"; }
 fi
 
 # 的ごとの見本（リポジトリにあるもの）。ファイルでもフォルダでもよい。

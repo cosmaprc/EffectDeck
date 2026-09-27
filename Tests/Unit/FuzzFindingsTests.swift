@@ -3,7 +3,8 @@
 //  1 件ごとに、どの的（Tests/Fuzz/run.sh --target）が何で止まったかを書く。
 //
 //  鎖を prepare を通さずに読む口（バックアップ・pipeline.last・プリセット）は範囲へ寄せない
-//  設計なので、ここで見るのは「落ちない」「NaN・無限を鎖に入れない」「書き戻せる」だけ。
+//  設計なので、ここで見るのは「落ちない」「NaN・無限を鎖に入れない」「書き戻せる」と、
+//  値の大きさが ±ETParamCoding.magnitudeLimit の中にあること（画面の Int(_:) が落ちない）だけ。
 
 import XCTest
 
@@ -90,6 +91,76 @@ final class FuzzFindingsTests: XCTestCase {
                                   "\(effect.name).\(p.key) に \(v) → \(out)")
                 }
             }
+        }
+    }
+
+    // MARK: - 大きさ（P-Fuzz のレビュー）
+
+    /// **Int に入らない数（1e30）が鎖に入り、画面の Int(_:) でアプリごと落ちた。**
+    /// Channel Divider と FIR Crossover の bc（バンド数）。ChannelDividerView.bandCount と
+    /// FIRCrossoverView の bandCountRow が生の値を Int(value.rounded()) にする。
+    /// 上の直しで tidy が落ちなくなったので、その値が pipeline.last に保存されるようにもなっていた。
+    func testHugeBandCountIsBoundedBeforeViews() throws {
+        let limit = ETParamCoding.magnitudeLimit
+        let loaded = try parse(#"[{"nm":"Channel Divider","bc":1e30},{"nm":"FIR Crossover","bc":-1e30}]"#)
+        XCTAssertEqual(loaded.count, 2)
+        for item in loaded {
+            let v = try value(item, "bc")
+            XCTAssertLessThanOrEqual(abs(v), limit, item.spec.name)
+            guard abs(v) <= limit else { continue }
+            // ChannelDividerView.bandCount と同じ式。上限の中なら Int(_:) は落ちない。
+            XCTAssertEqual(min(max(Int(v.rounded()), 2), 4), v > 0 ? 4 : 2, item.spec.name)
+        }
+        try assertWritesBack(loaded)
+    }
+
+    /// catalog の全部のパラメータに ±1e30・3e9・Float の最大を入れて、書いて（encode）
+    /// JSON を通して読む（decode）。どの形（添字付き・オブジェクト配列・平らな配列・単体）でも、
+    /// 読んだ値は ±magnitudeLimit の中。
+    func testEveryParameterReadsBounded() throws {
+        let limit = ETParamCoding.magnitudeLimit
+        for edge: Float in [1e30, -1e30, 3e9, -3e9, .greatestFiniteMagnitude] {
+            for effect in ETCatalog where !effect.params.isEmpty {
+                let values = [Float](repeating: edge, count: effect.defaults.count)
+                let dict = ETParamCoding.encode(params: effect.params, values: values)
+                let data = try JSONSerialization.data(withJSONObject: dict)
+                let back = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let read = ETParamCoding.decode(params: effect.params, defaults: effect.defaults,
+                                                from: back, type: effect.type)
+                XCTAssertEqual(read.count, effect.defaults.count)
+                for p in effect.params {
+                    for k in p.offset..<(p.offset + p.count) where read.indices.contains(k) {
+                        XCTAssertLessThanOrEqual(abs(read[k]), limit,
+                                                 "\(effect.name).\(p.key)[\(k - p.offset)] に \(edge)")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - NaN・無限は前の値（P-Fuzz のレビュー）
+
+    /// **NaN・無限は catalog の既定でなく `defaults`（前の値）を残す。**
+    /// エフェクトのプリセットを当てるとき（EffectPresetApply.values）は `defaults` が今の値。
+    /// 上の直しで catalog の既定にしていたので、Bass Management の fc の "nan" が、上流の
+    /// parseFiniteNumber（前の値。plugin-base.js:1174-1194）と違う 80Hz に落ちていた。
+    func testNonFiniteKeepsPreviousValue() throws {
+        let bass = try XCTUnwrap(ETCatalog.first { $0.type == "BassManagementPlugin" })
+        let fc = try XCTUnwrap(bass.params.first { $0.key == "fc" })
+        var current = bass.defaults
+        current[fc.offset + 1] = 150
+        let read = EffectPresetApply.values(for: bass, params: ["fc": [100, "nan"] as [Any]],
+                                            current: current)
+        XCTAssertEqual(read[fc.offset], 100)
+        XCTAssertEqual(read[fc.offset + 1], 150, "fc[1] の \"nan\" は前の 150 のまま")
+
+        let volume = try XCTUnwrap(ETCatalog.first { $0.name == "Volume" })
+        let vl = try XCTUnwrap(volume.params.first { $0.key == "vl" })
+        for raw: Any in ["nan", "-inf", "1e39", 1e39] {
+            var now = volume.defaults
+            now[vl.offset] = -12
+            let v = EffectPresetApply.values(for: volume, params: ["vl": raw], current: now)
+            XCTAssertEqual(v[vl.offset], -12, "vl: \(raw)")
         }
     }
 
