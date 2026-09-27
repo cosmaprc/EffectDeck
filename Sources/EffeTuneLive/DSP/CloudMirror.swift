@@ -71,9 +71,15 @@ enum CloudMirror {
 
     private static var cloud: NSUbiquitousKeyValueStore { .default }
 
-    /// 1 鍵ぶんの上限。全体も 1MB なので、3 鍵で分け合っても当たらない所で切る。
-    /// 鎖 1 本は数百バイト、プリセットも短い辞書なので普通は届かない。
-    private static let byteLimit = 256 * 1024
+    /// 決まりはここ（CloudMirrorCore.swift、Foundationだけ）。こちらは本物の入れ物と
+    /// -ETSeed を渡して、返ってきた理由をログへ出すだけ。
+    ///
+    /// **撮影用の起動（-ETSeed）では写さない・戻さない。**並んでいるのは引数から組んだ
+    /// 見本の鎖で、人が作ったものではない。写すと、同じ Apple ID の端末で
+    /// 1 度撮っただけで人の鎖が消える。戻すと引数の鎖に iCloud の鎖が混ざる。
+    private static var core: CloudMirrorCore {
+        CloudMirrorCore(cloud: cloud, seeded: ETScreenshotSeed.requested != nil)
+    }
 
     /// 遅れて降りてきた鎖を手元へ入れたときに呼ぶ。立てるのは EffeTuneLiveApp.init。
     @MainActor static var onChainRestored: (() -> Void)?
@@ -84,34 +90,13 @@ enum CloudMirror {
     ///
     /// 鍵の綴りは呼ぶ側（各 store）が持っている。こちらで書き写すと、
     /// 片方だけ直したときに黙って別の鍵になる。
+    ///
+    /// **ここで synchronize() しない。** ディスクへ落とすのも iCloud へ送るのも
+    /// OS が自分でやる。呼んでよいのは起動のときだけ、と決まっている
+    /// （NSUbiquitousKeyValueStore.synchronize の説明）。
+    /// 呼ぶ側は鎖を触るたびに来るので、そのたび撃つと只のディスク書き込みが増える。
     static func mirror(_ value: Any?, forKey key: String) {
-        // **撮影用の起動（-ETSeed）では写さない。**並んでいるのは引数から組んだ
-        // 見本の鎖で、人が作ったものではない。写すと、同じ Apple ID の端末で
-        // 1 度撮っただけで人の鎖が消える。seedIfEmpty も同じ理由で抜けている。
-        guard ETScreenshotSeed.requested == nil else { return }
-
-        guard let value else {
-            cloud.removeObject(forKey: key)
-            return
-        }
-
-        // KVS が受け取らない形はここで落とす。大きさと一緒に見る。
-        guard let size = storedSize(of: value) else {
-            log.error("iCloud へ写せない形 \(key, privacy: .public)")
-            return
-        }
-        guard size <= byteLimit else {
-            // **消さない。**写せないときに消すと、前に写した分まで失う。
-            // 古い写しでも、何も無いよりは戻せる。
-            log.notice("iCloud へ写すには大きい \(key, privacy: .public) \(size) bytes")
-            return
-        }
-
-        // **ここで synchronize() しない。** ディスクへ落とすのも iCloud へ送るのも
-        // OS が自分でやる。呼んでよいのは起動のときだけ、と決まっている
-        // （NSUbiquitousKeyValueStore.synchronize の説明）。
-        // 呼ぶ側は鎖を触るたびに来るので、そのたび撃つと只のディスク書き込みが増える。
-        cloud.set(value, forKey: key)
+        report(core.mirror(value, forKey: key), key: key)
     }
 
     /// 辞書の中の**1 項目だけ**を写す。`path` は外側から順の鍵。
@@ -128,62 +113,27 @@ enum CloudMirror {
     /// `value` が nil ならその項目を消す。消した結果その枝が空になったら
     /// 枝ごと落とす（上流も plugin-preset-store.js:159 でそうしている）。
     static func patch(key: String, path: [String], value: Any?) {
-        guard ETScreenshotSeed.requested == nil else { return }
-        guard !path.isEmpty else { return }
-
-        var root = cloud.dictionary(forKey: key) ?? [:]
-        guard apply(&root, path: path[...], value: value) else { return }
-
-        guard let size = storedSize(of: root) else {
-            log.error("iCloud へ写せない形 \(key, privacy: .public)")
-            return
-        }
-        guard size <= byteLimit else {
-            log.notice("iCloud へ写すには大きい \(key, privacy: .public) \(size) bytes")
-            return
-        }
-        cloud.set(root, forKey: key)
+        patch(key: key, changes: [CloudChange(path: path, value: value)])
     }
 
-    /// path をたどって当てる。入れ替えたら true。
-    private static func apply(_ node: inout [String: Any],
-                              path: ArraySlice<String>,
-                              value: Any?) -> Bool {
-        guard let head = path.first else { return false }
-        let rest = path.dropFirst()
-
-        if rest.isEmpty {
-            if let value {
-                node[head] = value
-            } else {
-                node.removeValue(forKey: head)
-            }
-            return true
-        }
-
-        var child = node[head] as? [String: Any] ?? [:]
-        guard apply(&child, path: rest, value: value) else { return false }
-        if child.isEmpty {
-            node.removeValue(forKey: head)
-        } else {
-            node[head] = child
-        }
-        return true
-    }
-
-    /// 載せたときの大きさ。載せられなければ nil。
+    /// 項目をまとめて当てる。**iCloud への書き込みは 1 回。**
     ///
-    /// **Data はそのまま数える。**plist の根に scalar を置けるかどうかを
-    /// 確かめられない所で書いているので、確かめずに済む形にする。
-    /// 鎖（pipeline.last）は Data なので必ずこちらを通る。もし
-    /// PropertyListSerialization が根の Data を断る実装なら、鎖は一度も
-    /// 写らないまま「写している」と読める形になっていた。
-    private static func storedSize(of value: Any) -> Int? {
-        if let data = value as? Data { return data.count }
-        let plist = try? PropertyListSerialization.data(fromPropertyList: value,
-                                                        format: .binary,
-                                                        options: 0)
-        return plist?.count
+    /// 付け替え（古い名前を消して新しい名前を足す）を 2 回に分けて書くと、
+    /// 間で大きさの上限に当たったときに消すほうだけが残る。まとめて測って書けば、
+    /// 当たったときは前の写しがそのまま残る（CloudMirrorCore.write）。
+    static func patch(key: String, changes: [CloudChange]) {
+        report(core.patch(key: key, changes: changes), key: key)
+    }
+
+    private static func report(_ outcome: CloudMirrorCore.Outcome, key: String) {
+        switch outcome {
+        case .unencodable:
+            log.error("iCloud へ写せない形 \(key, privacy: .public)")
+        case .tooLarge(let size):
+            log.notice("iCloud へ写すには大きい \(key, privacy: .public) \(size) bytes")
+        case .written, .removed, .disabled, .unchanged:
+            break
+        }
     }
 
     // MARK: - 戻す
@@ -216,29 +166,20 @@ enum CloudMirror {
     @MainActor
     @discardableResult
     private static func seed() -> Bool {
-        let defaults = UserDefaults.standard
-        var restoredChain = false
-
-        if defaults.object(forKey: PipelineStore.lastKey) == nil,
-           let data = cloud.data(forKey: PipelineStore.lastKey) {
-            defaults.set(data, forKey: PipelineStore.lastKey)
-            log.notice("iCloud から鎖を戻した \(data.count) bytes")
-            restoredChain = true
+        let restored = core.seed(into: UserDefaults.standard,
+                                 chainKey: PipelineStore.lastKey,
+                                 dictionaryKeys: [PresetStore.key, EffectPresetStore.key])
+        if let bytes = restored.chainBytes {
+            log.notice("iCloud から鎖を戻した \(bytes) bytes")
         }
-
-        if defaults.object(forKey: PresetStore.key) == nil,
-           let presets = cloud.dictionary(forKey: PresetStore.key) {
-            defaults.set(presets, forKey: PresetStore.key)
-            log.notice("iCloud からプリセットを戻した \(presets.count) 本")
+        for entry in restored.dictionaries {
+            if entry.key == PresetStore.key {
+                log.notice("iCloud からプリセットを戻した \(entry.count) 本")
+            } else {
+                log.notice("iCloud からエフェクトのプリセットを戻した \(entry.count) 種")
+            }
         }
-
-        if defaults.object(forKey: EffectPresetStore.key) == nil,
-           let presets = cloud.dictionary(forKey: EffectPresetStore.key) {
-            defaults.set(presets, forKey: EffectPresetStore.key)
-            log.notice("iCloud からエフェクトのプリセットを戻した \(presets.count) 種")
-        }
-
-        return restoredChain
+        return restored.chain
     }
 
     /// 外して回る所が無いので取っておくだけ。アプリと同じ寿命。
@@ -260,3 +201,7 @@ enum CloudMirror {
         }
     }
 }
+
+/// iCloud の KVS を CloudMirrorCore へ渡すため。要求は元から持っているものだけ
+/// （KeyValueStorage.swift）。Linux の Foundation には無いのでこちらに置く。
+extension NSUbiquitousKeyValueStore: ETKeyValueStorage {}
