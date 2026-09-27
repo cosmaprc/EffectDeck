@@ -318,7 +318,7 @@ struct BassManagementSettings: Equatable, Sendable {
             guard let f = filter(for: ch) else { return nil }
             return BassManagementDesignKey.Filter(channel: ch, cutoff: f.cutoff, slope: f.slope)
         }
-        // design-core.js:22。丸めてから 8000〜768000 に収める。
+        // design-core.js:22。8000〜768000 に収めてから丸める（Math.round は +0.5 して切り捨て）。
         let raw = sampleRate.isFinite ? sampleRate : 48000
         let rate = Int((min(max(raw, 8000), 768000) + 0.5).rounded(.down))
         return BassManagementDesignKey(sampleRate: rate, width: clamped, taps: taps, filters: filters)

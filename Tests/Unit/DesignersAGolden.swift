@@ -9,6 +9,8 @@
 //  Doubleの丸めの差しか無い。係数はどちらもFloatへ落としてから比べるので、許す幅は
 //  「Floatの2ulp」か「最大の係数の1e-12」の大きいほう。
 //  応答の曲線は線形の振幅で比べる（深い阻止域ではFloatの1ulpの差がdBで大きく見えるため）。
+//  帯域1本の式（Doubleのまま）だけは対数で比べる。libmの1ulpの差が桁落ちとslope/12乗で膨らむため
+//  （BandFIRPEQDesignTests.testRBJPerTypeMatchesUpstream）。
 
 import XCTest
 
@@ -292,6 +294,14 @@ enum DesignerMatch {
         if a == b { return true }
         guard a.isFinite, b.isFinite else { return false }
         return abs(a - b) <= max(absolute, relative * max(abs(a), abs(b)))
+    }
+
+    /// 振幅を対数（dBと同じ尺度）で比べる: |ln a − ln b| ≤ tolerance。
+    /// 0以下や有限でない値が混ざるときは完全一致だけを通す。
+    static func logClose(_ a: Double, _ b: Double, tolerance: Double) -> Bool {
+        if a == b { return true }
+        guard a > 0, b > 0, a.isFinite, b.isFinite else { return false }
+        return abs(log(a) - log(b)) <= tolerance
     }
 
     /// Floatへ落とした係数1つ。2ulpか、最大の係数の1e-12の大きいほう。

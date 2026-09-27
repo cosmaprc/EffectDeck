@@ -14,6 +14,14 @@ final class BandFIRPEQDesignTests: XCTestCase {
 
     /// 7種それぞれの帯域1本の応答が、上流のfiveBandFirPeqMagnitudeと一致する
     /// （中心が0.49·srを超えると頭打ち、lp/hpはslope/12乗、slopeは0.1〜384に寄せる）。
+    ///
+    /// 対数で比べ、許す幅はlnで1e-6×max(1, 指数)。相対1e-12では比べない。
+    /// 上流は双2次を直に評価するので、零点の近く（hpのDC、lpのNyquist）と低い中心の1−cos ω0で
+    /// 桁落ちし、lp/hpはそれをslope/12乗（最大32乗）する。cos・sin・pow・hypotの結果はV8と
+    /// Darwinのlibmで1ulpまでは違いうる。呼び出しごとに±1ulpを全組み合わせで振ると、420点中79点が
+    /// 相対1e-12を超えて動く（最大はlnで6.2e-7、lp・48kHz・中心23520・slope 384・23999Hz）。
+    /// この幅はどの点でもその動きの46倍以上ある。それでもdBでは1e-5〜3e-4なので、式の取り違え
+    /// （頭打ちの位置、指数、Qや利得の扱い）は見逃さない。
     func testRBJPerTypeMatchesUpstream() throws {
         let golden = try DesignersAGolden.load().bandFirPeq.magnitude
         XCTAssertEqual(Set(golden.map(\.type)), Set(BandFIRPEQFilterType.allCases.map(\.rawValue)),
@@ -23,9 +31,11 @@ final class BandFIRPEQDesignTests: XCTestCase {
             let type = try XCTUnwrap(BandFIRPEQFilterType(rawValue: entry.type), entry.type)
             let band = BandFIRPEQBand(enabled: true, type: type, frequency: entry.center,
                                       gain: entry.gain, q: entry.q, slope: entry.slope)
+            let exponent = type.usesSlope ? min(max(entry.slope, 0.1), 384) / 12 : 1
+            let tolerance = 1e-6 * max(1, exponent)
             for (frequency, expected) in zip(entry.frequencies, entry.magnitudes) {
                 let actual = BandFIRPEQCore.magnitude(of: band, at: frequency, sampleRate: entry.sampleRate)
-                XCTAssertTrue(DesignerMatch.close(actual, expected, relative: 1e-12, absolute: 1e-300),
+                XCTAssertTrue(DesignerMatch.logClose(actual, expected, tolerance: tolerance),
                               "\(entry.type) fc=\(entry.center) sr=\(entry.sampleRate) f=\(frequency): "
                               + "\(actual)、上流は \(expected)")
                 checked += 1
@@ -168,19 +178,54 @@ final class BandFIRPEQDesignTests: XCTestCase {
         XCTAssertEqual(minimum.filterDelaySamples, 0)
     }
 
-    /// 同じ条件の2回目は控えから返る（上流のdesignCacheと同じく2つまで）。
+    /// 同じ条件の2回目は作り直さず控えから返る。値が同じなだけなら控えが無くても通るので、
+    /// 係数の置き場（配列の中身のアドレス）まで同じことを見る。
     func testSameConfigReturnsCachedDesign() throws {
-        var settings = BandFIRPEQSettings.default
-        settings.taps = .taps8192
-        settings.bands[2].gain = 7.25
-        let config = BandFIRPEQConfig(settings: settings, sampleRate: 48000)
+        let config = cacheProbeConfig(gain: 7.125)
         let first = try BandFIRPEQCore.design(config)
         let second = try BandFIRPEQCore.design(config)
+        XCTAssertTrue(sharesStorage(first, second), "2回目を作り直した")
         XCTAssertEqual(first.channels, second.channels)
         XCTAssertEqual(first.maximumErrorDb, second.maximumErrorDb)
     }
 
+    /// 控えは上流のdesignCacheと同じく2つまで（design-core.js:394-395）。
+    /// A・B・Cと作るとAは追い出され、Bは残る。
+    func testDesignCacheKeepsTwoAndDropsOldest() throws {
+        // この試験でしか使わない条件にして、前の試験が残した控えと重ならないようにする。
+        let a = cacheProbeConfig(gain: 7.375)
+        let b = cacheProbeConfig(gain: 7.625)
+        let c = cacheProbeConfig(gain: 7.875)
+        let firstA = try BandFIRPEQCore.design(a)
+        let firstB = try BandFIRPEQCore.design(b)
+        _ = try BandFIRPEQCore.design(c)
+
+        let againB = try BandFIRPEQCore.design(b)
+        XCTAssertTrue(sharesStorage(firstB, againB), "2つ目までの控えを落とした")
+
+        let againA = try BandFIRPEQCore.design(a)
+        XCTAssertFalse(sharesStorage(firstA, againA), "3つ目を作っても一番古い控えが残っている")
+        XCTAssertEqual(firstA.channels, againA.channels, "作り直した設計が前と違う")
+    }
+
     // MARK: - 道具
+
+    /// 控えを見る試験用の条件。8192タップ・48kHzで、3本目の帯の利得だけを変える。
+    private func cacheProbeConfig(gain: Double) -> BandFIRPEQConfig {
+        var settings = BandFIRPEQSettings.default
+        settings.taps = .taps8192
+        settings.bands[2].gain = gain
+        return BandFIRPEQConfig(settings: settings, sampleRate: 48000)
+    }
+
+    /// 2つの設計が係数の配列の中身を共有している（控えから返った）か。
+    /// 呼ぶ側が両方を持っているあいだは、作り直した配列が同じアドレスになることはない。
+    private func sharesStorage(_ a: BandFIRPEQDesign, _ b: BandFIRPEQDesign) -> Bool {
+        guard let left = a.channels.first, let right = b.channels.first else { return false }
+        return left.withUnsafeBufferPointer { l in
+            right.withUnsafeBufferPointer { r in l.baseAddress == r.baseAddress }
+        }
+    }
 
     private func settings(_ input: DesignersAGolden.BandFIRPEQ.Input) throws -> BandFIRPEQSettings {
         let bands = try input.bands.map { band -> BandFIRPEQBand in
