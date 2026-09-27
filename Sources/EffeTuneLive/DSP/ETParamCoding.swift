@@ -80,15 +80,25 @@ enum ETParamCoding {
 
     /// enum は選択肢の文字列、bool は真偽、整数は Int で書く。
     /// EffeTune はそう書いているので、数値のまま書くと web 版で読めない。
+    ///
+    /// **どの Float でも落ちず、JSON に書ける値を返す。**
+    /// - NaN・無限は JSON に書けない（Darwin の JSONSerialization は投げずに例外で落ちる。
+    ///   共有リンクを作る ETShareLink.link がそこを通る）。既定の値を書く
+    /// - Int(_:) は Int の外で落ちる。Int にするのは JS の安全な整数（2^53 未満）までで、
+    ///   その外は数のまま書く（上流の JS は整数と小数を分けない）
+    /// Tests/Fuzz の pipelineform が見つけた（FuzzFindingsTests）。
     static func tidy(_ v: Float, _ p: ETParam) -> Any {
+        guard v.isFinite else { return p.defaultValue.isFinite ? tidy(p.defaultValue, p) : 0 }
+        let r = v.rounded()
+        let whole: Any = abs(r) < 0x1p53 ? Int(r) : r
         switch p.kind {
         case .toggle:
             return v >= 0.5
         case .enumeration(let values):
-            let i = Int(v.rounded())
-            return values.indices.contains(i) ? values[i] : i
+            if let i = whole as? Int, values.indices.contains(i) { return values[i] }
+            return whole
         case .number(_, _, _, _, let isInteger):
-            return isInteger ? Int(v.rounded()) : v
+            return isInteger ? whole : v
         }
     }
 
@@ -167,16 +177,26 @@ enum ETParamCoding {
     ///
     /// **順番を変えないこと。** Darwin では NSNumber(0/1) が `as? Bool` に通るので、
     /// Bool を先に見る。逆にすると toggle が 0/1 のまま素通りする。
+    ///
+    /// **NaN・無限は既定にする**（読めないものと同じ扱い）。Float に収まらない数（1e39）は
+    /// floatValue で無限になり、Float(_:) は "nan" "inf" の字を NaN・無限として読む。
+    /// そのまま鎖に入ると DSP へ渡り、書き戻す shortForm が JSON に書けなくなっていた
+    /// （Tests/Fuzz の pipelineform。FuzzFindingsTests）。範囲の外の有限の数は今までどおり
+    /// そのまま（寄せるのは貼られた字だけ。ETChainText.prepare）。
     static func number(_ raw: Any, _ p: ETParam) -> Float {
+        let v: Float
         if let b = raw as? Bool { return b ? 1 : 0 }
-        if let n = raw as? NSNumber { return n.floatValue }
-        if let s = raw as? String {
+        if let n = raw as? NSNumber {
+            v = n.floatValue
+        } else if let s = raw as? String {
             if case .enumeration(let values) = p.kind, let i = values.firstIndex(of: s) {
                 return Float(i)
             }
-            return Float(s) ?? p.defaultValue
+            v = Float(s) ?? p.defaultValue
+        } else {
+            return p.defaultValue
         }
-        return p.defaultValue
+        return v.isFinite ? v : p.defaultValue
     }
 }
 
