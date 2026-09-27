@@ -129,6 +129,9 @@ class Repo:
 # ログの末尾はReport a problemの本文に入って端末の外へ出る（人が見て送る）ので3D61.1が要る。
 # 見るのは1ファイルの中の流れだけ:
 # - 秒を読んだ所（systemUptime / mach_absolute_time()）と、それを入れた名前（let/varと代入）
+# - 秒をそのまま返す関数・計算プロパティ（return の値か、1式だけの本体）は、呼んだ所を読んだ所と
+#   同じに数える（何段でも・ファイルをまたいでも）。型の中の宣言は、括らずに呼ぶのは同じファイルの中
+#   だけ・括って呼ぶ（x.now()）のはどこでも。大域の宣言はどこでも。.now() は DispatchTime などの別物
 # - 引き算の片側は「間隔」なので追わない（アプリの開始からの秒にすれば3D61.1は外せる）
 # - 秒が String( / String(format: / "\( )" / ETLogTap.record( の中に入れば「字になった」
 # - 他の関数へ渡した所は、その関数の定義を探す。定義が見つからない・定義のあるファイルが
@@ -262,11 +265,129 @@ def _contexts(s, p):
     return stack[::-1]
 
 
+def _close(code, i, opening, closing):
+    """code[i]の開き括弧に対応する閉じの次の位置。"""
+    depth = 0
+    for j in range(i, len(code)):
+        if code[j] == opening:
+            depth += 1
+        elif code[j] == closing:
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return len(code)
+
+
+_DECL = re.compile(r"\bfunc\s+(\w+)|\bvar\s+(\w+)\s*:")
+# 名前の後ろから本体の { までにこれがあれば、本体の無い宣言（protocolの要件・保存するvar）。
+# { が次の行にある書き方（Allman）は読むので、改行では切らない
+_HEAD_STOP = re.compile(r"[}=;]|\b(?:func|var|let|init|subscript|case|struct|class|enum|protocol"
+                        r"|extension|actor|typealias|deinit|if|guard|for|while|switch|do|repeat|return)\b")
+
+
+def _decl_bodies(code):
+    """[(名前, funcか, 大域か, 本体)]。値を返す関数（-> がある）と計算プロパティだけ。"""
+    out, depth, at = [], 0, 0
+    for m in _DECL.finditer(code):
+        chunk = code[at:m.start()]
+        depth, at = depth + chunk.count("{") - chunk.count("}"), m.start()
+        is_func, name, i = m.group(1) is not None, m.group(1) or m.group(2), m.end()
+        if is_func:
+            j = code.find("(", i)
+            if j < 0 or (code[i:j].strip() and not code[i:j].lstrip().startswith("<")):
+                continue
+            i = _close(code, j, "(", ")")
+        brace = code.find("{", i)
+        head = code[i:brace]
+        if brace < 0 or _HEAD_STOP.search(head) or (is_func and "->" not in head):
+            continue
+        body = code[brace + 1:_close(code, brace, "{", "}") - 1]
+        if not is_func and re.match(r"\s*(?:didSet|willSet)\b", body):
+            continue
+        out.append((name, is_func, depth == 0, body))
+    return out
+
+
+def _expr_end(text):
+    """return の後ろの式。閉じていない } か深さ0の ; まで。"""
+    depth = 0
+    for i, c in enumerate(text):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                return text[:i]
+        elif c == ";" and depth == 0:
+            return text[:i]
+    return text
+
+
+def _read_re(sources, rel):
+    """relの中で秒を読む形: systemUptime / mach_absolute_time() と、秒を返す関数・計算プロパティ。"""
+    pats = [_UPTIME_READ.pattern]
+    for name, is_func, is_global, where in sorted(sources):
+        qualified = r"(?<=[\w)\]?!]\.)"  # x.now / self.now / f().now（.now だけは別の型の静的メンバー）
+        before = r"(?:%s|(?<![\w.]))" % qualified if (is_global or where == rel) else qualified
+        after = r"(?=\s*\()" if is_func else r"(?!:)"
+        pats.append(r"%s%s\b%s" % (before, re.escape(name), after))
+    return re.compile("|".join(pats))
+
+
+def _read_spans(s, read_re, names=()):
+    """秒を読んだ所 [(始まり, 終わり)]。呼び出しは括弧の閉じまで（now() - began を引き算と見るため）。"""
+    spans = []
+    for m in read_re.finditer(s):
+        a, b = m.start(), m.end()
+        call = re.match(r"\s*\(", s[b:])
+        if call and not s[a:b].endswith(")"):
+            b = _close(s, b + call.end() - 1, "(", ")")
+        spans.append((a, b))
+    names = sorted(names, key=len, reverse=True)
+    if names:
+        pat = r"(?:(?<=self\.)|(?<![\w.]))(%s)\b(?!:)" % "|".join(map(re.escape, names))
+        spans += [(m.start(1), m.end(1)) for m in re.finditer(pat, s)]
+    return spans
+
+
+def _returns_uptime(body, read_re):
+    """本体が秒をそのまま返すか（return の値・return の無い1文だけの本体・get { } の中）。"""
+    inner = re.match(r"\s*get\s*\{", body)
+    if inner:
+        rest = body[inner.end() - 1:]
+        body = rest[1:_close(rest, 0, "{", "}") - 1]
+    stmts = [s for _, s in _statements(body)]
+    exprs = [_expr_end(s[m.end():]) for s in stmts for m in re.finditer(r"\breturn\b", s)]
+    if not exprs and len(stmts) == 1 and not (_LOCAL_BIND.search(stmts[0]) or _ASSIGN.search(stmts[0])):
+        exprs = stmts
+    names = set()  # 本体の中で秒を入れた名前（let up = …; return up）
+    for s in stmts:
+        for m in _LOCAL_BIND.finditer(s):
+            rhs = s[m.end():_rhs_end(s, m.end())]
+            if any(not _in_difference(rhs, a, b) for a, b in _read_spans(rhs, read_re, names)):
+                names.add(m.group(1))
+    return any(not _in_difference(e, a, b) and all(c in _SAME_VALUE for c in _contexts(e, a))
+               for e in exprs for a, b in _read_spans(e, read_re, names))
+
+
 def uptime_flow(mod, texts):
     """texts: {rel: Swiftの中身}。戻りは(字になった所 ['rel:行'], 渡した所 [(rel, 行, 呼んだ名前)])。"""
+    codes = {rel: _blank_strings(mod, mod.strip_comments(texts[rel], swift=True)) for rel in sorted(texts)}
+    decls = {rel: _decl_bodies(code) for rel, code in codes.items()}
+    # 秒を返す関数・計算プロパティ {(名前, funcか, 大域か, rel)}。返す値がまた別の関数の値でも追う
+    sources = set()
+    while True:
+        found = set()
+        for rel, code in codes.items():
+            read_re = _read_re(sources, rel)
+            found |= {(name, is_func, is_global, rel) for name, is_func, is_global, body in decls[rel]
+                      if (name, is_func, is_global, rel) not in sources and _returns_uptime(body, read_re)}
+        if not found:
+            break
+        sources |= found
     carriers, handed = [], []
-    for rel in sorted(texts):
-        code = _blank_strings(mod, mod.strip_comments(texts[rel], swift=True))
+    for rel, code in codes.items():
+        read_re = _read_re(sources, rel)
         local, prop = set(), set()
         for line, s in _statements(code):
             if _FUNC_START.search(s):
@@ -275,11 +396,7 @@ def uptime_flow(mod, texts):
             binds = [(m.group(1), m.start(1), m.end(), _rhs_end(s, m.end()), into)
                      for rx, into in ((_LOCAL_BIND, local), (_ASSIGN, prop)) for m in rx.finditer(s)]
             targets = {at for _, at, _, _, _ in binds}
-            spans = [(m.start(), m.end()) for m in _UPTIME_READ.finditer(s)]
-            names = sorted(local | prop, key=len, reverse=True)
-            if names:
-                pat = r"(?:(?<=self\.)|(?<![\w.]))(%s)\b(?!:)" % "|".join(map(re.escape, names))
-                spans += [(m.start(1), m.end(1)) for m in re.finditer(pat, s)]
+            spans = _read_spans(s, read_re, local | prop)
             live = [(a, b) for a, b in spans if a not in targets and not _in_difference(s, a, b)]
             if not live:
                 continue
@@ -365,6 +482,71 @@ class UptimeFlowTests(unittest.TestCase):
             "func a() {\n    lastUp = ProcessInfo.processInfo.systemUptime\n}\n"
             "func b() {\n    ETLogTap.record(String(format: \"%.3f\", lastUp))\n}\n"))
         self.assertEqual(carriers, ["A.swift:5"])
+
+    def test_value_returned_by_a_helper_or_computed_property(self):
+        # 読む所を関数・計算プロパティへ移しても、呼んだ所で読んだのと同じに数える
+        carriers, _ = self.flow(A=(
+            "func uptimeNow() -> Double {\n    return ProcessInfo.processInfo.systemUptime\n}\n"
+            "func tick() {\n    ETLogTap.record(String(format: \"t=%.3f\", uptimeNow()))\n}\n"))
+        self.assertEqual(carriers, ["A.swift:5"])
+        carriers, _ = self.flow(A=(
+            "var stamp: Double { ProcessInfo.processInfo.systemUptime }\n"
+            "func tick() {\n    ETLogTap.record(\"t=\\(stamp)\")\n}\n"))
+        self.assertEqual(carriers, ["A.swift:3"])
+        # { を次の行に置く書き方
+        carriers, _ = self.flow(A=(
+            "var stamp: Double\n{\n    ProcessInfo.processInfo.systemUptime\n}\n"
+            "func tick()\n{\n    ETLogTap.record(\"t=\\(stamp)\")\n}\n"))
+        self.assertEqual(carriers, ["A.swift:7"])
+        # 別のファイルの型の中（名前で括って呼ぶ）・大域の関数（括らずに呼ぶ）・名前に入れてから返す
+        carriers, _ = self.flow(
+            A="func tick() {\n    let up = Clock.now()\n    ETLogTap.record(\"t=\\(up)\")\n}\n",
+            B="enum Clock {\n    static func now() -> Double {\n"
+              "        Double(mach_absolute_time()) / 1e9\n    }\n}\n")
+        self.assertEqual(carriers, ["A.swift:3"])
+        carriers, _ = self.flow(
+            A="ETLogTap.record(String(uptimeNow()))\n",
+            B="func uptimeNow() -> Double {\n    let up = ProcessInfo.processInfo.systemUptime\n    return up\n}\n")
+        self.assertEqual(carriers, ["A.swift:1"])
+        # 返す値がまた別の関数の値（get の中・何段でも）
+        carriers, _ = self.flow(A=(
+            "var stamp: Double {\n    get { base() }\n    set { }\n}\n"
+            "func base() -> Double { max(0, ProcessInfo.processInfo.systemUptime) }\n"
+            "func tick() { ETLogTap.record(\"t=\\(stamp)\") }\n"))
+        self.assertEqual(carriers, ["A.swift:6"])
+
+    def test_only_declarations_with_a_value_body(self):
+        # protocolの要件・保存するvar・値を返さない関数・関数の中の var t: Double の次の if は本体でない
+        code = ("protocol P {\n    func now() -> Double\n    var up: Double { get }\n}\n"
+                "final class S {\n    var stored: Double\n    init() { stored = 0 }\n"
+                "    var level: Double = 0 { didSet { } }\n"
+                "    func f() {\n        var t: Double\n        if ready { t = 1 }\n    }\n"
+                "    lazy var formatter: DateFormatter = {\n        let f = DateFormatter()\n        return f\n    }()\n"
+                "    func g<T>(_ x: T) -> Double\n    {\n        1\n    }\n    var late: Double\n    deinit { }\n}\n"
+                "var top: Double { 2 }\n")
+        self.assertEqual([(name, is_func, is_global) for name, is_func, is_global, _ in _decl_bodies(code)],
+                         [("up", False, False), ("g", True, False), ("top", False, True)])
+
+    def test_returned_interval_and_other_names_are_not_reads(self):
+        # 返すのが間隔なら追わない。起動からの秒を返す関数も、引き算の片側なら間隔
+        carriers, untraced_ = self.flow(A=(
+            "func elapsed() -> Double { ProcessInfo.processInfo.systemUptime - start }\n"
+            "final class State {\n    func now() -> Double {\n"
+            "        return Double(mach_absolute_time()) * 1e-9\n    }\n}\n"
+            "func tick() {\n    ETLogTap.record(\"e=\\(elapsed())\")\n"
+            "    let began = state.now()\n    let spent = state.now() - began\n"
+            "    ETLogTap.record(\"spent=\\(spent)\")\n}\n"
+            # 同じファイルの引数 now（関数の now ではない）と、値を返さない関数の中で比べるだけの秒
+            "func g(now: Double) { ETLogTap.record(\"n=\\(now)\") }\n"
+            "func poll() { if ProcessInfo.processInfo.systemUptime > deadline { fire() } }\n"
+            "func arm() { DispatchQueue.main.async(execute: { poll() }) }\n"
+            # 見張り（willSet）の付いた保存するプロパティは、秒を返すものではない
+            "var level: Double {\n    willSet { if ProcessInfo.processInfo.systemUptime > deadline { fire() } }\n}\n"
+            "func show() { ETLogTap.record(\"l=\\(level)\") }\n"),
+            # 同じ名前の別物: 他のファイルで括らずに呼ぶ now()（引数の autoclosure）と .now()（DispatchTime）
+            B="func pick(now: @autoclosure () -> [Int]) -> String {\n    let current = now()\n"
+              "    q.asyncAfter(deadline: .now() + 30) {}\n    return \"\\(current)\"\n}\n")
+        self.assertEqual((carriers, untraced_), ([], []))
 
     def test_since_app_start_is_an_interval(self):
         carriers, untraced_ = self.flow(A=(
@@ -496,14 +678,17 @@ class SourceModeTests(unittest.TestCase):
         self.assertRegex(out, r"ok +UserDefaults +CA92\.1 +App/Store\.swift:1  @AppStorage")
 
     def test_static_library_counts_for_the_app(self):
-        with Repo() as repo:
-            write(repo.root / "Lib/io.c", "#include <sys/stat.h>\nint f(int fd) { struct stat s; return fstat(fd, &s); }\n")
-            code, out = repo.run()
-            self.assertEqual(code, 1, out)
-            self.assertRegex(out, r"MISSING FileTimestamp .*Lib/io.c:2")
-            repo.set_manifest("App", {"FileTimestamp": ["C617.1"]})
-            code, out = repo.run()
-        self.assertEqual(code, 0, out)
+        # 静的なフレームワークも中身はアプリの実行ファイルへ入る
+        for kind in ("library.static", "framework.static"):
+            with self.subTest(kind=kind), Repo() as repo:
+                write(repo.root / "project.yml", PROJECT.replace("type: library.static", "type: " + kind, 1))
+                write(repo.root / "Lib/io.c", "#include <sys/stat.h>\nint f(int fd) { struct stat s; return fstat(fd, &s); }\n")
+                code, out = repo.run()
+                self.assertEqual(code, 1, out)
+                self.assertRegex(out, r"MISSING FileTimestamp .*Lib/io.c:2")
+                repo.set_manifest("App", {"FileTimestamp": ["C617.1"]})
+                code, out = repo.run()
+                self.assertEqual(code, 0, out)
 
     def test_each_bundle_is_judged_on_its_own_sources(self):
         with Repo() as repo:
@@ -535,15 +720,24 @@ class SourceModeTests(unittest.TestCase):
         self.assertNotIn("Tests/T.swift", out)
 
     def test_every_shipped_type_needs_a_bundle_entry(self):
-        # 種類はここに書き写す（ツールの表を読むと、表から消えても気づけない）
+        # 種類はここに書き写す（ツールの表を読むと、表から消えても気づけない）。
+        # 出さないと言える種類（試験・道具・畳み込む静的なもの）の外は、知らない種類も出すものとして扱う
         extra = "  Widget:\n    type: %s\n    sources:\n      - path: Share\n"
-        for kind in ("application", "app-extension", "extensionkit-extension", "framework"):
+        for kind in ("application", "app-extension", "extensionkit-extension", "framework",
+                     "app-extension.messages", "app-extension.intents-service", "library.dynamic",
+                     "xpc-service", "bundle", "no-such-type"):
             with self.subTest(kind=kind), Repo() as repo:
                 write(repo.root / "project.yml", PROJECT + extra % kind)
                 code, out = repo.run()
                 self.assertEqual(code, 1, out)
                 self.assertIn("Widget（%s）は出すバンドルなのにBUNDLESに無い" % kind, out)
-        for kind in ("library.static", "bundle.unit-test", "bundle.ui-testing"):
+        with Repo() as repo:
+            write(repo.root / "project.yml", PROJECT + "  Widget:\n    sources:\n      - path: Share\n")
+            code, out = repo.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn("Widget（typeが無い）は出すバンドルなのにBUNDLESに無い", out)
+        for kind in ("library.static", "framework.static", "bundle.unit-test", "bundle.ui-testing",
+                     "bundle.ocunit-test", "tool"):
             with self.subTest(kind=kind), Repo() as repo:
                 write(repo.root / "project.yml", PROJECT + extra % kind)
                 code, out = repo.run()
@@ -669,6 +863,14 @@ class GrepTests(unittest.TestCase):
         self.assertEqual(self.hits("[NSUserDefaults standardUserDefaults];\nNSFileModificationDate;\n"
                                    "CFPreferencesCopyAppValue(k, a);\n", "x.m"),
                          [("UserDefaults", "1"), ("FileTimestamp", "2"), ("UserDefaults", "3")])
+
+    def test_module_qualified_calls_count(self):
+        # 型に同じ名前のメンバーがあると Darwin.stat( と書く。モジュール名で括っても C の関数
+        src = ("let r = Darwin.stat(path, &st)\nlet q = Darwin.lstat(path, &st)\n"
+               "let u = Darwin.mach_absolute_time()\nlet g = Glibc.fstat(fd, &st)\n"
+               "let f = Foundation.statfs(p, &s)\nlet m = box.Darwin.stat(p)\n")
+        self.assertEqual(self.hits(src), [("FileTimestamp", "1"), ("FileTimestamp", "2"), ("SystemBootTime", "3"),
+                                          ("FileTimestamp", "4"), ("DiskSpace", "5")])
 
     def test_getattrlist_counts_for_both_categories(self):
         self.assertEqual(sorted(self.hits("getattrlist(p, &l, b, n, 0);\n", "x.c")),

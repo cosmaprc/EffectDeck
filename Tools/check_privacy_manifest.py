@@ -10,8 +10,8 @@
 
 - **どのソースがどのバンドルへ入るかはproject.ymlが決める。**ここに一覧を持たない。
   静的ライブラリ（YSFX）は、それに依存するバンドルの分として数える
-- 出すバンドル（application / app-extension / extensionkit-extension / framework）が
-  BUNDLESに無ければ落とす。ターゲットを足したときにマニフェストを忘れないため
+- 出さないと言える種類（試験・道具・静的なもの）の外のターゲットがBUNDLESに無ければ落とす。
+  知らない種類・typeの無いものも出すものとして扱う。ターゲットを足したときにマニフェストを忘れないため
 - 分類・APIの名前・理由の表はAppleの「Describing use of required reason API」
   （NSPrivacyAccessedAPITypeの値、2026-09に読んだもの）を写した。理由は表にあるかだけを
   見る。どれを選ぶかは人が決める（いま選んでいる理由とその訳はCATEGORIESの下に書いた）
@@ -44,8 +44,11 @@ BUNDLES = {
     "EffeTuneLiveExtension": "Sources/Extension/" + MANIFEST,
     "EffectDeckShare": "Sources/ShareExtension/" + MANIFEST,
 }
-SHIPPED_TYPES = {"application", "app-extension", "extensionkit-extension", "framework"}
-FOLDED_TYPES = {"library.static"}
+# 出さない種類（試験・道具）。これとFOLDED_TYPESの外は、知らない種類も含めて出すものとして扱う
+# （app-extension.messages・library.dynamic・xpc-serviceなどを足したときに黙って読まないままにしない）
+NOT_SHIPPED_TYPES = {"bundle.unit-test", "bundle.ui-testing", "bundle.ocunit-test", "tool"}
+# 中身が依存するバンドルの実行ファイルへ入る種類。そのバンドルの分として数える
+FOLDED_TYPES = {"library.static", "framework.static"}
 # sources:のパスが無くても落とさない所。Vendor/はsubmodule（--require-vendorで落とす）、
 # Generated/はScripts/setup.shが作る（.gitignore。新しいcloneには無い）。それ以外で無いのは書き違い
 VENDOR_PREFIX = "Vendor/"
@@ -88,9 +91,14 @@ TOP_KEYS = {"NSPrivacyTracking", "NSPrivacyTrackingDomains",
 API_KEYS = {"NSPrivacyAccessedAPIType", "NSPrivacyAccessedAPITypeReasons"}
 
 
+# SwiftでCの関数をモジュール名で括って呼ぶ形（型に同じ名前のメンバーがあるとDarwin.stat(と書く）
+_C_MODULES = ("Darwin", "Glibc", "Foundation", "CoreFoundation")
+
+
 def _call(name):
-    """Cの関数呼び出し。メンバー（a.stat( / a->stat(）とSwiftの$0.stat(は除く。"""
-    return r"(?<![\w.$])(?<!->)%s\s*\(" % name
+    """Cの関数呼び出し。メンバー（a.stat( / a->stat(）とSwiftの$0.stat(は除く。
+    Darwin.stat( のようにモジュール名で括ったものは数える。"""
+    return r"(?:(?<![\w.$])(?:%s)\s*\.\s*|(?<![\w.$])(?<!->))%s\s*\(" % ("|".join(_C_MODULES), name)
 
 
 _GETATTR = ("getattrlist", "fgetattrlist", "getattrlistat")
@@ -598,8 +606,9 @@ def check_sources(repo, strict=False, require_vendor=False, verbose=False):
     failed = False
     for name, target in sorted(targets.items()):
         kind = (target or {}).get("type")
-        if kind in SHIPPED_TYPES and name not in BUNDLES:
-            print("ERROR %s（%s）は出すバンドルなのにBUNDLESに無い。マニフェストを置いて足す" % (name, kind))
+        if kind not in NOT_SHIPPED_TYPES | FOLDED_TYPES and name not in BUNDLES:
+            print("ERROR %s（%s）は出すバンドルなのにBUNDLESに無い。マニフェストを置いて足す"
+                  "（出さない種類ならNOT_SHIPPED_TYPESへ）" % (name, kind or "typeが無い"))
             failed = True
     for name in sorted(BUNDLES):
         if name not in targets:
