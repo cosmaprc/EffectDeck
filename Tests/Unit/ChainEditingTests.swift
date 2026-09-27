@@ -93,6 +93,40 @@ final class ChainEditingTests: XCTestCase {
         XCTAssertEqual(ETChainEditing.assetConfigOffsets(params: try spec("VolumePlugin").params, irId: "abc"), [])
     }
 
+    // MARK: - 送り直したあとのカードの1行
+
+    /// **engine が回さない段（幅 0）へ送り直したら、前の 1 行を残さない。**
+    /// 入れ直しは instance を作り直した後（出力先の切り替え）に走り、資産は instance と一緒に消えている。
+    /// 6ch から 2ch の IF に替えて "56" の IR Reverb が外れたのに「4ch True Stereo / 48000 Hz / 1.23 s」が
+    /// 残っていた。冷えた起動（前の行が無い）でも nil にするとカードは「Loaded」と出すので、理由の 1 行を置く。
+    func testReloadIntoSkippedStageDropsTheOldLine() {
+        let old = "4ch True Stereo / 48000 Hz / 1.23 s"
+        XCTAssertEqual(ETChainEditing.assetLineAfterReload(sent: nil, previous: old, processedWidth: 0),
+                       ETChainEditing.unroutedAssetLine)
+        XCTAssertEqual(ETChainEditing.assetLineAfterReload(sent: nil, previous: nil, processedWidth: 0),
+                       ETChainEditing.unroutedAssetLine)
+    }
+
+    /// 送れたらその 1 行。幅 1 以上で送れなかったときは前のまま（選択肢を選び直して resolve に
+    /// 断られた回は、送る前に止まるので前の資産がカーネルに残って鳴っている）。
+    func testReloadOnRoutedStage() {
+        let old = "2ch Independent / 48000 Hz / 0.80 s"
+        let new = "4ch True Stereo / 48000 Hz / 1.23 s"
+        XCTAssertEqual(ETChainEditing.assetLineAfterReload(sent: new, previous: old, processedWidth: 2), new)
+        XCTAssertEqual(ETChainEditing.assetLineAfterReload(sent: new, previous: nil, processedWidth: 6), new)
+        XCTAssertEqual(ETChainEditing.assetLineAfterReload(sent: nil, previous: old, processedWidth: 2), old)
+        XCTAssertNil(ETChainEditing.assetLineAfterReload(sent: nil, previous: nil, processedWidth: 2))
+    }
+
+    /// 理由の 1 行は、カードから入れたときに resolve が断る文と同じ。
+    func testUnroutedLineMatchesTheResolver() {
+        XCTAssertThrowsError(try ETIRPreparation.resolve(sampleRate: 48000, channelCount: 2, routedChannels: 0,
+                                                         channelMode: "auto", latency: "128",
+                                                         convolutionRate: "auto")) { error in
+            XCTAssertEqual((error as? LocalizedError)?.errorDescription, ETChainEditing.unroutedAssetLine)
+        }
+    }
+
     // MARK: - 上流が受けない Ch
 
     func testChannelBypassTable() {

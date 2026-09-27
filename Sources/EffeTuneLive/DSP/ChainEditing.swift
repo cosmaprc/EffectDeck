@@ -176,6 +176,23 @@ enum ETChainEditing {
         return Set(params.filter { assetConfigKeys.contains($0.key) }.map(\.offset))
     }
 
+    /// engineが回さない段（processedWidthが0）へIRを送ろうとしたときに出す1行。
+    /// ETIRPreparation.resolveが幅0を断る文と同じ（カードから入れたときに赤字で出るもの）。
+    static let unroutedAssetLine = "The selected audio channels are not available."
+
+    /// 送り直した（EffeTuneDSP.reloadAsset）あと、カードに残す1行（assetInfo）。
+    ///
+    /// - 送れた: その1行
+    /// - **engineが回さない段（幅0）: 理由の1行。前の行は残さない。**入れ直しはinstanceを作り直した後
+    ///   （出力先の切り替え）に走り、資産はinstanceと一緒に消えている。nilにするとカードは「Loaded」と出す
+    /// - 幅はあるのに送れなかった: 前のまま（選び直しをresolveが断った回は、送る前に止まるので
+    ///   前の資産がカーネルに残って鳴っている）
+    static func assetLineAfterReload(sent: String?, previous: String?, processedWidth: Int) -> String? {
+        if let sent { return sent }
+        if processedWidth < 1 { return unroutedAssetLine }
+        return previous
+    }
+
     // MARK: - descriptor
 
     /// 音のスレッドへ渡す1段。ETPipeline.hのETPipeNodeと同じ並び。

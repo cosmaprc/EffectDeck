@@ -499,20 +499,27 @@ final class EffeTuneDSP: ObservableObject {
     ///
     /// 送れたら、そのときの 1 行（「4ch True Stereo / 48000 Hz / 1.23 s」）を
     /// `assetInfo` に残す。カードはそれを読む。
+    /// engine が回さない段（幅 0）では送れないので、前の 1 行を理由の 1 行に替える
+    /// （ETChainEditing.assetLineAfterReload）。
     @discardableResult
     func reloadAsset(at index: Int) -> Bool {
         guard chain.indices.contains(index) else { return false }
         let node = chain[index]
         guard !node.irId.isEmpty, node.instance != 0 else { return false }
+        let width = Self.routedChannels(of: node)
         let line = ETIRLoader.reload(irId: node.irId,
                                      engine: engine,
                                      instance: node.instance,
                                      processingRate: sampleRate,
-                                     routedChannels: Self.routedChannels(of: node),
+                                     routedChannels: width,
                                      channelMode: Self.choice("cm", of: node),
                                      latency: Self.choice("lt", of: node),
                                      convolutionRate: Self.choice("cr", of: node))
-        if let line { assetInfo[node.id] = line }
+        let shown = ETChainEditing.assetLineAfterReload(sent: line,
+                                                        previous: assetInfo[node.id],
+                                                        processedWidth: width)
+        // 同じ値を書き戻すと @Published がカードを描き直させるので、変わるときだけ書く。
+        if assetInfo[node.id] != shown { assetInfo[node.id] = shown }
         return line != nil
     }
 
