@@ -134,6 +134,10 @@ word in a string, break it up (`"inclu" + "de("`).
 
 ### Self-check before returning a script
 
+Run this list silently. Do not list it, tick it or say that the script passed
+it; the user only needs the script. Mention a point only if the script still
+breaks it and you cannot fix it.
+
 - [ ] `desc:` is the first non-comment line
 - [ ] `author:` is the user's name, not yours
 - [ ] after a fix, `desc:` and `author:` are exactly as before; a new effect

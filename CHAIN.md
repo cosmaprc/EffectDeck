@@ -140,6 +140,10 @@ keep the chain the only `json` code block in its reply.
 
 ## Self-check before handing it over
 
+Run this list silently. Do not list it, tick it or say that the chain passed
+it; the user only needs the chain. Mention a point only if the chain still
+breaks it and you cannot fix it.
+
 - [ ] every `nm` is in the effect list, spelled exactly, and not marked *Not for chains*
 - [ ] every key is listed for its effect, in the listed shape
 - [ ] every value is inside its range; ln(Hz) and 10^x values are converted
