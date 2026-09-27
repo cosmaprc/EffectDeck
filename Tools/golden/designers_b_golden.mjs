@@ -395,6 +395,20 @@ const crosstalkDesigns = [
         config: { sampleRate: 96000, taps: 1024, regularization: 0, maxGainDb: 0,
             lowFrequency: 300, highFrequency: 12000, directWindowMs: 5 },
         sources: crosstalkSources({ rate: 48000, frames: 520, left: 'L', right: 'R' })
+    },
+    {
+        // 測定 96kHz → 設計 48kHz。間引く側（bandLimit = 48/96、位相は 1 つ）。
+        name: 'downsampled-96k-to-48k',
+        config: { sampleRate: 48000, taps: 1024, regularization: 50, maxGainDb: 12,
+            lowFrequency: 200, highFrequency: 6000, directWindowMs: 8 },
+        sources: crosstalkSources({ rate: 96000, frames: 1280 })
+    },
+    {
+        // 測定 192kHz → 設計 44.1kHz。間引く側で位相が 147 ある（640:147）。
+        name: 'downsampled-192k-to-44k1',
+        config: { sampleRate: 44100, taps: 1024, regularization: 50, maxGainDb: 12,
+            lowFrequency: 200, highFrequency: 8000, directWindowMs: 5 },
+        sources: crosstalkSources({ rate: 192000, frames: 2560 })
     }
 ].map(entry => {
     const result = crosstalk.designCrosstalkCancellation({
@@ -499,6 +513,24 @@ const roomEqDesigns = [
         sources: [{
             impulses: [{ data: roomImpulse({ frames: 1600, lead: 0, seed: 41, decay: 400 }), sampleRate: 44100,
                 onsetIndex: 0, refScale: 1 }]
+        }]
+    },
+    {
+        // 間引く側のインパルス応答 2 本（96kHz → 48kHz は位相 1 つ、88.2kHz → 48kHz は 147:80）・最小位相。
+        // 2 本目の枠は 96kHz 1 本だけ。
+        name: 'impulses-downsampled-min',
+        config: { sampleRate: 48000, taps: 8192, phase: 'min', smoothing: 0.17, lowFrequency: 30,
+            highFrequency: 16000, maxBoostDb: 6, correctionAmount: 0.8, eqBands: [] },
+        sources: [{
+            impulses: [
+                { data: roomImpulse({ frames: 2800, lead: 40, seed: 51, decay: 600 }), sampleRate: 96000,
+                    onsetIndex: 40, refScale: 1 },
+                { data: roomImpulse({ frames: 2600, lead: 30, seed: 52, decay: 500 }), sampleRate: 88200,
+                    onsetIndex: 30, refScale: 2 }
+            ]
+        }, {
+            impulses: [{ data: roomImpulse({ frames: 3000, lead: 10, seed: 53, decay: 700 }), sampleRate: 96000,
+                onsetIndex: 10, refScale: 1 }]
         }]
     }
 ].map(entry => {

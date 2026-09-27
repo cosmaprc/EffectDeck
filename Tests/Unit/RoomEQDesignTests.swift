@@ -2,8 +2,9 @@
 //  Room EQ の設計（RoomEQDesign.swift）。**実機もエンジンも要らない。**
 //
 //  約束は 3 つ。
-//    1. min / lin の補正 FIR（周波数特性だけの測定・インパルス応答・別レートの伸縮・
-//       Additional EQ・測定の無い枠）と、遅延・分解能・注意・基準レベルが上流の designRoomEq と同じ。
+//    1. min / lin の補正 FIR（周波数特性だけの測定・インパルス応答・別レートの伸縮
+//       （44.1→48kHz と、間引く側の 96→48kHz・88.2→48kHz）・Additional EQ・測定の無い枠）と、
+//       遅延・分解能・注意・基準レベルが上流の designRoomEq と同じ。
 //    2. full は移していないので lin に落とし、そのことを必ず知らせる。
 //    3. 32MiB の枠に入るかを設計の前に判断する（checkCapacity / largestUsableTaps）。
 //       latencyMode の保存値（添字）と headBlock の行き来。
@@ -70,31 +71,32 @@ final class RoomEQDesignTests: XCTestCase {
 
     // MARK: - 枠に入るか
 
-    /// 入る taps のうち一番大きいもの。AssetUpload.maximumFrames をそのまま当てはめた答えと同じ。
+    /// 入る taps のうち一番大きいもの。答えは上流の maximumIrFramesForKernel
+    /// （js/ir-library/ir-plugin-contract.js:241-269）に RoomEQConfig.allowedTaps を大きい順に当てて出した表で、
+    /// こちらの AssetUpload を通した値ではない。32MiB の枠は 11 チャンネルまで 131072 が入り、
+    /// 12 チャンネルから 65536。遅延（headBlock）はどれでも変わらない。
     func testLargestUsableTaps() {
-        for channels in [1, 2, 4, 8, 16] {
+        let symmetric = [Int](repeating: 131072, count: 11) + [Int](repeating: 65536, count: 5)
+        for latency in RoomEQDesigner.allowedLatencyModes {
+            let got = (1...16).map {
+                RoomEQDesigner.largestUsableTaps(channelCount: $0, processingChannels: $0, latencyMode: latency)
+            }
+            XCTAssertEqual(got, symmetric, "lt \(latency)")
+        }
+        // 処理チャンネル数が効く組み合わせ（引数を取り違えると外れる）。
+        let asymmetric: [(channels: Int, processing: Int, taps: Int)] = [
+            (1, 16, 131072), (4, 16, 131072), (8, 16, 65536), (11, 2, 131072), (12, 2, 65536), (16, 1, 65536)
+        ]
+        for row in asymmetric {
             for latency: UInt32 in [0, 128, 1024] {
-                let topology: ETAssetTopology = channels > 1 ? .independent : .mono
-                let expected = RoomEQConfig.allowedTaps.sorted(by: >).first { taps in
-                    AssetUpload.maximumFrames(sourceFrames: taps, assetChannels: channels, topology: topology,
-                                              processingChannels: channels, headBlock: Int(latency)) >= taps
-                }
-                XCTAssertEqual(RoomEQDesigner.largestUsableTaps(channelCount: channels,
-                                                                processingChannels: channels,
+                XCTAssertEqual(RoomEQDesigner.largestUsableTaps(channelCount: row.channels,
+                                                                processingChannels: row.processing,
                                                                 latencyMode: latency),
-                               expected, "\(channels)ch lt \(latency)")
+                               row.taps, "\(row.channels)ch / \(row.processing) 処理 / lt \(latency)")
             }
         }
-        // mono の 131072 は入る。多チャンネルほど小さくなり、増えることはない。
-        XCTAssertEqual(RoomEQDesigner.largestUsableTaps(channelCount: 1, processingChannels: 1), 131072)
-        var previous = Int.max
-        for channels in 1...16 {
-            let taps = RoomEQDesigner.largestUsableTaps(channelCount: channels, processingChannels: channels) ?? 0
-            XCTAssertLessThanOrEqual(taps, previous, "\(channels)ch")
-            previous = taps
-        }
-        print("RoomEQ largestUsableTaps 1…16ch:",
-              (1...16).map { RoomEQDesigner.largestUsableTaps(channelCount: $0, processingChannels: $0) ?? 0 })
+        // 既定の latencyMode は 128。
+        XCTAssertEqual(RoomEQDesigner.largestUsableTaps(channelCount: 12, processingChannels: 12), 65536)
     }
 
     /// 入らないときは入る一番大きい taps を添えて落ちる。0 チャンネルは noSources。

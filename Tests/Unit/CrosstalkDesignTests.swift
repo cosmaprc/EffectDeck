@@ -7,7 +7,8 @@
 //    2. 1 ビンの解（solveRegularizedCrosstalkBin）と遅延を外した平滑
 //       （smoothDelayCompensatedSpectrum）は上流の export と 1e-12 で一致する。
 //    3. 4 つの測定から作る 4 本の FIR（C11/C21/C12/C22）・倒した設定・診断が上流と同じ。
-//       見本は 44.1kHz→48kHz（リサンプラを通る）、範囲外の設定、利得の頭打ちを含む。
+//       見本は 44.1kHz→48kHz と 48kHz→96kHz（リサンプラの伸ばす側）、96kHz→48kHz と
+//       192kHz→44.1kHz（間引く側）、範囲外の設定、利得の頭打ちを含む。
 
 import XCTest
 import Foundation
