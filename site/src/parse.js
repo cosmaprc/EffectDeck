@@ -34,7 +34,11 @@ export function chainEntries(p) {
       if (typeof nm !== "string" || nm === "") continue;
       if (nm === "Section") {
         const cm = o.parameters?.cm ?? o.cm;
-        out.push({ section: true, name: typeof cm === "string" && cm ? `${cm} Section` : "Section" });
+        const named = typeof cm === "string" && cm !== "";
+        // アプリが置いた終端（"rr": true）は段ではないので出さない。戻す条件はアプリと同じ
+        // （PipelineForm.parse: 印があり、名前が無く、入っているときだけ）。
+        if (o.rr === true && !named && !off) continue;
+        out.push({ section: true, name: named ? `${cm} Section` : "Section" });
       } else {
         out.push({ section: false, name: nm, off });
       }

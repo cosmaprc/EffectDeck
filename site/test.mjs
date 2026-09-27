@@ -250,6 +250,33 @@ await test("chain preview reads the share-link p", async () => {
     { section: true, name: "Main Section" },
     { section: false, name: "Volume", off: true },
   ]);
+  // アプリが置いた終端（"rr": true）は出さない。印の無い空の Section と、印があっても
+  // 名前付き・切ってあるものは Section のまま（PipelineForm.parse と同じ条件）。
+  const ends = [
+    { nm: "Section", cm: "Main", en: true },
+    { nm: "Volume", en: true },
+    { nm: "Section", cm: "", en: true, rr: true },
+    { nm: "Delay", en: true },
+    { nm: "Section", cm: "", en: true },
+    { nm: "Section", cm: "", en: false, rr: true },
+    { nm: "Section", cm: "Named", en: true, rr: true },
+  ];
+  assert.deepEqual(chainEntries(Buffer.from(JSON.stringify(ends)).toString("base64")), [
+    { section: true, name: "Main Section" },
+    { section: false, name: "Volume", off: false },
+    { section: false, name: "Delay", off: false },
+    { section: true, name: "Section" },
+    { section: true, name: "Section" },
+    { section: true, name: "Named Section" },
+  ]);
+  const longEnd = { pipeline: [{ name: "Section", parameters: { cm: "A" } }, { name: "Volume" },
+                               { name: "Section", enabled: true, parameters: { cm: "" }, rr: true },
+                               { name: "Delay" }] };
+  assert.deepEqual(chainEntries(Buffer.from(JSON.stringify(longEnd)).toString("base64")), [
+    { section: true, name: "A Section" },
+    { section: false, name: "Volume", off: false },
+    { section: false, name: "Delay", off: false },
+  ]);
 });
 
 console.log(`\n${n} passed`);
