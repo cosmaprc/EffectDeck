@@ -168,7 +168,8 @@ final class StatusReadingsTests: XCTestCase {
         XCTAssertEqual(strip.loadVoice, "CPU idle, running at 48 kHz")
     }
 
-    /// 閾値は上流の data-level と同じ 75 と 100（js/ui-manager.js:419）。
+    /// 閾値は上流の data-level と同じ 75 と 100
+    /// （js/ui-manager.js の updatePipelineCpuUsage、e200e515 で 426–428 行）。
     func testLoadThresholds() {
         let table: [(Double, ETLoadReading.Level, Int)] = [
             (0, .normal, 0),
@@ -320,6 +321,21 @@ final class StatusReadingsTests: XCTestCase {
                            "Effects add \(strip.fxMs) milliseconds, audio path adds \(strip.ioMs) milliseconds")
             XCTAssertEqual(strip.loadVoice, "CPU \(cpu.percent) percent, running at \(strip.rate)")
         }
+    }
+
+    /// 処理レートが有限でなければ "— kHz"。Int(nan) / Int(inf) で落とさない。
+    /// 帯の Rate と Details の Processing rate の両方がここを通る。
+    func testRateTextNonFinite() {
+        for hz in [Double.nan, .infinity, -.infinity] {
+            XCTAssertEqual(ETRateText.kHz(hz), "— kHz", "\(hz)")
+            var s = playing()
+            s.processingRate = hz
+            let details = ETDiagnostics.make(s, version: "v", abi: "0", device: "d", settings: [])
+            XCTAssertEqual(ETStripReading(s).rate, "— kHz", "\(hz)")
+            XCTAssertEqual(details.lines.first { $0.label == "Processing rate" }?.value, "— kHz", "\(hz)")
+        }
+        XCTAssertEqual(ETRateText.kHz(47_500), "48 kHz")
+        XCTAssertEqual(ETRateText.kHz(0), "0 kHz")
     }
 
     // MARK: - 問題の行

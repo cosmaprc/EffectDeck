@@ -216,7 +216,8 @@ enum ETRunState: Equatable {
 /// ここでしか名前と言い回しを持たないので、直すならこの 1 か所。
 struct ETLoadReading {
     /// ここから色を変える。締切に届く前に気づける位置。
-    /// 上流の data-level と同じ（js/ui-manager.js:419 の 75 と 100）。
+    /// 上流の data-level と同じ 75 と 100（js/ui-manager.js の updatePipelineCpuUsage、
+    /// e200e515 で 426–428 行）。
     static let high = 0.75
     /// ここを超えると音が途切れる。
     static let over = 1.0
@@ -260,7 +261,7 @@ struct ETLoadReading {
     var value: String { "\(percent)%" }
 
     /// **語は上流に合わせて "CPU"。** 上流の右下が "CPU: Avg {average}%"
-    /// （js/locales/en.json5:69）。ツールバーの帯も同じ語を使っている。
+    /// （js/locales/en.json5 の ui.pipelineCpuUsage、e200e515 で 74 行）。ツールバーの帯も同じ語を使っている。
     /// 1 つの量に 2 つの名前を付けないこと。
     /// 中身が端末の CPU 使用率ではないことは、ms 2 つの文で伝わる。
     /// 数字は Latency 設定で 5.0 / 10.0 / 23.0 と動くので、設定との因果も同時に伝わる。
