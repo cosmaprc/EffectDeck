@@ -8,6 +8,8 @@
 
 **Effects for any player on your phone**
 
+Free and open source under the [MIT license](LICENSE).
+
 Website: [effectdeck.nemut.ai](https://effectdeck.nemut.ai/)
 
 [![Release](https://img.shields.io/github/v/release/satomasahiro2005/EffectDeck?label=release&color=3B82F6)](https://github.com/satomasahiro2005/EffectDeck/releases)
@@ -269,4 +271,5 @@ XCUITest `launchArguments`. The icon on the home screen passes none.
 
 ## License
 
-MIT. See [NOTICE.md](NOTICE.md) for what is bundled.
+Free and open source under the MIT license. Everything bundled in the app is open source
+too; [NOTICE.md](NOTICE.md) lists each part and its license.
