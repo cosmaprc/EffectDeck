@@ -101,4 +101,25 @@ final class JSFXTriggerTests: XCTestCase {
         host.run(blocks: 1, frames: frames)
         XCTAssertEqual(host.get(1), 1)
     }
+
+    /// 鎖がこの段を飛ばしている間（段・Section・全体の入切）はprocessが呼ばれないが、
+    /// hostはrunningのままなので送ると受け取る。**再開した最初のブロックで発火させない。**
+    /// シミュレータでは、全体を切っている間に1と2を押すと、再開で発火数が0から2へ一度に上がった。
+    /// 飛ばされている間は、ブロックとブロックの間を空けて写す（kTriggerStaleは0.25秒）。
+    func testTriggersQueuedWhileSkippedAreDroppedOnResume() throws {
+        let host = try JSFX.load("trigger_count")
+        host.run(blocks: 1)
+
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0), "running なので受け取る")
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 1))
+        Thread.sleep(forTimeInterval: 0.5)               // 鎖がこの段を飛ばしている間
+        host.run(blocks: 1)
+        XCTAssertEqual(host.get(0), 0, "飛ばされている間に押したぶんが再開で発火した")
+
+        // 再開した後に押したぶんは届く。続けて回っている間は捨てない。
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0))
+        host.run(blocks: 1)
+        XCTAssertEqual(host.get(0), 1)
+        XCTAssertEqual(host.get(1), 1, "bit 0")
+    }
 }

@@ -501,12 +501,19 @@ struct EffectPickerView: View {
                                 Section {
                                     ForEach(audioUnits(vendor: vendor)) { auRow($0) }
                                     let scripts = jsfxEntries(vendor: vendor)
-                                    ForEach(scripts) { jsfxRow($0) }
+                                    ForEach(scripts) { entry in
+                                        jsfxRow(entry)
+                                            // **同梱の見本にはDeleteを出さない。**onDeleteはForEachの
+                                            // 行ぜんぶに付くので、見本でも払うとDeleteが出た。
+                                            // 払い切るとListが先に行を消し（onDeleteの中で弾いても
+                                            // 戻らない）、一覧を組み直すまで見本が画面から消えていた。
+                                            .deleteDisabled(entry.isDebugFixture)
+                                    }
                                     // **消す口。**行は Button で onDrag も付いているので、
                                     // 自前のスワイプを重ねるとタップ・ドラッグ・払いの 3 つが
                                     // 同じ行で競合する。List の onDelete なら List 側の
                                     // 仕組みなので競合しない。
-                                    // 同梱の見本は消させない（removeEntry が弾く）。
+                                    // 同梱の見本は消させない（行のdeleteDisabledとremoveEntryの2か所）。
                                     .onDelete { offsets in
                                         pendingDeleteJSFX = offsets
                                             .compactMap { scripts.indices.contains($0) ? scripts[$0] : nil }

@@ -112,6 +112,8 @@ struct ETValueField: View {
                     apply()
                 }
             }
+            // 何も無い所・カードの名前・2列の左の一覧を触ったときも確定させる（ETTapOutside）。
+            .etCommitsOnTapOutside($focused) { apply() }
             .accessibilityLabel(label)
             .accessibilityValue(text)
     }
@@ -121,6 +123,83 @@ struct ETValueField: View {
         focused = false
         guard let typed = Double(draft.trimmingCharacters(in: .whitespaces)) else { return }
         commit(typed)
+    }
+}
+
+/// **打ち込み中の数値欄の外を触ったら、欄を確定させる。**窓に認識器を1つだけ付ける。
+///
+/// 数値欄（ETValueField・ParameterRow）が確定するのは、Return・キーボードを下げる・
+/// 別の欄を触るの3つだけだった。iPadで数を打って何も無い所・カードの名前・2列の左の一覧を
+/// 触っても欄は打ち込み中のまま残り、打った値が渡らなかった（シミュレータ、10枚とも）。
+///
+/// **SwiftUIの.onTapGestureでは拾い切れない。**地（ScrollViewの背面）に付けると、
+/// カードの中の余白・自分のonTapGestureを持つカードの名前・左の一覧に届かない。
+/// 親に付けると子の欄や部品と取り合う。窓の認識器は触りを奪わず
+/// （cancelsTouchesInView = false）、ほかの認識器と同時に立つので、押した部品はそのまま動く。
+///
+/// - **字の欄の上では受けない。**別の欄へ移る・同じ欄の中でカーソルを動かすのはUIKitに任せる
+///   （別の欄へ移ったときは欄が外れて今も確定する）。受けると、移った先の欄まで外れうる。
+/// - **外すのは数値欄だけ。**合図を受けた欄が自分で確定する（etCommitsOnTapOutside）。
+///   ほかの字の欄（Sectionの名前・プリセットの名前・検索）やJSFXのキーボード受けは触らない。
+@MainActor
+final class ETTapOutside: NSObject, UIGestureRecognizerDelegate {
+    /// 外を触った合図。
+    nonisolated static let tapped = Notification.Name("ETTapOutside")
+    private static let shared = ETTapOutside()
+
+    /// 前面の窓に付ける。付いていれば何もしない。数値欄が打ち込みを始めたときに呼ぶ。
+    /// 付けるのは最初の1回だけで、後は付けたまま（欄が無いときは合図を受ける相手が居ないだけ）。
+    static func install() {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let window = (scene as? UIWindowScene)?.keyWindow,
+                  !(window.gestureRecognizers ?? []).contains(where: { $0.delegate === shared })
+            else { continue }
+            let recognizer = UITapGestureRecognizer(target: shared, action: #selector(ETTapOutside.fire(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delaysTouchesEnded = false
+            recognizer.requiresExclusiveTouchType = false
+            recognizer.delegate = shared
+            window.addGestureRecognizer(recognizer)
+        }
+    }
+
+    @objc private func fire(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        NotificationCenter.default.post(name: Self.tapped, object: nil)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldReceive touch: UITouch) -> Bool {
+        var view = touch.view
+        while let current = view {
+            if current is UITextInput { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+}
+
+extension View {
+    /// 数値欄に付ける。打ち込み中に外を触ったら`commit`を呼ぶ（ETTapOutside）。
+    ///
+    /// **@FocusStateを落とすだけにせず、ここで確定させる。**iPhoneではカードの名前を触ると
+    /// カードが畳まれて欄ごと消え、消えた欄にはonChange(of: focused)が来ない。
+    /// 合図は触った瞬間に届くので、畳まれる前に確定できる。
+    /// `commit`は欄の@FocusStateも落とすこと（落とさないと打ち込み中のまま残る）。
+    func etCommitsOnTapOutside(_ focused: FocusState<Bool>.Binding,
+                               commit: @escaping () -> Void) -> some View {
+        self
+            .onChange(of: focused.wrappedValue) { _, now in
+                if now { ETTapOutside.install() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: ETTapOutside.tapped)) { _ in
+                if focused.wrappedValue { commit() }
+            }
     }
 }
 

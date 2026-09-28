@@ -98,7 +98,8 @@ struct EffectCardView: View {
                             ExternalProcessorView(externalID: node.externalID ?? "",
                                                   instanceID: node.externalInstanceID,
                                                   snapshot: externalSnapshot,
-                                                  isDragPreview: isDragPreview)
+                                                  isDragPreview: isDragPreview,
+                                                  isProcessing: !node.isMuted && !dsp.bypass)
                         } else if ETEffectViews.has(node.spec.type) {
                             // 専用の画面を持つものは、そちらがパラメータまで面倒を見る。
                             ETEffectViews.view(index: index, node: node, dsp: dsp)
@@ -411,6 +412,9 @@ private struct ExternalProcessorView: View {
     let instanceID: String
     let snapshot: UIImage?
     let isDragPreview: Bool
+    /// 鎖がこの段に音を通しているか。段の入切・上のSectionの入切・全体の入切（All effects）の3つ。
+    /// どれかが切れていると、鎖はこの段を飛ばしてprocessを呼ばない。
+    let isProcessing: Bool
     @State private var controller: UIViewController?
     @State private var requestingView = false
     @State private var fullScreen = false
@@ -666,6 +670,12 @@ private struct ExternalProcessorView: View {
     /// （自動バイパス中・状態保存中・再設定中）ときに送ると捨てられるので、
     /// 押せるままだと「効かないのか溜まっているのか」が区別できない。
     ///
+    /// **鎖がこの段を飛ばしている間も無効にする**（isProcessing）。段・Section・全体の
+    /// どれを切ってもhostはrunningのままなので、runningだけ見ていると札は押せるままで、
+    /// 押したぶんは溜まって再開した最初のブロックで一斉に発火していた（シミュレータ、
+    /// 切っている間に1と2を押すと、再開で発火数が0から2へ一度に上がった）。
+    /// 溜まったぶんはhostの側でも捨てる（ETJSFXHost.cppのprocess。止まっていた後の最初のブロック）。
+    ///
     /// **`trigger` を読まないスクリプトには出さない。**REAPER では MIDI や
     /// アクションから叩くもので、EffectDeck には叩く手段が無い。同梱 3 本と
     /// 手元の実物 6 本のうち読んでいるのは検証用の 1 本だけで、残りでは
@@ -677,7 +687,7 @@ private struct ExternalProcessorView: View {
     }
 
     private var triggerChips: some View {
-        let live = jsfx.isRunning(instanceID: instanceID)
+        let live = isProcessing && jsfx.isRunning(instanceID: instanceID)
         return VStack(alignment: .leading, spacing: 6) {
             Text("Trigger (trigger bits 1–\(ETJSFX_MaxTriggers()))")
                 .font(.caption).foregroundStyle(.secondary)

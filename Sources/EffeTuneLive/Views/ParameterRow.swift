@@ -369,6 +369,8 @@ struct ParameterRow: View {
                     commit()
                 }
             }
+            // 何も無い所・カードの名前・2列の左の一覧を触ったときも確定させる（ETTapOutside）。
+            .etCommitsOnTapOutside($focused) { commit() }
             // 読み上げも画面と同じ切り方にする。単位は名前、数だけが値。
             .accessibilityLabel(title)
             .accessibilityValue(displayValue)

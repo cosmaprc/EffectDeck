@@ -33,7 +33,11 @@ struct ConnectionTipsView: View {
 
     var body: some View {
         List {
-            ForEach(ETTips.all) { tip in
+            // **言語も身元に入れる**（ETTip.Shown）。issueの番号だけで引いていたころは、
+            // 開いたまま日本語に替えても節が英語のまま残り、ForEachの外にある最後の
+            // 手順の節だけが替わった（シミュレータ、上端でも下端でも。開き直すと直る）。
+            ForEach(ETTips.all.map { ETTip.Shown(tip: $0, ja: ja) }) { shown in
+                let tip = shown.tip
                 let c = ja ? tip.ja : tip.en
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
@@ -118,6 +122,14 @@ private struct ETTip: Identifiable {
     /// 題・やること・理由を 1 つずつ。**理由は 1 節まで。**詳しい話は issue にある。
     struct Copy {
         let title, act, why: String
+    }
+
+    /// 画面に出す1節。**身元はissueの番号と言語。**番号だけだと、言語を替えても
+    /// Listが節を同じものとみなして描き直さなかった。
+    struct Shown: Identifiable {
+        let tip: ETTip
+        let ja: Bool
+        var id: String { "\(tip.issue)-\(ja ? "ja" : "en")" }
     }
 }
 
