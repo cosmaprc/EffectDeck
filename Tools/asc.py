@@ -18,6 +18,7 @@
   python3 asc.py patch <path> <body.json>     任意の PATCH（本体はファイル）
   python3 asc.py post <path> <body.json>      任意の POST
   python3 asc.py delete <path> [body.json]    任意の DELETE
+  python3 asc.py resubmit <submission-id>     却下された提出を直したあと出し直す
 """
 import json
 import subprocess
@@ -189,6 +190,23 @@ def main() -> int:
              {"data": {"type": "reviewSubmissions", "id": sid,
                        "attributes": {"submitted": True}}})
         print("submitted")
+        return 0
+
+    if cmd == "resubmit":
+        # 却下された提出（UNRESOLVED_ISSUES）を直したあと出し直す。
+        # **項目を resolved にしてからでないと** submitted が
+        # 「Version is not ready to be submitted yet」の 409 で断られ続ける
+        # （2026.09.28 で 25 分それを待った）。
+        sid = sys.argv[2]
+        for item in call("GET", f"/v1/reviewSubmissions/{sid}/items")["data"]:
+            if item["attributes"].get("state") in ("REJECTED", "UNRESOLVED_ISSUES"):
+                call("PATCH", f"/v1/reviewSubmissionItems/{item['id']}",
+                     {"data": {"type": "reviewSubmissionItems", "id": item["id"],
+                               "attributes": {"resolved": True}}})
+        d = call("PATCH", f"/v1/reviewSubmissions/{sid}",
+                 {"data": {"type": "reviewSubmissions", "id": sid,
+                           "attributes": {"submitted": True}}})
+        print(d["data"]["attributes"].get("state"))
         return 0
 
     if cmd == "submissions":
