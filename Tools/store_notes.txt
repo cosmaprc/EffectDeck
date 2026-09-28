@@ -6,7 +6,6 @@ iPad
 JSFX
 EffectDeck now hosts JSFX, the single-file script format REAPER uses.
 - Import from Files, a link, the clipboard or the share sheet.
-- Write JSFX with ChatGPT opens ChatGPT with a request. Import its reply From Files or From Clipboard.
 - Sliders keep their ranges, curves and menus, and values are typed as plain numbers.
 - Scripts that draw (@gfx) get their canvas with touch, keyboard, menus and full screen. Settings has Adaptive and Pixel Perfect sizing.
 - @serialize state is saved with the chain and presets. Reported latency is compensated.
@@ -21,7 +20,7 @@ EffeTune 2.11.0 (DSP 0.11.0)
 - Color choices on Spectrum Analyzer, Pitch Meter and Spectrogram. Gain on the Stereo Meter goniometer.
 
 Presets and sharing
-- Presets > Build a chain with ChatGPT. Paste the whole reply with Import from clipboard, or tap the link it gives; names or values it got wrong are corrected and listed.
+- Presets > Import from clipboard reads a chain pasted as text; names or values it cannot use are corrected and listed.
 - Share this chain makes an effectdeck.nemut.ai link that opens EffectDeck and keeps AU and JSFX stages (a JSFX by reference, so the other device needs the script). EffectDeck asks before replacing your chain.
 - EffectDeck appears in the share sheet for links, files and selected text.
 - Import from Link reads gist links.
@@ -39,7 +38,8 @@ Settings
 
 Fixes
 - IR Reverb now prepares impulse responses as EffeTune does, so reverbs play at EffeTune's level (most are quieter than before in saved chains) and the direct sound is cut from the wet signal by default.
-- 5Band FIR PEQ and Group Delay EQ/PEQ settings are saved with the chain, presets and links.
+- 5Band FIR PEQ, Group Delay EQ/PEQ and FIR Crossover settings are saved with the chain, presets and links.
+- A value typed into a parameter field is kept when you tap somewhere else, not only on Return.
 - Apple's Audio Units open with EffectDeck's parameter list.
 - Deleting effects or loading a chain during playback no longer risks a crash.
 - Applying an effect preset updates latency and IR Reverb at once.

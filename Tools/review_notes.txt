@@ -1,8 +1,12 @@
 App Review notes: JSFX scripts
 
+Guideline 5 (China): ChatGPT and OpenAI are no longer mentioned in the metadata
+or screenshots. On the China mainland storefront (StoreKit countryCode CHN)
+the app hides both ChatGPT entries described below.
+
 What it is
-EffectDeck can host JSFX, the single-file audio effect script format used by the
-REAPER audio software. A JSFX script is a plain text file that the user brings
+EffectDeck can host JSFX, the single-file audio effect script format used by
+REAPER. A JSFX script is a plain text file that the user brings
 into the app. It becomes an effect in the user's audio chain, with its own
 sliders and, if it draws, a canvas inside the app.
 
@@ -56,8 +60,7 @@ the binary and user-supplied scripts do not change the app's features) and 4.7
 
 How to test
 1. Tap Add Effect (the + button), switch to Plugins, and tap Import JSFX in the
-   top-right corner of the toolbar. (The Import JSFX button in the middle of the
-   empty list opens Files directly, without the From Link choice.)
+   top-right corner of the toolbar.
 2. Either:
    a. Choose From Link and enter
       https://github.com/satomasahiro2005/EffectDeck/blob/main/Tests/Fixtures/JSFX/gain.jsfx
@@ -65,8 +68,7 @@ How to test
    b. Save the script below as a text file (for example gain.jsfx) in Files
       and choose From Files.
 3. "Gain" appears in the Plugins list. Tap it to add it to the chain. With audio
-   playing through EffectDeck, move its Gain slider (0 to 2) to change the
-   volume.
+   playing through EffectDeck, its Gain slider (0 to 2) changes the volume.
 
 desc:Gain
 author:nemut.ai
