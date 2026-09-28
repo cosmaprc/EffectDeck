@@ -101,6 +101,11 @@ whether the entitlement's array is empty, so the app carries an empty array and 
 extension carries the protocol identifier. That also gets past App Store Connect's
 ITMS-91183.
 
+To build an app like this, start from
+[ios27-media-device-passthrough](https://github.com/satomasahiro2005/ios27-media-device-passthrough):
+the same two processes in a handful of files, with a low-pass filter where EffectDeck has
+its effects. It is MIT-0, so you can copy it without keeping the copyright notice.
+
 ## Writing a JSFX for it
 
 EffectDeck hosts single-file audio JSFX through the portable EEL2 interpreter.
