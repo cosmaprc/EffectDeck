@@ -19,15 +19,15 @@ const mail = `<a href="mailto:${EMAIL}">${EMAIL}</a>`;
 
 export const TEXT = {
   // <title> と og:title。検索に出る言い回しをそのまま入れる。
-  title: "EffectDeck — audio effects for any app on iPhone",
-  description: "EffectDeck puts an effect chain on the audio of any app on iPhone: built-in effects, AUv3 plug-ins, impulse responses, and JSFX effects you write or have ChatGPT write. Free and open source (MIT). Requires iOS 27.",
+  title: "EffectDeck — audio effects for any app on iPhone and iPad",
+  description: "EffectDeck puts an effect chain on the audio of any app on iPhone and iPad: built-in effects, AUv3 plug-ins, impulse responses, and JSFX effects you write or have ChatGPT write. Free and open source (MIT). Requires iOS 27.",
   // トップの頭。リリースで変わらないことだけ（何か・App Store・GitHub・FOSS）。
-  tagline: "Any effect on the audio of any app on your iPhone, through the Media Device Extension in iOS 27. Combine the built-in effects, AUv3 plug-ins and impulse responses, or write the effect you want in JSFX.",
+  tagline: "Any effect on the audio of any app on your iPhone or iPad, through the Media Device Extension in iOS 27. Combine the built-in effects, AUv3 plug-ins and impulse responses, or write the effect you want in JSFX.",
   foss: `Free and open source (${a(LICENSE, "MIT")})`,
   howTitle: "How it works",
   home: [
     "Pick EffectDeck as the output in Control Center, and audio from any app that shows up in Now Playing goes through your effect chain, then out through the speaker, headphones or AirPods you were already using.",
-    "You choose what goes in the chain. EQ, dynamics, saturation, reverb, spatial effects and analyzers are built in. AUv3 plug-ins on your iPhone, impulse responses and AutoEQ profiles load into it. An effect that does not exist yet can be written as a JSFX script.",
+    "You choose what goes in the chain. EQ, dynamics, saturation, reverb, spatial effects and analyzers are built in. AUv3 plug-ins on your iPhone or iPad, impulse responses and AutoEQ profiles load into it. An effect that does not exist yet can be written as a JSFX script.",
     "It is built on the Media Device Extension that arrived in iOS 27, so it needs iOS 27 or later.",
   ],
   // スクリーンショットの下の字は名札。説明を書かない。
@@ -111,7 +111,7 @@ export const FAQ = [
   },
   {
     q: "Which effects are included?",
-    a: `Built in: EQ, dynamics, saturation, reverb, spatial effects and analyzers such as a spectrum analyzer and a spectrogram, ported from EffeTune. It also hosts AUv3 effect plug-ins installed on the iPhone, loads impulse responses and AutoEQ profiles, and runs single-file JSFX effects; ${a(JSFX_MD, "JSFX.md")} lists what is supported.`,
+    a: `Built in: EQ, dynamics, saturation, reverb, spatial effects and analyzers such as a spectrum analyzer and a spectrogram, ported from EffeTune. It also hosts AUv3 effect plug-ins installed on the device, loads impulse responses and AutoEQ profiles, and runs single-file JSFX effects; ${a(JSFX_MD, "JSFX.md")} lists what is supported.`,
   },
   {
     q: "Is it free?",
@@ -123,7 +123,7 @@ export const FAQ = [
   },
   {
     q: "Does my audio leave the device?",
-    a: `No. Audio is processed and played back on the iPhone, is not recorded, and makes no network connection. See the ${a("/privacy", "privacy policy")}.`,
+    a: `No. Audio is processed and played back on the device, is not recorded, and makes no network connection. See the ${a("/privacy", "privacy policy")}.`,
   },
 ];
 
@@ -279,7 +279,7 @@ export const PRIVACY = {
 // /llms.txt。言語モデルのクローラー向けの素の字。ページと同じことだけを書く。
 export const LLMS_TXT = `# EffectDeck
 
-> EffectDeck is an iPhone app that runs an effect chain on audio from other apps. It requires iOS 27 or later. It is free and open source (MIT). It is an independent project by nemut.ai, not affiliated with, endorsed by, or supported by EffeTune or its author.
+> EffectDeck is an iPhone and iPad app that runs an effect chain on audio from other apps. It requires iOS 27 or later. It is free and open source (MIT). It is an independent project by nemut.ai, not affiliated with, endorsed by, or supported by EffeTune or its author.
 
 ## How it works
 

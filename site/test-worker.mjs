@@ -116,7 +116,7 @@ try {
     assert.deepEqual(scripts, ['<script type="application/ld+json">']);
     assert.match(r.headers.get("content-security-policy"), /script-src 'none'/);
     assert.ok(!r.body.includes(FXD));
-    assert.ok(r.body.includes("<title>EffectDeck — audio effects for any app on iPhone</title>"));
+    assert.ok(r.body.includes("<title>EffectDeck — audio effects for any app on iPhone and iPad</title>"));
     assert.match(r.body, /<meta name="description" content="[^"]{50,}">/);
     for (const f of ["effects", "analyzers", "routing"]) assert.ok(r.body.includes(`src="/assets/shot-${f}.webp"`), f);
     assert.ok(r.body.includes('id="faq"'));
