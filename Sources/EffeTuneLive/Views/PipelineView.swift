@@ -263,51 +263,11 @@ struct PipelineView: View {
                 }
             }
         }
-        // 鎖ごと捨てるのは 1 本ずつのスワイプ削除と違って取り消せないので、
-        // ⋯ から直接は走らせず一度確かめる。シートと違って重ねても
-        // 潰し合わないので、上の .sheet とは別に付けてある。
-        .confirmationDialog("Reset chain?",
-                            isPresented: $confirmingReset,
-                            titleVisibility: .visible) {
-            Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Removes every effect and leaves a single Level Meter.")
-        }
-        .confirmationDialog("Replace chain?",
-                            isPresented: Binding(
-                                get: { pendingChain != nil },
-                                set: { if !$0 { pendingChain = nil } }),
-                            titleVisibility: .visible) {
-            Button("Replace chain", role: .destructive) {
-                if let items = pendingChain { dsp.replaceChain(with: items) }
-                pendingChain = nil
-            }
-            Button("Cancel", role: .cancel) { pendingChain = nil }
-        } message: {
-            if !pendingReport.isEmpty { Text(pendingReport) }
-        }
         .alert(alertTitle, isPresented: Binding(
             get: { pluginError != nil || linkError != nil || importError != nil },
             set: { if !$0 { clearErrors() } })) {
                 Button("OK", role: .cancel) { clearErrors() }
             } message: { Text(linkError ?? importError ?? pluginError ?? "Unknown error") }
-        // 切ってある Section を外すと、止まっていた段がその場で鳴り出す。
-        // 配下の ON/OFF は書き換えないので（about が保つと言っている）、
-        // 起きることを先に出しておく。
-        .confirmationDialog("Remove this section?",
-                            isPresented: Binding(
-                                get: { confirmingSectionRemoval != nil },
-                                set: { if !$0 { confirmingSectionRemoval = nil } }),
-                            titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
-                if let id = confirmingSectionRemoval { removeConfirmed(id) }
-                confirmingSectionRemoval = nil
-            }
-            Button("Cancel", role: .cancel) { confirmingSectionRemoval = nil }
-        } message: {
-            Text("The effects inside it will start playing again.")
-        }
         .onAppear {
             // **案内の画面は持たない。**
             // 「2 本構成で、他のアプリの音を寄越す」という形が読めないだろう、
@@ -412,6 +372,62 @@ struct PipelineView: View {
     ///
     /// **標準のNavigationSplitView。**サイドバーのボタン、材質、列の幅はシステムに任せる。
     /// `.balanced`にして、縦置きでも一覧をカードの上に被せず横に並べる。
+    /// 鎖の確認（Reset chain? / Replace chain? / Remove this section?）。
+    ///
+    /// **鎖の一覧に付ける。根のZStackには付けない。**2列を取り込んだとき（5ad7a81）に
+    /// ZStackへ移したら、iPhoneで画面全体から出る形になり、下から出る普段の形でなくなった。
+    /// 1列はNavigationStackの中の一覧、2列は右の列の一覧に付ける（前と同じ所）。
+    private func chainConfirmations<Content: View>(_ content: Content) -> some View {
+        content
+            // 鎖ごと捨てるのは 1 本ずつのスワイプ削除と違って取り消せないので、
+            // ⋯ から直接は走らせず一度確かめる。シートと違って重ねても
+            // 潰し合わないので、上の .sheet とは別に付けてある。
+            .confirmationDialog("Reset chain?",
+                                isPresented: $confirmingReset,
+                                titleVisibility: .visible) {
+                Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Removes every effect and leaves a single Level Meter.")
+            }
+            .confirmationDialog("Replace chain?",
+                                isPresented: Binding(
+                                    get: { pendingChain != nil },
+                                    set: { if !$0 { pendingChain = nil } }),
+                                titleVisibility: .visible) {
+                Button("Replace chain", role: .destructive) {
+                    if let items = pendingChain { dsp.replaceChain(with: items) }
+                    pendingChain = nil
+                }
+                Button("Cancel", role: .cancel) { pendingChain = nil }
+            } message: {
+                if !pendingReport.isEmpty { Text(pendingReport) }
+            }
+            // 中身の在るSectionを消すときは、中身も消すかを選ばせる（remove(_:)）。
+            // 切ってあるSectionだけ、中身を残すと止まっていた段がその場で鳴り出すことを添える。
+            // 配下のON/OFFは書き換えない（Sectionのaboutが保つと言っている）。
+            .confirmationDialog("Remove this section?",
+                                isPresented: Binding(
+                                    get: { confirmingSectionRemoval != nil },
+                                    set: { if !$0 { confirmingSectionRemoval = nil } }),
+                                titleVisibility: .visible) {
+                Button("Remove Section") {
+                    if let id = confirmingSectionRemoval { removeConfirmed(id, withEffects: false) }
+                    confirmingSectionRemoval = nil
+                }
+                Button("Remove Section and Effects", role: .destructive) {
+                    if let id = confirmingSectionRemoval { removeConfirmed(id, withEffects: true) }
+                    confirmingSectionRemoval = nil
+                }
+                Button("Cancel", role: .cancel) { confirmingSectionRemoval = nil }
+            } message: {
+                if let id = confirmingSectionRemoval,
+                   dsp.chain.first(where: { $0.id == id })?.enabled == false {
+                    Text("Kept effects will start playing again.")
+                }
+            }
+    }
+
     private func split(_ visible: [Row]) -> some View {
         NavigationSplitView(columnVisibility: $columns) {
             ChainMinimap(items: minimapItems(visible), dsp: dsp, viewport: viewport,
@@ -419,7 +435,7 @@ struct PipelineView: View {
                          insert: { _ = addDropped($0, at: $1) })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
-            chainList(visible, split: true)
+            chainConfirmations(chainList(visible, split: true))
                 .environment(\.etCardsPinnedOpen, true)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
@@ -431,7 +447,7 @@ struct PipelineView: View {
     /// 1列。iPhoneと、iPadの狭い窓。**今までの形そのまま。**
     private func stack(_ visible: [Row]) -> some View {
         NavigationStack {
-            chainList(visible, split: false)
+            chainConfirmations(chainList(visible, split: false))
                 // iPad は ETLayout が絞る。撮影のときは -ETWidth で上書きできる
                 // （iPad で撮るのは高さが要るからで、幅まで iPad になると
                 // 実機の見え方にならない）。
@@ -1493,9 +1509,8 @@ struct PipelineView: View {
     /// 保つ」と約束している）。代わりに消す前に一言出す。
     private func remove(_ id: UUID) {
         guard let i = dsp.chain.firstIndex(where: { $0.id == id }) else { return }
-        // 切ってある Section で、止めている段が在るときだけ確かめる。
-        if dsp.chain[i].isSection, !dsp.chain[i].enabled,
-           !dsp.analysis.members(of: dsp.chain[i].id).isEmpty {
+        // 中身の在るSectionは、中身も消すかを確かめる。空のSectionはそのまま消す。
+        if dsp.chain[i].isSection, !dsp.analysis.members(of: dsp.chain[i].id).isEmpty {
             confirmingSectionRemoval = id
             return
         }
@@ -1599,10 +1614,17 @@ struct PipelineView: View {
         if let waiting { queueAfterSheet(waiting, sheet: sheet, afterSheet: afterSheet) }
     }
 
-    /// 確かめたあとに消す。配下は連れない。
-    private func removeConfirmed(_ id: UUID) {
+    /// 確かめたあとに消す。`withEffects`なら配下も連れる。
+    /// 配下は枠の線と同じ数え方（dsp.analysis.members）なので、線が囲っている段だけが消える。
+    /// 消すのは1回（dsp.remove）。AU・JSFXの手放しとpublishはそちらが1度ずつやる。
+    private func removeConfirmed(_ id: UUID, withEffects: Bool) {
         guard let i = dsp.chain.firstIndex(where: { $0.id == id }) else { return }
-        dsp.remove(at: IndexSet(integer: i))
+        var doomed = IndexSet(integer: i)
+        if withEffects {
+            let members = Set(dsp.analysis.members(of: id))
+            for (j, node) in dsp.chain.enumerated() where members.contains(node.id) { doomed.insert(j) }
+        }
+        dsp.remove(at: doomed)
     }
 
     /// 長押しで動かしたときの置き換え。
