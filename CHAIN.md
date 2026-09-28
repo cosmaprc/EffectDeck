@@ -54,7 +54,8 @@ Hard rules, in order of how often they are broken:
    no `…`.
 6. **Never write `external`, `externalInstance`, `externalState`, `ir`, `ib`
    or `ob`.** Write `ch` only when the user asks for one side of the stereo
-   signal: `"ch":"L"` or `"ch":"R"`.
+   signal, or an EQ file has separate left and right parts (see *Equalizer
+   APO and AutoEQ files*): `"ch":"L"` or `"ch":"R"`.
 7. **Do not use an effect the list marks *Not for chains*.**
 8. **Keep the chain at or below 0 dB overall.** If any effect adds gain,
    end the chain with `Volume` set to take it back out.
@@ -112,6 +113,25 @@ chain:
    so give the script defaults that suit this chain.
 
 If the user has not imported the JSFX, the app skips that stage and says so.
+
+## Equalizer APO and AutoEQ files
+
+When the user gives an Equalizer APO config or an AutoEQ `ParametricEQ.txt`,
+turn it into a chain:
+
+- Each `Filter N: ON <type> Fc <Hz> Gain <dB> Q <q>` line becomes one band of
+  a `15Band PEQ`, in file order (`f`, `g`, `q`, `t` at the same index). Types:
+  `PK`→`"pk"`, `LS`/`LSC`→`"ls"`, `HS`/`HSC`→`"hs"`, `LP`/`LPQ`→`"lp"`,
+  `HP`/`HPQ`→`"hp"`, `BP`→`"bp"`, `NO`→`"no"`, `AP`→`"ap"`. Skip `OFF` lines.
+  Leave unused bands as they are (0 dB). More than 15 filters: continue in a
+  second `15Band PEQ`.
+- `Channel: L` and `Channel: R` parts that differ become one `15Band PEQ`
+  with `"ch":"L"` and one with `"ch":"R"`. Parts that are the same stay one
+  effect without `ch`. Other channels (C, SUB, RL…) cannot be used here; say
+  so.
+- `Preamp: <dB>` becomes a `Volume` at the end with that value.
+- Say which lines you could not turn into the chain (`GraphicEQ`, `Include`,
+  `Convolution`, `Delay`, and so on) instead of dropping them silently.
 
 ## Audio Units
 
