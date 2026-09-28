@@ -203,9 +203,23 @@ final class ETAUHost: ObservableObject {
         return instance.loading ? "Loading…" : "Ready"
     }
 
+    /// 画面をCoreAudioKitに頼むか。nilは読み込み中。
+    ///
+    /// **AppleのAU（AUDelayなど）には頼まない。**カードのパラメータ行で出す（ExternalProcessorView）。
+    /// iOS 27のシミュレータでは、CoreAudioKitがAUDelayに付けるAUDelayViewControllerが
+    /// viewDidLoadで落ちる。自分の資源の画像（DelayModeNormal / DelayModeInverted）が引けず、
+    /// nilがNSNullになってUISegmentedControl(items:)へ渡り、字として読まれる
+    /// （2026-09-28のクラッシュレポート。こちらはviewを読んだだけ）。
+    /// Objective-Cの例外なので捕まえられず、カードを開いたまま保存した鎖は起動のたびに落ちる。
     func providesUserInterface(instanceID: String) -> Bool? {
         guard let instance = instances[instanceID], !instance.loading else { return nil }
+        guard !Self.usesParameterRows(instance.entry) else { return false }
         return instance.unit?.providesUserInterface ?? false
+    }
+
+    /// CoreAudioKitの画面を使わず、パラメータ行で出すAU。
+    private static func usesParameterRows(_ entry: Entry) -> Bool {
+        entry.description.componentManufacturer == kAudioUnitManufacturer_Apple
     }
 
     func parameters(instanceID: String) -> [AUParameter] {
@@ -236,7 +250,8 @@ final class ETAUHost: ObservableObject {
             completion(controller)
             return
         }
-        guard unit.providesUserInterface else {
+        // providesUserInterfaceと同じ理由で、AppleのAUには頼まない。
+        guard unit.providesUserInterface, !Self.usesParameterRows(instance.entry) else {
             completion(nil)
             return
         }
