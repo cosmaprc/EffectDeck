@@ -279,7 +279,14 @@ struct SettingsView: View {
             // **上の報告先と同じ節には入れない。**診断もログも付かないので、
             // Where to send it に並べると、いちばん押しやすい口がいちばん
             // 情報の付かない口になる。報告すると決めた人は上の行へ入るので、
-            // こちらはその下に 1 行だけ置く。
+            // こちらはその下に置く。
+            //
+            // Discord は招待リンクでなく fxdb.nemut.ai へ飛ばす（招待を替えても
+            // アプリを出し直さずに済む。site/src/links.js）。**JSFX や鎖の画面からは
+            // リンクしない。**審査メモの「スクリプトの配り場を持たない」と食い違う。
+            ETReportDestinationButton(title: "Ask on Discord", detail: "EffectDeck Base") {
+                URL(string: "https://fxdb.nemut.ai")
+            }
             ETReportDestinationButton(title: "Ask on Twitter", detail: "@ainemut") {
                 URL(string: "https://twitter.com/ainemut")
             }

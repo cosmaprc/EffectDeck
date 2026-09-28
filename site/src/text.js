@@ -202,7 +202,7 @@ export const PRIVACY = {
   reads the link on the device and contacts no server.
 </p>
 <p>
-  Other links in the app, such as those to GitHub issues and Twitter, only open the page
+  Other links in the app, such as those to GitHub issues, Discord and Twitter, only open the page
   and carry nothing from the app.
 </p>
 
