@@ -1,4 +1,4 @@
-New since 2026.09.20.
+New since 2026.09.22.
 
 iPad
 - A wide window shows the chain as a list on the left and every card open on the right. Reorder in the list, and drop effects into it.
@@ -20,39 +20,27 @@ EffeTune 2.11.0 (DSP 0.11.0)
 - Time Alignment goes up to 500 ms.
 - Color choices on Spectrum Analyzer, Pitch Meter and Spectrogram. Gain on the Stereo Meter goniometer.
 
-The chain
-- Reordering is steadier: tall cards swap after a short move and no longer flip back and forth.
-- Hold a card with one finger and scroll with another.
-- Removing a Section keeps the effects in it. Unnamed Sections collapse, and dragging a card out of a group no longer leaves empty Sections.
-- Picker search covers effects, plug-ins and presets at once.
-- Numbers can be typed into AU parameters and many effect fields.
-- AU cards show the full plug-in name, with the maker below it.
-
-EQ and graphs
-- 15Band PEQ imports an AutoEQ ParametricEQ.txt.
-- 5Band FIR PEQ handles can be dragged, with the target curve drawn live.
-- Moving an EQ marker no longer plays a tone.
-- Spectrogram is in colour by default. It and Note Spectrogram open full screen with their history.
-- Analyzer display settings are saved in the chain, presets and links.
-
-Sharing and presets
-- Share this chain makes an effectdeck.nemut.ai link that keeps AU and JSFX stages (a JSFX by reference, so the other device needs the script). EffectDeck asks before replacing your chain.
+Presets and sharing
+- Presets > Build a chain with ChatGPT. Paste the whole reply with Import from clipboard, or tap the link it gives; names or values it got wrong are corrected and listed.
+- Share this chain makes an effectdeck.nemut.ai link that opens EffectDeck and keeps AU and JSFX stages (a JSFX by reference, so the other device needs the script). EffectDeck asks before replacing your chain.
 - EffectDeck appears in the share sheet for links, files and selected text.
-- Impulse responses can be m4a, mp3 or ALAC.
-- Presets > Build a chain with ChatGPT. Paste the whole reply with Import from clipboard; names or values it got wrong are corrected and listed.
+- Import from Link reads gist links.
+
+The chain
+- Removing a Section can also remove the effects in it.
+- Section is listed under Control in Add Effect, as in EffeTune.
+
+EQ
+- 15Band PEQ imports an AutoEQ ParametricEQ.txt.
+- Moving an EQ marker no longer plays a tone.
 
 Settings
-- Report a problem fills in the diagnostics and the end of the log. Attach log shares the whole log.
-- Known limitations (English and Japanese) covers connection problems caused by iOS.
-
-Power
-- Much less work while nothing is playing or no app is routed in.
+- Known limitations (English and Japanese) covers connection problems caused by iOS. Help on the main screen opens it.
 
 Fixes
-- IR Reverb, FIR Crossover, 5Band FIR PEQ, Group Delay EQ/PEQ, Room EQ and Crosstalk Cancellation load their data again (broken since 2026.09.17).
+- IR Reverb now prepares impulse responses as EffeTune does, so reverbs play at EffeTune's level (most are quieter than before in saved chains) and the direct sound is cut from the wet signal by default.
 - 5Band FIR PEQ and Group Delay EQ/PEQ settings are saved with the chain, presets and links.
 - Apple's Audio Units open with EffectDeck's parameter list.
-- IR Reverb now prepares impulse responses as EffeTune does, so reverbs play at EffeTune's level (most are quieter than before in saved chains) and the direct sound is cut from the wet signal by default.
 - Deleting effects or loading a chain during playback no longer risks a crash.
 - Applying an effect preset updates latency and IR Reverb at once.
 
