@@ -62,6 +62,11 @@ final class PresetStoreCore {
         storage.set(list, forKey: Self.emptyFoldersKey)
     }
 
+    /// その名前のフォルダが在るか（プリセットが入っているものと、空のもの）。
+    func folderExists(_ name: String) -> Bool {
+        names.contains { ETUserPresetName.folder($0) == name } || storedEmptyFolders().contains(name)
+    }
+
     func removeFolder(_ name: String) {
         let list = storedEmptyFolders().filter { $0 != name }
         storage.set(list, forKey: Self.emptyFoldersKey)
@@ -82,6 +87,9 @@ final class PresetStoreCore {
     func renameFolder(_ old: String, to new: String) -> Bool {
         let target = ETUserPresetName.clean(new)
         guard !target.isEmpty, target != old else { return false }
+        // **既に在るフォルダの名前へは付け替えない。**付け替えると2つのフォルダが黙って
+        // 1つにまとまる（名前がぶつかるときだけ断っていた）。「その名前は使われている」で断る。
+        guard !folderExists(target) else { return false }
 
         var d = dict()
         let moving = d.keys.filter { ETUserPresetName.folder($0) == old }.sorted()

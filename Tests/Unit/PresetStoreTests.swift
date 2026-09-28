@@ -85,6 +85,22 @@ final class PresetStoreTests: XCTestCase {
         XCTAssertTrue(patched.isEmpty, "断ったのに iCloud へ当てた")
     }
 
+    /// 既に在るフォルダの名前へは、名前がぶつからなくても付け替えない（黙ってまとめない）。
+    /// 空のフォルダも在るフォルダとして数える。
+    func testRenameFolderToExistingFolderRejected() {
+        let store = presets(["A/one": form(1), "X/two": form(2)])
+        store.addFolder("Empty")
+        let writesBefore = device.writes
+
+        XCTAssertFalse(store.renameFolder("A", to: "X"))
+        XCTAssertFalse(store.renameFolder("A", to: "Empty"))
+
+        XCTAssertEqual(store.names, ["A/one", "X/two"])
+        XCTAssertEqual(store.emptyFolders, ["Empty"])
+        XCTAssertEqual(device.writes, writesBefore, "断ったのに手元へ書いた")
+        XCTAssertTrue(patched.isEmpty, "断ったのに iCloud へ当てた")
+    }
+
     /// 確かめる名前と書く名前は同じ（正規化した `X/B C`）。
     func testRenameFolderNestedNameUsesNormalizedKey() {
         let store = presets(["A/B/C": form(1)])

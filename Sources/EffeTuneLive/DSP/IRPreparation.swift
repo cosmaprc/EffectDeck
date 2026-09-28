@@ -61,7 +61,8 @@ enum ETIRLoadError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .cannotOpen(let why): return "Could not read the file. \(why)"
+        // 理由（AVFoundationの番号つきの文）は画面に出さない。Crosstalkの字と揃える。
+        case .cannotOpen: return "Could not read that file."
         case .emptyFile: return "The file contains no audio."
         case .tooManyChannels(let n): return "This impulse response has \(n) channels; up to 16 are supported."
         case .unsupportedRate(let r):
