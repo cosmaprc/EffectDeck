@@ -3,7 +3,7 @@
 #   actions  ワークフロー（.github/workflows）。建てずに読む（build-mode: none）
 #   c-cpp    自前の C/C++ を本当に建てて、コンパイラが見たとおりに読む（build-mode: manual）。
 #            建てるのは ci.yml の native と同じ Tests/Native（ETPipeline・ETResample・ETPreviewTone・
-#            ETExternalProcessor・ETLinkCodec・Sources/Extension/ETZeroTimeStamp）と、
+#            ETExternalProcessor・ETLinkCodec・Sources/Extension/ETZeroTimeStamp.c）と、
 #            そこに入っていない ETJSFXHost.cpp を 1 本。ETJSFXHost.cpp の include は
 #            Tests/Fuzz/run.sh の jsfxgate と同じで、fuzz の計測は付けず -c だけ（リンクしない）。
 #            Objective-C（LocalLink.m・ETLICEFont.mm・EffeTuneDriver.m）は CodeQL が読めないので入らない。
