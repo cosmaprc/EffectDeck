@@ -75,7 +75,7 @@ const cards = {
   <text x="84" y="342" font-family="${MONO}" font-weight="600" font-size="70" fill="#1f1f1f" letter-spacing="-1">EffectDeck</text>
   <text x="84" y="414" font-family="${MONO}" font-weight="600" font-size="70" fill="#2563eb" letter-spacing="-1">Base</text>
   <text x="86" y="472" font-family="${SANS}" font-size="31" fill="#656d76">The official Discord server</text>
-  <text x="86" y="518" font-family="${SANS}" font-size="24" fill="#656d76">Bugs · Questions · Ideas · fxdb.nemut.ai</text>`),
+  <text x="86" y="518" font-family="${SANS}" font-size="24" fill="#656d76">Questions · Ideas · Chains · fxdB.nemut.ai</text>`),
 };
 
 // sharp will not composite an overlay larger than the base, and the tilted phones run off

@@ -69,7 +69,7 @@ const PREVIEW_BOT = /Twitterbot|facebookexternalhit|Facebot|Discordbot|Slackbot|
 
 function discordCard() {
   const title = "EffectDeck Base";
-  const description = "The official EffectDeck Discord server. Bugs, questions and ideas welcome. 日本語のチャンネルもあります。";
+  const description = "The official EffectDeck Discord server. Questions, ideas and chains welcome.";
   const invite = esc(DISCORD_INVITE);
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
