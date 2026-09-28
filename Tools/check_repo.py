@@ -59,7 +59,7 @@ SCANNED_SUFFIXES = (".md", ".sh", ".py", ".yml", ".yaml", ".swift", ".m", ".mm",
 SKIPPED_PREFIXES = ("Vendor/", "Tests/Fixtures/", "Tests/Tools/", "chain/", "site/package-lock.json",
                     "Tools/check_repo_allow.txt")
 
-SITE_HOSTS_DEFAULT = ("effectdeck.nemut.ai", "fxd.nemut.ai")
+SITE_HOSTS_DEFAULT = ("effectdeck.nemut.ai", "fxd.nemut.ai", "fxdb.nemut.ai")
 OWNED_DOMAIN = "nemut.ai"
 REPO_SLUG = "satomasahiro2005/EffectDeck"
 URL = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?(?:/[^\s\"'<>()\\`]*)?")
@@ -388,7 +388,7 @@ def site_routes(repo):
     hosts = SITE_HOSTS_DEFAULT
     if repo.exists("site/src/links.js"):
         links = repo.read("site/src/links.js")
-        found = tuple(re.findall(r'export const (?:DECK|LINK)_HOST\s*=\s*"([^"]+)"', links))
+        found = tuple(re.findall(r'export const (?:DECK|LINK|DISCORD)_HOST\s*=\s*"([^"]+)"', links))
         if found:
             hosts = found
     return routes, hosts
