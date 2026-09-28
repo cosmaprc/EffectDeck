@@ -309,9 +309,12 @@ struct EffectPickerView: View {
                             Button("From Clipboard", systemImage: "doc.on.clipboard") {
                                 importClipboard()
                             }
-                            Divider()
-                            Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
-                                openURL(Self.writeJSFX)
+                            // 中国本土の店では出さない（ETStorefrontGate）。
+                            if ETStorefrontGate.shared.allowsChatGPT {
+                                Divider()
+                                Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
+                                    openURL(Self.writeJSFX)
+                                }
                             }
                         } label: {
                             Label("Import JSFX", systemImage: "square.and.arrow.down")
@@ -481,8 +484,10 @@ struct EffectPickerView: View {
                         Button("Import JSFX", systemImage: "square.and.arrow.down") {
                             importingJSFX = true
                         }
-                        Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
-                            openURL(Self.writeJSFX)
+                        if ETStorefrontGate.shared.allowsChatGPT {
+                            Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
+                                openURL(Self.writeJSFX)
+                            }
                         }
                     }
                 }
@@ -499,8 +504,10 @@ struct EffectPickerView: View {
                                 // **書かせる道があることを、一覧の頭で見せる。**
                                 // JSFXは1枚のテキストなので、ChatGPTにJSFX.mdを
                                 // 読ませれば通るものが返ってくる。説明は足さず、札だけ置く。
-                                Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
-                                    openURL(Self.writeJSFX)
+                                if ETStorefrontGate.shared.allowsChatGPT {
+                                    Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
+                                        openURL(Self.writeJSFX)
+                                    }
                                 }
                             }
                             ForEach(pluginVendors, id: \.self) { vendor in

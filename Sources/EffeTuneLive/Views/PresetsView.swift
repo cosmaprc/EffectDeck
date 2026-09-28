@@ -692,10 +692,13 @@ struct PresetsView: View {
             }
             // **組ませる口と戻す口を並べる。**ChatGPTにCHAIN.mdを読ませて鎖を組ませ、
             // 返ってきたものはすぐ下のImport from clipboardで入れる。説明は足さず、札だけ置く。
-            Button {
-                openURL(EffectPickerView.buildChain)
-            } label: {
-                Label("Build a chain with ChatGPT", systemImage: "sparkles")
+            // 中国本土の店では出さない（ETStorefrontGate）。
+            if ETStorefrontGate.shared.allowsChatGPT {
+                Button {
+                    openURL(EffectPickerView.buildChain)
+                } label: {
+                    Label("Build a chain with ChatGPT", systemImage: "sparkles")
+                }
             }
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、

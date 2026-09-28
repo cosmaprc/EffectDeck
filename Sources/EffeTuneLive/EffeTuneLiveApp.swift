@@ -29,6 +29,8 @@ struct EffeTuneLiveApp: App {
     init() {
         CloudMirror.onChainRestored = { EffeTuneDSP.shared.adoptSeededChain() }
         CloudMirror.seedIfEmpty()
+        // どの国の店から入れたか。中国本土では ChatGPT の入口を隠す（ETStorefrontGate）。
+        ETStorefrontGate.shared.start()
     }
 
     var body: some Scene {
