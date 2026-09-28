@@ -6,8 +6,10 @@
 #                Tools/*.test.mjs（ファイルがあれば）
 #   native       Tests/Native（C）。gcc と clang × ASan+UBSan / TSan（TSan は ctest -L tsan だけ）
 #   linux-swift  Logic バンドルのうち Foundation だけのもの（Tests/Linux/run.sh）。素と ASan
+#   fuzz         外から来る字を読むコードの libFuzzer（Tests/Fuzz/run.sh）。的ごとに 20 秒だけ
 #   generated    setup.sh と Tools/golden を回し直して、追跡している生成物が 1 バイトも変わらないこと
-#   macos        iOS 27 のシミュレータで Logic の単体テスト（logic）と、拡張を外したアプリの build（sim-build）
+#   macos        iOS 27 のシミュレータで Logic の単体テスト（logic）と、拡張を外したアプリの build（sim-build）。
+#                logic は予定外の XCTSkip（.github/scripts/allowed_skips.txt に無いもの）でも落とす
 #
 # 上流の DSP の ctest（パッチを当てたもの）は重いので dsp.yml に分けてある。
 #
@@ -16,6 +18,8 @@
 # ラベルの出どころは https://github.com/actions/runner-images/issues/14404 （GA で名前が変わりうる）。
 # runs-on には env を書けないので、ラベルは macos ジョブの runs-on の 1 箇所だけに置いてある。
 # 入れ替えるときはそこと、すぐ下の macos ジョブの env（XCODE_APP・SIM_NAME・SIM_OS）を合わせて直す。
+# canary.yml（毎晩、いちばん新しい Xcode で同じ 2 つを回す）も同じラベルと env（STABLE_XCODE_APP・
+# SIM_NAME・XCODEGEN_*）と build の段を写して持っているので、一緒に直す。
 # プレビューの image は予告なく変わるので、Xcode は xcode-select で固定し、iOS 27 の SDK が
 # 無ければその場で止める。
 #
@@ -344,6 +348,7 @@ jobs:
           xcrun simctl bootstatus "$udid" -b
       - name: Logic の単体テスト
         if: matrix.task == 'logic'
+        id: logic
         env:
           UDID: ${{ steps.sim.outputs.udid }}
         # JSFX の締め切り・競合の試験は 3 vCPU の runner で揺れることがあるので 1 回だけ取り直す
@@ -359,6 +364,13 @@ jobs:
             -resultBundlePath build/Logic.xcresult \
             CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
             2>&1 | tee build/logic.log | xcbeautify --renderer github-actions
+      # 「緑」が予定の試験を走らせた緑であること。XCTSkip で飛んだ試験が
+      # .github/scripts/allowed_skips.txt に無い、または 1 本も走っていなければ落とす。
+      # 試験の段が落ちた回にも走らせて飛んだものを並べる（この段が通っても前の段の失敗は消えない）。
+      # 試験の段まで来なかった回（シミュレータを起こせない等）は xcresult が無いので走らせない。
+      - name: 予定外の skip が無いこと（xcresult）
+        if: ${{ !cancelled() && matrix.task == 'logic' && steps.logic.outcome != 'skipped' }}
+        run: python3 .github/scripts/check_xcresult_skips.py --xcresult build/Logic.xcresult
 
       - name: シミュレータ用の仕様を組む（拡張を外す）
         if: matrix.task == 'sim-build'
@@ -394,4 +406,60 @@ jobs:
   # ---- 統合で足す枠 ----
   # P-ReleaseCheck: 独立したジョブが要るならここへ。submodule が要らなければ checks、
   #                 上流の版が要るなら generated に段を足すほうが速い（上の印の場所）。
-  # P-Fuzz:         PR ごとの短い fuzz はここへ（数十秒で打ち切る）。長い回は dsp.yml の nightly へ。
+
+  # 外から来る字を読むコードを libFuzzer で叩く（Tests/Fuzz/run.sh。的の一覧はその頭）。的ごとに 20 秒だけ。
+  # --target all なので、run.sh に足した的はここを直さずに入る。
+  # 長い回は dsp.yml の fuzz-long（毎晩）。その回が育てた corpus を戻して続きから回す（ここでは残さない）。
+  # 落ちたら artifact の fuzz に、落ちた入力（build/fuzz/ci/<的>/crash-* など）とログが残る。手元では
+  # bash Tests/Fuzz/run.sh --target <的> --repro <入力> で 1 度だけ通して再現する。
+  fuzz:
+    runs-on: ubuntu-24.04
+    # release（WMO）+ ASan で建てるのと、的ごとの種の書き出しと 20 秒。
+    # （2026-09 に WSL の 8 コアで測って、的 10 個（jsfxexec の ysfx 31 本を建てるのを含む）を
+    # 8 秒ずつで全体 2 分半。4 vCPU の runner で 20 秒ずつなら 10 分に収まる見込み）
+    timeout-minutes: 30
+    # linux-swift と同じツールチェーン。-sanitize=fuzzer の libFuzzer も、jsfxgate を建てる clang++ も入っている。
+    container: swift:6.4.0-noble
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # make_package.py が使う。swift の image には入っていない。
+      - name: python3
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends python3 >/dev/null
+          fi
+          python3 --version
+      - uses: actions/checkout@v7
+      # jsfxgate（C++ の門）は ysfx の include/ と WDL の宣言だけ読む。jsfxexec は ysfx の源を建てるが、
+      # run.sh が写しを作って Patches/ysfx-effectdeck-ios.diff を git apply で当てるので setup.sh は要らない
+      # （入れ子の submodule の dr_libs などは使わない）。Swift の的は Vendor を読まない。
+      - name: submodule（Vendor/ysfx）
+        run: |
+          # checkout した木の持ち主はコンテナの外の利用者で、コンテナの root の git は持ち主の違いで断る。
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --depth 1 Vendor/ysfx
+          git submodule status Vendor/ysfx
+      # 鍵は回ごとに違う（dsp.yml の fuzz-long が残す）。頭で引いて一番新しいものを戻す。無くても回る。
+      # 置き場は fuzz-long と同じ ~/.cache/effectdeck-fuzz/ci/corpus（--name ci。path の書き方が違うと別のキャッシュになる）。
+      - name: 育った corpus を戻す（dsp.yml の fuzz-long）
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/effectdeck-fuzz/ci/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: fuzz（Tests/Fuzz/run.sh、的ごとに 20 秒）
+        run: |
+          echo "戻した corpus: $(find ~/.cache/effectdeck-fuzz/ci/corpus -type f 2>/dev/null | wc -l) 個"
+          FUZZ_JOBS="$(nproc)" bash Tests/Fuzz/run.sh --name ci --target all --time 20
+      - name: 落ちた入力とログを残す
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz
+          path: |
+            build/fuzz/
+            build/fuzz-*.log
+          retention-days: 14
