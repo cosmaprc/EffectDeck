@@ -112,6 +112,11 @@ async function deck(url) {
       return privacyPage();
     case "/privacy.html":
       return redirect(url, "/privacy");
+    // 探す側への案内。共有の鎖（/?p=）と JSFX（/j）は入れない（noindex）。
+    case "/robots.txt":
+      return new Response(ROBOTS_TXT, { headers: textHeaders("text/plain; charset=utf-8") });
+    case "/sitemap.xml":
+      return new Response(SITEMAP_XML, { headers: textHeaders("application/xml; charset=utf-8") });
     case "/llms.txt":
       return new Response(LLMS_TXT, {
         headers: {
@@ -134,6 +139,26 @@ async function deck(url) {
   const shot = /^\/assets\/shot-([a-z]+)\.webp$/.exec(path);
   if (shot && Object.hasOwn(SHOT_BYTES, shot[1])) return asset(SHOT_BYTES[shot[1]], "image/webp");
   return notFound();
+}
+
+const ROBOTS_TXT = `User-agent: *
+Allow: /
+Sitemap: ${ORIGIN}/sitemap.xml
+`;
+
+// 載せるのは公式のページだけ。共有の鎖や JSFX のページは人ごとに違うので入れない。
+const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${["/", "/write", "/privacy"].map((p) => `  <url><loc>${ORIGIN}${p}</loc></url>`).join("\n")}
+</urlset>
+`;
+
+function textHeaders(type) {
+  return {
+    "content-type": type,
+    "cache-control": "public, max-age=3600",
+    "x-content-type-options": "nosniff",
+  };
 }
 
 function redirect(url, path) {
@@ -272,7 +297,7 @@ const ldScript = (data) =>
 
 async function page({
   title, body, status = 200, script = null, banner = null,
-  description = TEXT.description, canonical = null, width = "", ld = null,
+  description = TEXT.description, canonical = null, width = "", ld = null, noindex = false,
 }) {
   const t = TEXT;
   const bannerContent = banner ? bannerPrefix + banner : `app-id=${APP_STORE_ID}`;
@@ -286,7 +311,8 @@ async function page({
 <meta name="apple-itunes-app" content="${esc(bannerContent)}">
 ${script ? `<script>${script}</script>` : ""}
 <meta name="referrer" content="no-referrer">
-${canonical ? `<link rel="canonical" href="${esc(canonical)}">\n` : ""}<meta property="og:type" content="website">
+${noindex ? `<meta name="robots" content="noindex, follow">
+` : ""}${canonical ? `<link rel="canonical" href="${esc(canonical)}">\n` : ""}<meta property="og:type" content="website">
 <meta property="og:site_name" content="EffectDeck">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="${esc(title)}">
@@ -333,6 +359,7 @@ ${body}
         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
+      ...(noindex ? { "x-robots-tag": "noindex, follow" } : {}),
     },
   });
 }
@@ -433,7 +460,7 @@ function chainPage(url) {
 <p>${t.unreadable}</p>
 <div class="actions">${badge()}</div>`;
   }
-  return page({ title: `${t.chainTitle} — EffectDeck`, body, banner, description });
+  return page({ noindex: true, title: `${t.chainTitle} — EffectDeck`, body, banner, description });
 }
 
 // MARK: - Copy
@@ -490,7 +517,7 @@ function jsfxPage() {
 <p>${t.unreadable}</p>
 <div class="actions">${badge()}</div>
 </div>`;
-  return page({
+  return page({ noindex: true,
     title: "JSFX — EffectDeck", body, script: jsfxScript(t), width: "code",
     description: "A JSFX script shared from EffectDeck.",
   });

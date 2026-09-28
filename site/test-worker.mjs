@@ -380,6 +380,27 @@ try {
     }
     assert.equal((await get(DECK, "/", { method: "POST" })).status, 405);
   });
+
+  await test("robots.txt and sitemap list only the official pages; share pages are noindex", async () => {
+    const robots = await get(DECK, "/robots.txt");
+    assert.equal(robots.status, 200);
+    assert.match(robots.body, /^User-agent: \*\nAllow: \/\nSitemap: https:\/\/effectdeck\.nemut\.ai\/sitemap\.xml\n$/);
+    const map = await get(DECK, "/sitemap.xml");
+    assert.equal(map.status, 200);
+    assert.match(map.headers.get("content-type"), /^application\/xml/);
+    assert.deepEqual([...map.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]),
+      ["https://effectdeck.nemut.ai/", "https://effectdeck.nemut.ai/write", "https://effectdeck.nemut.ai/privacy"]);
+    for (const path of [`/?p=${p}`, "/j"]) {
+      const res = await get(DECK, path);
+      assert.equal(res.headers.get("x-robots-tag"), "noindex, follow", path);
+      assert.ok(res.body.includes('<meta name="robots" content="noindex, follow">'), path);
+    }
+    for (const path of ["/", "/write", "/privacy"]) {
+      const res = await get(DECK, path);
+      assert.equal(res.headers.get("x-robots-tag"), null, path);
+      assert.ok(!res.body.includes('name="robots"'), path);
+    }
+  });
 } finally {
   await mf.dispose();
 }

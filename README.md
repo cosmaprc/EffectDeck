@@ -8,6 +8,8 @@
 
 **Effects for any player on your phone**
 
+Website: [effectdeck.nemut.ai](https://effectdeck.nemut.ai/)
+
 [![Release](https://img.shields.io/github/v/release/satomasahiro2005/EffectDeck?label=release&color=3B82F6)](https://github.com/satomasahiro2005/EffectDeck/releases)
 [![iOS](https://img.shields.io/badge/iOS-27%2B-000000?logo=apple&logoColor=white)](#building)
 ![EffeTune DSP](https://img.shields.io/badge/EffeTune%20DSP-0.11.0-3B82F6)
