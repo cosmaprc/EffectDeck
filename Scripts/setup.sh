@@ -44,9 +44,9 @@ if [ -n "$YSFX_ACTUAL" ] && [ "$YSFX_ACTUAL" != "$YSFX_REV" ]; then
 fi
 # **目印はこの版のパッチが初めて足すものにする。**前の版にもある印だと、
 # 前の版が当たった木（一度でも build.sh を通した Mac）を「当たっている」と
-# 見て黙って飛ばし、新しく足した分（@serialize の上限など）が建たない。
-# パッチを変えたら、目印もその版で足したものに替えること。
-if grep -q "k_effectdeck_serialize_limit" Vendor/ysfx/sources/ysfx_api_file.cpp 2>/dev/null; then
+# 見て黙って飛ばし、新しく足した分（gfx の座標の切り詰めなど）が建たない。
+# パッチを変えたら、目印もその版で足したものに替えること（Tests/Fuzz/run.sh も同じ目印を見る）。
+if grep -q "effectdeck_gfx_segment" Vendor/ysfx/sources/ysfx_api_gfx_lice.hpp 2>/dev/null; then
   echo "当たっている: ysfx-effectdeck-ios.diff"
   YSFX_PATCHED=1
 else

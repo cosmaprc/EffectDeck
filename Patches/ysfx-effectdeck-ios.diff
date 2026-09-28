@@ -245,7 +245,7 @@ index 7a115e7..954e4de 100644
  
      NSEEL_addfunc_retptr("gfx_lineto", 3, NSEEL_PProc_THIS, &ysfx_api_gfx_lineto);
 diff --git a/sources/ysfx_api_gfx_lice.hpp b/sources/ysfx_api_gfx_lice.hpp
-index 94252e1..a262ee9 100644
+index 94252e1..827bbe3 100644
 --- a/sources/ysfx_api_gfx_lice.hpp
 +++ b/sources/ysfx_api_gfx_lice.hpp
 @@ -36,6 +36,7 @@
@@ -271,21 +271,69 @@ index 94252e1..a262ee9 100644
  static void LICE__DestroyFont(LICE_IFont *bm)
  {
    delete bm;
-@@ -109,12 +110,33 @@ static bool LICE__resize(LICE_IBitmap *bm, int w, int h)
+@@ -109,12 +110,81 @@ static bool LICE__resize(LICE_IBitmap *bm, int w, int h)
    return bm->resize(w,h);
  }
  
 +// **座標は int にする前に ±2^28 へ収める。** 範囲外の double から int への変換は未定義で、
 +// arm64 では INT_MIN/INT_MAX に張り付く。LICE はその値の差や +1 を int のまま取るので
 +// 符号付きの桁あふれになり、範囲の検査が最適化で消えて画面の外を読み書きする
-+// (gfx_blurto → LICE_Blur、gfx_triangle → FillClippedTrapezoid)。
++// (gfx_blurto → LICE_Blur、gfx_triangle → FillClippedTrapezoid、回した gfx_blit → LICE_RotatedBlit)。
 +// 画像は 2048 px までなので、この幅の中なら切り取られる結果は同じ。NaN は今までどおり 0。
++// **スクリプトの値を画素の座標・大きさにする口は全部これを通す**(線・矩形・円・弧・三角形・
++// blit の元と先・文字の位置)。±2^28 の中の値は何も変えない。
 +static const EEL_F k_effectdeck_gfx_coord_limit = (EEL_F)(1<<28);
 +static EEL_F effectdeck_gfx_coord(EEL_F v)
 +{
 +  if (v != v) return 0.0;
 +  return v < -k_effectdeck_gfx_coord_limit ? -k_effectdeck_gfx_coord_limit :
 +         v > k_effectdeck_gfx_coord_limit ? k_effectdeck_gfx_coord_limit : v;
++}
++
++// 位置と幅(矩形、blit の元と先)は両端を収める。幅だけを収めると、画面の外から大きく
++// はみ出した矩形が画面に掛からなくなる。両端とも範囲の中なら何もしない(足して引くと
++// 丸めで幅が変わりうる)。
++static void effectdeck_gfx_span(EEL_F *pos, EEL_F *len)
++{
++  if (fabs(*pos) <= k_effectdeck_gfx_coord_limit && fabs(*pos + *len) <= k_effectdeck_gfx_coord_limit) return;
++  const EEL_F p = *pos == *pos ? *pos : 0.0, l = *len == *len ? *len : 0.0;
++  *pos = effectdeck_gfx_coord(p);
++  *len = effectdeck_gfx_coord(p + l) - *pos;
++}
++
++// 線分は端点を別々に収めると向きが変わる。箱の外の端点は、線分に沿って箱の縁まで寄せる
++// (Liang-Barsky)。箱の中の端点から測る(外の大きな値から測ると桁が落ちる)。箱は ±(2^30-1)
++// (LICE_ClipLine が取る端点の差が int に収まる幅)で、両端とも箱の中なら何もしない。
++// 箱に掛からない線分は画面にも掛からないので false。
++static bool effectdeck_gfx_segment(EEL_F *x1, EEL_F *y1, EEL_F *x2, EEL_F *y2)
++{
++  const EEL_F lim = (EEL_F)((1<<30)-1);
++  EEL_F *v[4] = { x1, y1, x2, y2 };
++  for (int i = 0; i < 4; i ++)
++  {
++    if (*v[i] != *v[i]) *v[i] = 0.0; // NaN は今までどおり 0
++    else if (*v[i] > 1e300) *v[i] = 1e300; // ±Inf でも差を有限にする
++    else if (*v[i] < -1e300) *v[i] = -1e300;
++  }
++  const bool in1 = fabs(*x1) <= lim && fabs(*y1) <= lim, in2 = fabs(*x2) <= lim && fabs(*y2) <= lim;
++  if (in1 && in2) return true;
++  const bool from2 = !in1 && in2;
++  const EEL_F ox = from2 ? *x2 : *x1, oy = from2 ? *y2 : *y1;
++  const EEL_F dx = (from2 ? *x1 : *x2) - ox, dy = (from2 ? *y1 : *y2) - oy;
++  const EEL_F p[4] = { -dx, dx, -dy, dy }, q[4] = { ox + lim, lim - ox, oy + lim, lim - oy };
++  EEL_F t0 = 0.0, t1 = 1.0;
++  for (int i = 0; i < 4; i ++)
++  {
++    if (p[i] == 0.0) { if (q[i] < 0.0) return false; }
++    else if (p[i] < 0.0) { const EEL_F t = q[i] / p[i]; if (t > t0) t0 = t; }
++    else { const EEL_F t = q[i] / p[i]; if (t < t1) t1 = t; }
++  }
++  if (t0 > t1) return false;
++  EEL_F e[4] = { ox + t0*dx, oy + t0*dy, ox + t1*dx, oy + t1*dy };
++  for (int i = 0; i < 4; i ++) e[i] = e[i] < -lim ? -lim : e[i] > lim ? lim : e[i]; // 丸めの分
++  *x1 = from2 ? e[2] : e[0]; *y1 = from2 ? e[3] : e[1];
++  *x2 = from2 ? e[0] : e[2]; *y2 = from2 ? e[1] : e[3];
++  return true;
 +}
 +
  static LICE_IBitmap *__LICE_CreateBitmap(int mode, int w, int h)
@@ -306,7 +354,7 @@ index 94252e1..a262ee9 100644
  class eel_lice_state
  {
  public:
-@@ -123,8 +145,12 @@ public:
+@@ -123,8 +193,12 @@ public:
    ~eel_lice_state();
  
    LICE_IBitmap *m_framebuffer, *m_framebuffer_extra;
@@ -319,7 +367,7 @@ index 94252e1..a262ee9 100644
    struct gfxFontStruct {
      LICE_IFont *font;
      char last_fontname[128];
-@@ -143,7 +169,7 @@ public:
+@@ -143,7 +217,7 @@ public:
    };
  
    int m_gfx_font_active; // -1 for default, otherwise index into gfx_fonts (NOTE: this differs from the exposed API, which defines 0 as default, 1-n)
@@ -328,7 +376,7 @@ index 94252e1..a262ee9 100644
  
    LICE_IBitmap *GetImageForIndex(EEL_F idx, const char *callername) 
    { 
-@@ -222,6 +248,12 @@ eel_lice_state::eel_lice_state(NSEEL_VMCTX vm, void *ctx, int image_slots, int f
+@@ -222,6 +296,12 @@ eel_lice_state::eel_lice_state(NSEEL_VMCTX vm, void *ctx, int image_slots, int f
    m_gfx_images.Resize(image_slots);
    memset(m_gfx_images.Get(),0,m_gfx_images.GetSize()*sizeof(m_gfx_images.Get()[0]));
    m_framebuffer=m_framebuffer_extra=0;
@@ -341,7 +389,7 @@ index 94252e1..a262ee9 100644
    m_framebuffer_dirty=0;
  
    m_gfx_r = NSEEL_VM_regvar(vm,"gfx_r");
-@@ -250,6 +282,9 @@ eel_lice_state::eel_lice_state(NSEEL_VMCTX vm, void *ctx, int image_slots, int f
+@@ -250,6 +330,9 @@ eel_lice_state::eel_lice_state(NSEEL_VMCTX vm, void *ctx, int image_slots, int f
  }
  eel_lice_state::~eel_lice_state()
  {
@@ -351,7 +399,7 @@ index 94252e1..a262ee9 100644
    if (LICE_FUNCTION_VALID(LICE__Destroy)) 
    {
      LICE__Destroy(m_framebuffer_extra);
-@@ -262,6 +297,7 @@ eel_lice_state::~eel_lice_state()
+@@ -262,6 +345,7 @@ eel_lice_state::~eel_lice_state()
    }
    if (LICE_FUNCTION_VALID(LICE__DestroyFont))
    {
@@ -359,7 +407,7 @@ index 94252e1..a262ee9 100644
      int x;
      for (x=0;x<m_gfx_fonts.GetSize();x++)
      {
-@@ -386,9 +422,13 @@ static EEL_F NSEEL_CGEN_CALL ysfx_api_gfx_transformblit(void *opaque, INT_PTR np
+@@ -386,9 +470,13 @@ static EEL_F NSEEL_CGEN_CALL ysfx_api_gfx_transformblit(void *opaque, INT_PTR np
    if (ctx) 
    {
  #ifndef EEL_LICE_NO_RAM
@@ -376,7 +424,7 @@ index 94252e1..a262ee9 100644
      const int sz = divw*divh*2;
  
  #ifdef EEL_LICE_RAMFUNC
-@@ -398,6 +438,7 @@ static EEL_F NSEEL_CGEN_CALL ysfx_api_gfx_transformblit(void *opaque, INT_PTR np
+@@ -398,6 +486,7 @@ static EEL_F NSEEL_CGEN_CALL ysfx_api_gfx_transformblit(void *opaque, INT_PTR np
      EEL_F **blocks = ctx->m_vmref ? ((compileContext*)ctx->m_vmref)->ram_state->blocks : 0;
      if (!blocks || np < 8) return 0.0;
  
@@ -384,7 +432,30 @@ index 94252e1..a262ee9 100644
      const int addr1= (int) (parms[7][0]+0.5);
      EEL_F *d=__NSEEL_RAMAlloc(blocks,addr1);
      if (sz>NSEEL_RAM_ITEMSPERBLOCK)
-@@ -658,8 +699,10 @@ void eel_lice_state::gfx_triangle(EEL_F** parms, int np)
+@@ -422,7 +511,8 @@ static EEL_F NSEEL_CGEN_CALL ysfx_api_gfx_circle(void *opaque, INT_PTR np, EEL_F
+   bool aa = true, fill = false;
+   if (np>3) fill = parms[3][0] > 0.5;
+   if (np>4) aa = parms[4][0] > 0.5;
+-  if (ctx) ctx->gfx_circle((float)parms[0][0], (float)parms[1][0], (float)parms[2][0], fill, aa);
++  if (ctx) ctx->gfx_circle((float)effectdeck_gfx_coord(parms[0][0]), (float)effectdeck_gfx_coord(parms[1][0]),
++                           (float)effectdeck_gfx_coord(parms[2][0]), fill, aa);
+   return 0.0;
+ }
+ 
+@@ -619,8 +709,10 @@ void eel_lice_state::gfx_lineto(EEL_F xpos, EEL_F ypos, EEL_F aaflag)
+   LICE_IBitmap *dest = GetImageForIndex(*m_gfx_dest,"gfx_lineto");
+   if (!dest) return;
+ 
+-  int x1=(int)floor(xpos),y1=(int)floor(ypos),x2=(int)floor(*m_gfx_x), y2=(int)floor(*m_gfx_y);
+-  if (LICE_FUNCTION_VALID(LICE__GetWidth) && LICE_FUNCTION_VALID(LICE__GetHeight) && LICE_FUNCTION_VALID(LICE_Line) && 
++  EEL_F fx1=xpos, fy1=ypos, fx2=*m_gfx_x, fy2=*m_gfx_y;
++  const bool inbox = effectdeck_gfx_segment(&fx1,&fy1,&fx2,&fy2);
++  int x1=(int)floor(fx1),y1=(int)floor(fy1),x2=(int)floor(fx2), y2=(int)floor(fy2);
++  if (inbox && LICE_FUNCTION_VALID(LICE__GetWidth) && LICE_FUNCTION_VALID(LICE__GetHeight) && LICE_FUNCTION_VALID(LICE_Line) &&
+       LICE_FUNCTION_VALID(LICE_ClipLine) && 
+       LICE_ClipLine(&x1,&y1,&x2,&y2,0,0,LICE__GetWidth(dest),LICE__GetHeight(dest))) 
+   {
+@@ -658,8 +750,10 @@ void eel_lice_state::gfx_triangle(EEL_F** parms, int np)
      {        
        if (!LICE_FUNCTION_VALID(LICE_FillTriangle)) return;
  
@@ -397,7 +468,7 @@ index 94252e1..a262ee9 100644
      }
      else
      {
-@@ -671,8 +714,8 @@ void eel_lice_state::gfx_triangle(EEL_F** parms, int np)
+@@ -671,8 +765,8 @@ void eel_lice_state::gfx_triangle(EEL_F** parms, int np)
        int x[maxpt], y[maxpt];
        for (i=0; i < n; i++)
        {
@@ -408,7 +479,81 @@ index 94252e1..a262ee9 100644
        }
  
        LICE_FillConvexPolygon(dest, x, y, n, getCurColor(), (float)*m_gfx_a, getCurMode());
-@@ -857,13 +900,26 @@ EEL_F eel_lice_state::gfx_setimgdim(int img, EEL_F *w, EEL_F *h)
+@@ -692,6 +786,8 @@ void eel_lice_state::gfx_rectto(EEL_F xpos, EEL_F ypos)
+   if (LICE_FUNCTION_VALID(LICE_FillRect) && x2-x1 > 0.5 && y2-y1 > 0.5)
+   {
+     SetImageDirty(dest);
++    x1=effectdeck_gfx_coord(x1); y1=effectdeck_gfx_coord(y1);
++    x2=effectdeck_gfx_coord(x2); y2=effectdeck_gfx_coord(y2);
+     LICE_FillRect(dest,(int)x1,(int)y1,(int)(x2-x1),(int)(y2-y1),getCurColor(),(float)*m_gfx_a,getCurMode());
+   }
+   *m_gfx_x = xpos;
+@@ -704,8 +800,10 @@ void eel_lice_state::gfx_line(int np, EEL_F **parms)
+   LICE_IBitmap *dest = GetImageForIndex(*m_gfx_dest,"gfx_line");
+   if (!dest) return;
+ 
+-  int x1=(int)floor(parms[0][0]),y1=(int)floor(parms[1][0]),x2=(int)floor(parms[2][0]), y2=(int)floor(parms[3][0]);
+-  if (LICE_FUNCTION_VALID(LICE__GetWidth) && 
++  EEL_F fx1=parms[0][0], fy1=parms[1][0], fx2=parms[2][0], fy2=parms[3][0];
++  const bool inbox = effectdeck_gfx_segment(&fx1,&fy1,&fx2,&fy2);
++  int x1=(int)floor(fx1),y1=(int)floor(fy1),x2=(int)floor(fx2), y2=(int)floor(fy2);
++  if (inbox && LICE_FUNCTION_VALID(LICE__GetWidth) &&
+       LICE_FUNCTION_VALID(LICE__GetHeight) && 
+       LICE_FUNCTION_VALID(LICE_Line) && 
+       LICE_FUNCTION_VALID(LICE_ClipLine) && LICE_ClipLine(&x1,&y1,&x2,&y2,0,0,LICE__GetWidth(dest),LICE__GetHeight(dest))) 
+@@ -720,7 +818,9 @@ void eel_lice_state::gfx_rect(int np, EEL_F **parms)
+   LICE_IBitmap *dest = GetImageForIndex(*m_gfx_dest,"gfx_rect");
+   if (!dest) return;
+ 
+-  int x1=(int)floor(parms[0][0]),y1=(int)floor(parms[1][0]),w=(int)floor(parms[2][0]),h=(int)floor(parms[3][0]);  
++  EEL_F fx=floor(parms[0][0]), fy=floor(parms[1][0]), fw=floor(parms[2][0]), fh=floor(parms[3][0]);
++  effectdeck_gfx_span(&fx,&fw); effectdeck_gfx_span(&fy,&fh);
++  int x1=(int)fx,y1=(int)fy,w=(int)fw,h=(int)fh;
+   int filled=(np < 5 || parms[4][0] > 0.5);
+ 
+   if (LICE_FUNCTION_VALID(LICE_FillRect) && LICE_FUNCTION_VALID(LICE_DrawRect) && w>0 && h>0)
+@@ -741,7 +841,9 @@ void eel_lice_state::gfx_roundrect(int np, EEL_F **parms)
+   if (LICE_FUNCTION_VALID(LICE_RoundRect) && parms[2][0]>0 && parms[3][0]>0)
+   {
+     SetImageDirty(dest);
+-    LICE_RoundRect(dest, (float)parms[0][0], (float)parms[1][0], (float)parms[2][0], (float)parms[3][0], (int)parms[4][0], getCurColor(), (float)*m_gfx_a, getCurMode(), aa);
++    EEL_F fx=parms[0][0], fy=parms[1][0], fw=parms[2][0], fh=parms[3][0];
++    effectdeck_gfx_span(&fx,&fw); effectdeck_gfx_span(&fy,&fh);
++    LICE_RoundRect(dest, (float)fx, (float)fy, (float)fw, (float)fh, (int)effectdeck_gfx_coord(parms[4][0]), getCurColor(), (float)*m_gfx_a, getCurMode(), aa);
+   }
+ }
+ 
+@@ -755,7 +857,8 @@ void eel_lice_state::gfx_arc(int np, EEL_F **parms)
+   if (LICE_FUNCTION_VALID(LICE_Arc))
+   {
+     SetImageDirty(dest);
+-    LICE_Arc(dest, (float)parms[0][0], (float)parms[1][0], (float)parms[2][0], (float)parms[3][0], (float)parms[4][0], getCurColor(), (float)*m_gfx_a, getCurMode(), aa);
++    LICE_Arc(dest, (float)effectdeck_gfx_coord(parms[0][0]), (float)effectdeck_gfx_coord(parms[1][0]),
++             (float)effectdeck_gfx_coord(parms[2][0]), (float)parms[3][0], (float)parms[4][0], getCurColor(), (float)*m_gfx_a, getCurMode(), aa);
+   }
+ }
+ 
+@@ -764,7 +867,9 @@ void eel_lice_state::gfx_grad_or_muladd_rect(int whichmode, int np, EEL_F **parm
+   LICE_IBitmap *dest = GetImageForIndex(*m_gfx_dest,whichmode==0?"gfx_gradrect":"gfx_muladdrect");
+   if (!dest) return;
+ 
+-  const int x1=(int)floor(parms[0][0]),y1=(int)floor(parms[1][0]),w=(int)floor(parms[2][0]), h=(int)floor(parms[3][0]);
++  EEL_F fx=floor(parms[0][0]), fy=floor(parms[1][0]), fw=floor(parms[2][0]), fh=floor(parms[3][0]);
++  effectdeck_gfx_span(&fx,&fw); effectdeck_gfx_span(&fy,&fh);
++  const int x1=(int)fx,y1=(int)fy,w=(int)fw, h=(int)fh;
+ 
+   if (w>0 && h>0)
+   {
+@@ -802,7 +907,7 @@ void eel_lice_state::gfx_setpixel(EEL_F r, EEL_F g, EEL_F b)
+   if (LICE_FUNCTION_VALID(LICE_PutPixel)) 
+   {
+     SetImageDirty(dest);
+-    LICE_PutPixel(dest,(int)*m_gfx_x, (int)*m_gfx_y,LICE_RGBA(red,green,blue,255), (float)*m_gfx_a,getCurMode());
++    LICE_PutPixel(dest,(int)effectdeck_gfx_coord(*m_gfx_x), (int)effectdeck_gfx_coord(*m_gfx_y),LICE_RGBA(red,green,blue,255), (float)*m_gfx_a,getCurMode());
+   }
+ }
+ 
+@@ -857,13 +962,26 @@ EEL_F eel_lice_state::gfx_setimgdim(int img, EEL_F *w, EEL_F *h)
    int use_w = (int)*w;
    int use_h = (int)*h;
    if (use_w<1 || use_h < 1) use_w=use_h=0;
@@ -437,7 +582,7 @@ index 94252e1..a262ee9 100644
      if (!bm) 
      {
        m_gfx_images.Get()[img] = bm = __LICE_CreateBitmap(1,use_w,use_h);
-@@ -873,6 +929,15 @@ EEL_F eel_lice_state::gfx_setimgdim(int img, EEL_F *w, EEL_F *h)
+@@ -873,6 +991,15 @@ EEL_F eel_lice_state::gfx_setimgdim(int img, EEL_F *w, EEL_F *h)
      {
        rv=LICE__resize(bm,use_w,use_h);
      }
@@ -453,7 +598,7 @@ index 94252e1..a262ee9 100644
    }
  
    return rv?1.0:0.0;
-@@ -889,13 +954,17 @@ void eel_lice_state::gfx_blurto(EEL_F x, EEL_F y)
+@@ -889,13 +1016,17 @@ void eel_lice_state::gfx_blurto(EEL_F x, EEL_F y)
  
    SetImageDirty(dest);
    
@@ -478,7 +623,25 @@ index 94252e1..a262ee9 100644
    *m_gfx_x = x;
    *m_gfx_y = y;
  }
-@@ -1006,58 +1075,11 @@ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
+@@ -942,12 +1073,15 @@ void eel_lice_state::gfx_transformblit(EEL_F **parms, int div_w, int div_h, EEL_
+         1.0f,LICE_BLIT_MODE_COPY);      
+     }
+   }
+-  LICE_TransformBlit2(dest,bm,(int)floor(parms[1][0]),(int)floor(parms[2][0]),(int)floor(parms[3][0]),(int)floor(parms[4][0]),tab,div_w,div_h, (float)*m_gfx_a,getCurModeForBlit(isFromFB));
++  EEL_F fx=floor(parms[1][0]), fy=floor(parms[2][0]), fw=floor(parms[3][0]), fh=floor(parms[4][0]);
++  effectdeck_gfx_span(&fx,&fw); effectdeck_gfx_span(&fy,&fh);
++  LICE_TransformBlit2(dest,bm,(int)fx,(int)fy,(int)fw,(int)fh,tab,div_w,div_h, (float)*m_gfx_a,getCurModeForBlit(isFromFB));
+ }
+ 
+ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
+ {
+-  int a = np>0 ? ((int)floor(parms[0][0]))-1 : -1;
++  // 番号も座標と同じく収めてから 1 を引く(-Inf などで INT_MIN - 1 になっていた)。
++  int a = np>0 ? ((int)effectdeck_gfx_coord(floor(parms[0][0])))-1 : -1;
+ 
+   if (a>=0 && a < m_gfx_fonts.GetSize())
+   {
+@@ -1006,58 +1140,11 @@ EEL_F eel_lice_state::gfx_setfont(void *opaque, int np, EEL_F **parms)
          if (!s->font) s->font=LICE_CreateFont();
          if (s->font)
          {
@@ -540,6 +703,106 @@ index 94252e1..a262ee9 100644
          }
        }
      }
+@@ -1118,6 +1205,9 @@ void eel_lice_state::gfx_blitext2(int np, EEL_F **parms, int blitmode)
+   coords[5]=np > 6 ? parms[6][0] : *m_gfx_y;
+   coords[6]=np > 7 ? parms[7][0] : coords[2]*sc;
+   coords[7]=np > 8 ? parms[8][0] : coords[3]*sc;
++  // 元(0-3)と先(4-7)の矩形。LICE は幅を反転したり端を足したりを int のまま行う。
++  effectdeck_gfx_span(&coords[0],&coords[2]); effectdeck_gfx_span(&coords[1],&coords[3]);
++  effectdeck_gfx_span(&coords[4],&coords[6]); effectdeck_gfx_span(&coords[5],&coords[7]);
+  
+   const bool isFromFB = bm == m_framebuffer;
+   SetImageDirty(dest);
+@@ -1156,8 +1246,8 @@ void eel_lice_state::gfx_blitext2(int np, EEL_F **parms, int blitmode)
+     LICE_RotatedBlit(dest,bm,(int)coords[4],(int)coords[5],(int)coords[6],(int)coords[7],
+       (float)coords[0],(float)coords[1],(float)coords[2],(float)coords[3],
+       (float)angle,true, (float)*m_gfx_a,getCurModeForBlit(isFromFB),
+-       np > 9 ? (float)parms[9][0] : 0.0f,
+-       np > 10 ? (float)parms[10][0] : 0.0f);
++       np > 9 ? (float)effectdeck_gfx_coord(parms[9][0]) : 0.0f,
++       np > 10 ? (float)effectdeck_gfx_coord(parms[10][0]) : 0.0f);
+   }
+   else
+   {
+@@ -1179,6 +1269,13 @@ void eel_lice_state::gfx_blitext(EEL_F img, EEL_F *coords, EEL_F angle)
+   LICE_IBitmap *bm=GetImageForIndex(img,"gfx_blitext:src");
+   if (!bm) return;
+   
++  // gfx_blit2 と同じく元と先の矩形・回す中心を収める(写しで。coords は呼ぶ側の表)。
++  EEL_F c[10];
++  memcpy(c,coords,sizeof(c));
++  coords=c;
++  effectdeck_gfx_span(&c[0],&c[2]); effectdeck_gfx_span(&c[1],&c[3]);
++  effectdeck_gfx_span(&c[4],&c[6]); effectdeck_gfx_span(&c[5],&c[7]);
++  c[8]=effectdeck_gfx_coord(c[8]); c[9]=effectdeck_gfx_coord(c[9]);
+   SetImageDirty(dest);
+   const bool isFromFB = bm == m_framebuffer;
+  
+@@ -1230,7 +1327,7 @@ void eel_lice_state::gfx_getpixel(EEL_F *r, EEL_F *g, EEL_F *b)
+   LICE_IBitmap *dest = GetImageForIndex(*m_gfx_dest,"gfx_getpixel");
+   if (!dest) return;
+ 
+-  int ret=LICE_FUNCTION_VALID(LICE_GetPixel)?LICE_GetPixel(dest,(int)*m_gfx_x, (int)*m_gfx_y):0;
++  int ret=LICE_FUNCTION_VALID(LICE_GetPixel)?LICE_GetPixel(dest,(int)effectdeck_gfx_coord(*m_gfx_x), (int)effectdeck_gfx_coord(*m_gfx_y)):0;
+ 
+   *r=LICE_GETR(ret)/255.0;
+   *g=LICE_GETG(ret)/255.0;
+@@ -1258,7 +1355,9 @@ static int __drawTextWithFont(LICE_IBitmap *dest, const RECT *rect, LICE_IFont *
+       int lineh = LICE__DrawText(font,dest,buf,thislen?thislen:1,&r,DT_SINGLELINE|DT_NOPREFIX|DT_CALCRECT);
+       if (!measureOnly)
+       {
+-        r.right += tr.left;
++        // 位置は ±2^28 まで(effectdeck_gfx_coord)。字の幅と行の高さは書体しだいで大きいので
++        // int のまま足さない。
++        r.right = (int)effectdeck_gfx_coord((EEL_F)r.right + tr.left);
+         lineh = LICE__DrawText(font,dest,buf,thislen?thislen:1,&tr,DT_SINGLELINE|DT_NOPREFIX|flags);
+         if (wantYoutput) *wantYoutput = tr.top;
+       }
+@@ -1266,7 +1365,7 @@ static int __drawTextWithFont(LICE_IBitmap *dest, const RECT *rect, LICE_IFont *
+       {
+         if (r.right > maxx) maxx=r.right;
+       }
+-      tr.top += lineh;
++      tr.top = (int)effectdeck_gfx_coord((EEL_F)tr.top + lineh);
+ 
+       buflen -= thislen+1;
+       buf += thislen+1;      
+@@ -1412,14 +1511,14 @@ void eel_lice_state::gfx_drawstr(void *opaque, EEL_F **parms, int nparms, int fo
+     }
+     else
+     {    
+-      RECT r={(int)floor(*m_gfx_x),(int)floor(*m_gfx_y),0,0};
++      RECT r={(int)floor(effectdeck_gfx_coord(*m_gfx_x)),(int)floor(effectdeck_gfx_coord(*m_gfx_y)),0,0};
+       int flags=DT_NOCLIP;
+       if (formatmode == 0 && nparms >= 4)
+       {
+         flags=(int)*parms[1];
+         flags &= (DT_CENTER|DT_RIGHT|DT_VCENTER|DT_BOTTOM|DT_NOCLIP);
+-        r.right=(int)*parms[2];
+-        r.bottom=(int)*parms[3];
++        r.right=(int)effectdeck_gfx_coord(*parms[2]);
++        r.bottom=(int)effectdeck_gfx_coord(*parms[3]);
+       }
+       *m_gfx_x=__drawTextWithFont(dest,&r,GetActiveFont(),s,s_len,
+         getCurColor(),getCurMode(),(float)*m_gfx_a,flags,m_gfx_y,NULL);
+@@ -1440,7 +1539,7 @@ void eel_lice_state::gfx_drawchar(EEL_F ch)
+   char buf[32];
+   const int buflen = WDL_MakeUTFChar(buf, a, sizeof(buf));
+ 
+-  RECT r={(int)floor(*m_gfx_x),(int)floor(*m_gfx_y),0,0};
++  RECT r={(int)floor(effectdeck_gfx_coord(*m_gfx_x)),(int)floor(effectdeck_gfx_coord(*m_gfx_y)),0,0};
+   *m_gfx_x = __drawTextWithFont(dest,&r,
+                          GetActiveFont(),buf,buflen,
+                          getCurColor(),getCurMode(),(float)*m_gfx_a,DT_NOCLIP,NULL,NULL);
+@@ -1461,7 +1560,7 @@ void eel_lice_state::gfx_drawnumber(EEL_F n, EEL_F ndigits)
+   else if (a > 16) a=16;
+   snprintf(buf,sizeof(buf),"%.*f",a,n);
+ 
+-  RECT r={(int)floor(*m_gfx_x),(int)floor(*m_gfx_y),0,0};
++  RECT r={(int)floor(effectdeck_gfx_coord(*m_gfx_x)),(int)floor(effectdeck_gfx_coord(*m_gfx_y)),0,0};
+   *m_gfx_x = __drawTextWithFont(dest,&r,
+                            GetActiveFont(),buf,(int)strlen(buf),
+                            getCurColor(),getCurMode(),(float)*m_gfx_a,DT_NOCLIP,NULL,NULL);
 diff --git a/sources/ysfx_api_reaper.cpp b/sources/ysfx_api_reaper.cpp
 index d29d81d..e2528d7 100644
 --- a/sources/ysfx_api_reaper.cpp
@@ -641,8 +904,113 @@ index a2bd76b..208f664 100644
      in_str.append(pp_str.Get(), pp_str.GetLength());
      return true;
  }
+diff --git a/thirdparty/WDL/source/WDL/eel2/eel_fft.h b/thirdparty/WDL/source/WDL/eel2/eel_fft.h
+index 6b64d03..0bb274e 100644
+--- a/thirdparty/WDL/source/WDL/eel2/eel_fft.h
++++ b/thirdparty/WDL/source/WDL/eel2/eel_fft.h
+@@ -287,7 +287,9 @@ static EEL_F * fft_func(int dir, EEL_F **blocks, EEL_F *start, EEL_F *length)
+ 
+ 
+ 	// check to make sure we don't cross a boundary
+-	if (offs/NSEEL_RAM_ITEMSPERBLOCK != (offs + (ilen<<itemSizeShift) - 1)/NSEEL_RAM_ITEMSPERBLOCK) 
++	// 終わりの番地は 64bit で出す(offs が INT_MAX 近くだと int のまま足して溢れる)。結果は同じで、
++	// 溢れていた番地はブロックをまたぐので今までどおり何もしない。
++	if (offs/NSEEL_RAM_ITEMSPERBLOCK != (offs + (WDL_INT64)(ilen<<itemSizeShift) - 1)/NSEEL_RAM_ITEMSPERBLOCK)
+ 	{ 
+ 		return start; 
+ 	}
+@@ -337,7 +339,10 @@ static EEL_F * NSEEL_CGEN_CALL eel_convolve_c(EEL_F **blocks,EEL_F *dest, EEL_F
+ {
+ 	const int dest_offs = (int)(*dest + 0.0001);
+ 	const int src_offs = (int)(*src + 0.0001);
+-  const int len = ((int)(*lenptr + 0.0001)) * 2;
++  // 2 倍する前に範囲を見る。2^30 以上や大きな負の数を int のまま 2 倍すると溢れる(INT_MIN 近くは
++  // 折り返して小さな正の数になり、掛け算をしていた)。範囲の外は下の len < 1 で何もしない。
++  const int len_in = (int)(*lenptr + 0.0001);
++  const int len = len_in < 1 || len_in > NSEEL_RAM_ITEMSPERBLOCK/2 ? 0 : len_in * 2;
+   EEL_F *srcptr,*destptr;
+ 
+   if (len < 1 || len > NSEEL_RAM_ITEMSPERBLOCK || dest_offs < 0 || src_offs < 0 || 
+diff --git a/thirdparty/WDL/source/WDL/eel2/eel_mdct.h b/thirdparty/WDL/source/WDL/eel2/eel_mdct.h
+index 0800fc3..58ab3ec 100644
+--- a/thirdparty/WDL/source/WDL/eel2/eel_mdct.h
++++ b/thirdparty/WDL/source/WDL/eel2/eel_mdct.h
+@@ -712,7 +712,8 @@ static EEL_F * NSEEL_CGEN_CALL mdct_func(int dir, EEL_F **blocks, EEL_F *start,
+ 
+ 
+   // check to make sure we don't cross a boundary
+-  if (offs / NSEEL_RAM_ITEMSPERBLOCK != (offs + ilen * 2 - 1) / NSEEL_RAM_ITEMSPERBLOCK)
++  // fft_func と同じく終わりの番地は 64bit で出す(offs が INT_MAX 近くだと int のまま足して溢れる)。
++  if (offs / NSEEL_RAM_ITEMSPERBLOCK != (offs + (WDL_INT64)ilen * 2 - 1) / NSEEL_RAM_ITEMSPERBLOCK)
+   {
+     return start;
+   }
+diff --git a/thirdparty/WDL/source/WDL/eel2/eel_strings.h b/thirdparty/WDL/source/WDL/eel2/eel_strings.h
+index 7991721..8939246 100644
+--- a/thirdparty/WDL/source/WDL/eel2/eel_strings.h
++++ b/thirdparty/WDL/source/WDL/eel2/eel_strings.h
+@@ -198,6 +198,9 @@ class eel_string_context_state
+     const char *GetStringForIndex(EEL_F val, EEL_STRING_STORAGECLASS **stringContainerOut=NULL, bool is_for_write=false)
+     {
+       int idx = (int) (val+0.5);
++      // 負の番号はどの表にも無い。INT_MIN 近く(大きな負の数や -Inf は飽和する)から下の
++      // EEL_STRING_*_BASE を引くと int が溢れるので、-1 にそろえる(結果は同じ NULL)。
++      if (idx < 0) idx = -1;
+       if (idx>=0 && idx < EEL_STRING_MAX_USER_STRINGS)
+       {
+         if (stringContainerOut)
+@@ -904,7 +907,8 @@ static EEL_F NSEEL_CGEN_CALL _eel_strcpysubstr(void *opaque, INT_PTR nparm, EEL_
+         if (nparm >= 4)
+         {
+           const int a = (int) parms[3][0];
+-          if (a<0) maxlen += a;
++          // maxlen が 1 未満なら結果は空で変わらない。先に見ないと INT_MIN 近くで溢れる。
++          if (a<0) { if (maxlen > 0) maxlen += a; }
+           else if (a<maxlen) maxlen=a;
+         }
+ 
+@@ -1414,7 +1418,7 @@ static EEL_F NSEEL_CGEN_CALL _eel_strdelsub(void *opaque, EEL_F *strOut, EEL_F *
+       int l=(int)*len;
+       if (p<0)
+       {
+-        l+=p;
++        if (l > 0) l+=p; // l が 1 未満なら消さないので同じ。先に見ないと INT_MIN 近くで溢れる
+         p=0;
+       }
+       if (l>0)
+diff --git a/thirdparty/WDL/source/WDL/eel2/glue_port.h b/thirdparty/WDL/source/WDL/eel2/glue_port.h
+index e7d06f3..926cd67 100644
+--- a/thirdparty/WDL/source/WDL/eel2/glue_port.h
++++ b/thirdparty/WDL/source/WDL/eel2/glue_port.h
+@@ -802,12 +802,14 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
+ 
+         }
+       break;
++      // シフトの量は下 5 bit だけ使う(arm64 の JIT、asm-nseel-aarch64-gcc.c の lsl / asr と同じ)。
++      // 32 以上や負の量、負の数の左シフトは C では未定義なので、量を切って左シフトは unsigned で行う。
+       case EEL_BC_SHR:
+-        fp_top2 = (EEL_F) (((int)fp_top2) >> (int)fp_top);
++        fp_top2 = (EEL_F) (((int)fp_top2) >> (((int)fp_top) & 31));
+         fp_rewind(1);
+       break;
+       case EEL_BC_SHL:
+-        fp_top2 = (EEL_F) (((int)fp_top2) << (int)fp_top);
++        fp_top2 = (EEL_F) (int) (((unsigned int)(int)fp_top2) << (((int)fp_top) & 31));
+         fp_rewind(1);
+       break;
+       case EEL_BC_SQR:
+@@ -844,7 +846,8 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
+       case EEL_BC_INVSQRT:
+         {
+           float y = (float)fp_top;
+-          int i  = 0x5f3759df - ( (* (int *) &y) >> 1 );
++          // 負の数だと int のまま引いて溢れる。unsigned で引く(結果のビットは今までと同じ)。
++          int i  = (int) (0x5f3759dfu - (unsigned int) ( (* (int *) &y) >> 1 ));
+           y  = *(float *) &i;
+           fp_top  = y * ( 1.5F - ( (fp_top * 0.5) * y * y ) );
+         }
 diff --git a/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c b/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
-index 5dee9a7..cc277ce 100644
+index 5dee9a7..e120b72 100644
 --- a/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
 +++ b/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
 @@ -672,7 +672,11 @@ functionType *nseel_getFunctionByName(compileContext *ctx, const char *name, int
@@ -667,7 +1035,19 @@ index 5dee9a7..cc277ce 100644
      }
    }
    if (ctx->last_error_string[0]) lstrcatn(ctx->last_error_string, ", ", sizeof(ctx->last_error_string));
-@@ -2783,7 +2787,7 @@ unsigned char *compileCodeBlockWithRet(compileContext *ctx, opcodeRec *rec, int
+@@ -2106,8 +2110,9 @@ start_over: // when an opcode changed substantially in optimization, goto here t
+                 RESTART_DIRECTVALUE(ret);
+               }
+             break;
+-            case FN_SHL:      RESTART_DIRECTVALUE(((int)op->parms.parms[0]->parms.dv.directValue) << ((int)op->parms.parms[1]->parms.dv.directValue));
+-            case FN_SHR:      RESTART_DIRECTVALUE(((int)op->parms.parms[0]->parms.dv.directValue) >> ((int)op->parms.parms[1]->parms.dv.directValue));
++            // 定数のシフトも実行時(glue_port.h の EEL_BC_SHL / EEL_BC_SHR)と同じく量は下 5 bit、左は unsigned で
++            case FN_SHL:      RESTART_DIRECTVALUE((int) (((unsigned int)(int)op->parms.parms[0]->parms.dv.directValue) << (((int)op->parms.parms[1]->parms.dv.directValue) & 31)));
++            case FN_SHR:      RESTART_DIRECTVALUE(((int)op->parms.parms[0]->parms.dv.directValue) >> (((int)op->parms.parms[1]->parms.dv.directValue) & 31));
+             case FN_POW:      RESTART_DIRECTVALUE(pow(op->parms.parms[0]->parms.dv.directValue, op->parms.parms[1]->parms.dv.directValue));
+             case FN_DIVIDE:   RESTART_DIRECTVALUE(op->parms.parms[0]->parms.dv.directValue / op->parms.parms[1]->parms.dv.directValue);
+             case FN_MULTIPLY: RESTART_DIRECTVALUE(op->parms.parms[0]->parms.dv.directValue * op->parms.parms[1]->parms.dv.directValue);
+@@ -2783,7 +2788,7 @@ unsigned char *compileCodeBlockWithRet(compileContext *ctx, opcodeRec *rec, int
      p+=GLUE_FUNC_LEAVE_SIZE;
    #endif
    memcpy(p,&GLUE_RET,sizeof(GLUE_RET)); p+=sizeof(GLUE_RET);
@@ -676,7 +1056,7 @@ index 5dee9a7..cc277ce 100644
    __clear_cache(newblock2,p);
  #endif
    
-@@ -5130,7 +5134,7 @@ had_error:
+@@ -5130,7 +5135,7 @@ had_error:
        memcpy(writeptr,&GLUE_RET,sizeof(GLUE_RET)); writeptr += sizeof(GLUE_RET);
        ctx->l_stats[1]=size;
        handle->code_size = (int) (writeptr - (unsigned char *)handle->code);
@@ -685,7 +1065,7 @@ index 5dee9a7..cc277ce 100644
        __clear_cache(handle->code,writeptr);
  #endif
      }
-@@ -5708,7 +5712,7 @@ opcodeRec *nseel_createFunctionByName(compileContext *ctx, const char *name, int
+@@ -5708,7 +5713,7 @@ opcodeRec *nseel_createFunctionByName(compileContext *ctx, const char *name, int
        return o;
      }
      f++;
@@ -694,11 +1074,241 @@ index 5dee9a7..cc277ce 100644
    }
    return NULL;
  }
+diff --git a/thirdparty/WDL/source/WDL/eel2/nseel-ram.c b/thirdparty/WDL/source/WDL/eel2/nseel-ram.c
+index ccc8580..057cfc3 100644
+--- a/thirdparty/WDL/source/WDL/eel2/nseel-ram.c
++++ b/thirdparty/WDL/source/WDL/eel2/nseel-ram.c
+@@ -309,28 +309,36 @@ EEL_F NSEEL_CGEN_CALL __NSEEL_RAM_MemSumProducts(EEL_F **blocks,EEL_F *dest, EEL
+ EEL_F * NSEEL_CGEN_CALL __NSEEL_RAM_MemCpy(EEL_F **blocks,EEL_F *dest, EEL_F *src, EEL_F *lenptr)
+ {
+   const int mem_size=NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK;
+-  int dest_offs = (int)(*dest + 0.0001);
+-  int src_offs = (int)(*src + 0.0001);
+-  int len = (int)(*lenptr + 0.0001);
++  int dest_offs, src_offs, len;
+   int want_mmove=0;
+ 
+-  // trim to front
+-  if (src_offs<0)
+   {
+-    len += src_offs;
+-    dest_offs -= src_offs;
+-    src_offs=0;
+-  }
+-  if (dest_offs<0)
+-  {
+-    len += dest_offs;
+-    src_offs -= dest_offs;
+-    dest_offs=0;
+-  }
+-  if (src_offs + len > mem_size) len = mem_size-src_offs;
+-  if (dest_offs + len > mem_size) len = mem_size-dest_offs;
++    // **切り詰めは 64bit で行う。** 番地と長さは int に飽和した値(INT_MIN/INT_MAX 近く)で
++    // 来るので、int のまま足し引きすると溢れる。範囲の検査は今までどおりで、通った値は
++    // mem_size に収まる。
++    WDL_INT64 d = (int)(*dest + 0.0001), s = (int)(*src + 0.0001), l = (int)(*lenptr + 0.0001);
++
++    // trim to front
++    if (s<0)
++    {
++      l += s;
++      d -= s;
++      s=0;
++    }
++    if (d<0)
++    {
++      l += d;
++      s -= d;
++      d=0;
++    }
++    if (s + l > mem_size) l = mem_size-s;
++    if (d + l > mem_size) l = mem_size-d;
+ 
+-  if (src_offs == dest_offs || len < 1) return dest;
++    if (s == d || l < 1) return dest;
++    dest_offs = (int)d;
++    src_offs = (int)s;
++    len = (int)l;
++  }
+ 
+   if (src_offs < dest_offs && src_offs+len > dest_offs)
+   {
+@@ -392,19 +400,25 @@ EEL_F * NSEEL_CGEN_CALL __NSEEL_RAM_MemCpy(EEL_F **blocks,EEL_F *dest, EEL_F *sr
+ 
+ EEL_F * NSEEL_CGEN_CALL __NSEEL_RAM_MemSet(EEL_F **blocks,EEL_F *dest, EEL_F *v, EEL_F *lenptr)
+ {  
+-  int offs = (int)(*dest + 0.0001);
+-  int len = (int)(*lenptr + 0.0001);
++  int offs, len;
+   EEL_F t;
+-  if (offs<0) 
+   {
+-    len += offs;
+-    offs=0;
+-  }
+-  if (offs >= NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK) return dest;
++    // __NSEEL_RAM_MemCpy と同じく切り詰めは 64bit で(memset(-2147483648, 0, -2147483648) で
++    // len += offs が溢れていた)。範囲の検査は今までどおり。
++    WDL_INT64 o = (int)(*dest + 0.0001), l = (int)(*lenptr + 0.0001);
++    if (o<0)
++    {
++      l += o;
++      o=0;
++    }
++    if (o >= NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK) return dest;
+ 
+-  if (offs+len > NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK) len = NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK - offs;
++    if (o+l > NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK) l = NSEEL_RAM_BLOCKS*NSEEL_RAM_ITEMSPERBLOCK - o;
+ 
+-  if (len < 1) return dest;
++    if (l < 1) return dest;
++    offs = (int)o;
++    len = (int)l;
++  }
+   
+ 
+   t=*v; // set value
 diff --git a/thirdparty/WDL/source/WDL/lice/lice.cpp b/thirdparty/WDL/source/WDL/lice/lice.cpp
-index d1a7c30..682ec27 100644
+index d1a7c30..8499a09 100644
 --- a/thirdparty/WDL/source/WDL/lice/lice.cpp
 +++ b/thirdparty/WDL/source/WDL/lice/lice.cpp
-@@ -1329,12 +1329,14 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
+@@ -25,6 +25,12 @@
+ 
+ #define IGNORE_SCALING(mode) ((mode)&LICE_BLIT_IGNORE_SCALING)
+ 
++// 固定小数(16.16)の位置と色は、大きな倍率・傾き・元の座標だと int の足し込みが溢れる(未定義)。
++// 今までの結果(溢れたら折り返す)のまま、unsigned で足して未定義にしない。位置は折り返しても
++// 読む前の範囲の検査で元の画像の外を読まない。
++static inline int lice_wrap_add(int a, int b) { return (int) ((unsigned int)a + (unsigned int)b); }
++static inline int lice_wrap_muladd(int a, int m, int b) { return (int) ((unsigned int)a*(unsigned int)m + (unsigned int)b); }
++
+ #define DO_RECT_SC(mode) \
+   const int __sc = (int)dest->Extended(LICE_EXT_GET_SCALING,NULL); \
+   if (__sc>0) { \
+@@ -291,11 +297,11 @@ template<class COMBFUNC> class _LICE_Template_Blit0 // these always templated
+             }
+ 
+             ++pout;
+-            curx+=idx;
++            curx=lice_wrap_add(curx,idx);
+           }
+         }
+         destpx += destpxspan;
+-        icury+=idy;
++        icury=lice_wrap_add(icury,idy);
+       }
+     }
+ 
+@@ -345,7 +351,7 @@ class _LICE_Template_Blit1 // these controlled by LICE_FAVOR_SIZE_EXTREME
+       while (h--)
+       {
+         int r=ir,g=ig,b=ib,a=ia;
+-        ir+=drdy; ig+=dgdy; ib+=dbdy; ia+=dady;
++        ir=lice_wrap_add(ir,drdy); ig=lice_wrap_add(ig,dgdy); ib=lice_wrap_add(ib,dbdy); ia=lice_wrap_add(ia,dady);
+         LICE_pixel_chan *pout=dest;
+         int n=w;
+         while (n--)
+@@ -353,7 +359,7 @@ class _LICE_Template_Blit1 // these controlled by LICE_FAVOR_SIZE_EXTREME
+           const int aa=a/65536;
+           DOPIX(pout,r/65536,g/65536,b/65536,aa,aa);
+           pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-          r+=drdx; g+=dgdx; b+=dbdx; a+=dadx;
++          r=lice_wrap_add(r,drdx); g=lice_wrap_add(g,dgdx); b=lice_wrap_add(b,dbdx); a=lice_wrap_add(a,dadx);
+         }
+         dest+=dest_span;
+       }
+@@ -468,11 +474,11 @@ class _LICE_Template_Blit2 // these controlled by LICE_FAVOR_SIZE
+             }
+ 
+             pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-            curx+=idx;
++            curx=lice_wrap_add(curx,idx);
+           }
+         }
+         dest+=dest_span;
+-        icury+=idy;
++        icury=lice_wrap_add(icury,idy);
+       }
+     }
+     static void scaleBlit(LICE_pixel_chan *dest, const LICE_pixel_chan *src, int w, int h, 
+@@ -515,7 +521,7 @@ class _LICE_Template_Blit2 // these controlled by LICE_FAVOR_SIZE
+               }
+ 
+               pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-              curx+=idx;
++              curx=lice_wrap_add(curx,idx);
+             }
+           }
+           else if (cury == clipbottom-1)
+@@ -536,11 +542,11 @@ class _LICE_Template_Blit2 // these controlled by LICE_FAVOR_SIZE
+               }
+ 
+               pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-              curx+=idx;
++              curx=lice_wrap_add(curx,idx);
+             }
+           }
+           dest+=dest_span;
+-          icury+=idy;
++          icury=lice_wrap_add(icury,idy);
+         }
+       }
+       else
+@@ -565,11 +571,11 @@ class _LICE_Template_Blit2 // these controlled by LICE_FAVOR_SIZE
+               }
+ 
+               pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-              curx+=idx;
++              curx=lice_wrap_add(curx,idx);
+             }
+           }
+           dest+=dest_span;
+-          icury+=idy;
++          icury=lice_wrap_add(icury,idy);
+         }
+       }
+     }
+@@ -654,13 +660,13 @@ class _LICE_Template_Blit3 // stuff controlled by LICE_FAVOR_SPEED
+             }
+ 
+             pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-            thisx+=idsdx;
+-            thisy+=idtdx;
++            thisx=lice_wrap_add(thisx,idsdx);
++            thisy=lice_wrap_add(thisy,idtdx);
+           }
+-          idsdx+=idsdxdy;
+-          idtdx+=idtdxdy;
+-          isrcx+=idsdy;
+-          isrcy+=idtdy;
++          idsdx=lice_wrap_add(idsdx,idsdxdy);
++          idtdx=lice_wrap_add(idtdx,idtdxdy);
++          isrcx=lice_wrap_add(isrcx,idsdy);
++          isrcy=lice_wrap_add(isrcy,idtdy);
+           dest+=dest_span;
+         }
+       }
+@@ -684,13 +690,13 @@ class _LICE_Template_Blit3 // stuff controlled by LICE_FAVOR_SPEED
+             }
+ 
+             pout += sizeof(LICE_pixel)/sizeof(LICE_pixel_chan);
+-            thisx+=idsdx;
+-            thisy+=idtdx;
++            thisx=lice_wrap_add(thisx,idsdx);
++            thisy=lice_wrap_add(thisy,idtdx);
+           }
+-          idsdx+=idsdxdy;
+-          idtdx+=idtdxdy;
+-          isrcx+=idsdy;
+-          isrcy+=idtdy;
++          idsdx=lice_wrap_add(idsdx,idsdxdy);
++          idtdx=lice_wrap_add(idtdx,idtdxdy);
++          isrcx=lice_wrap_add(isrcx,idsdy);
++          isrcy=lice_wrap_add(isrcy,idtdy);
+           dest+=dest_span;
+         }
+       }
+@@ -1329,12 +1335,14 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
    {
      if (ficurx < 0) // increase dstx, decrease dstw
      {
@@ -719,7 +1329,7 @@ index d1a7c30..682ec27 100644
      {
        int neww = (int)(((srcbm_w-1)*65536.0 - ficurx)/fidx);
        if (neww < dstw) dstw=neww;
-@@ -1349,12 +1351,14 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
+@@ -1349,12 +1357,14 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
    {
      if (ficury < 0) // increase dsty, decrease dsth
      {
@@ -740,7 +1350,7 @@ index d1a7c30..682ec27 100644
      {
        int newh = (int)(((srcbm_h-1)*65536.0 - ficury)/fidy);
        if (newh < dsth) dsth=newh;
-@@ -1373,8 +1377,11 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
+@@ -1373,8 +1383,14 @@ void LICE_ScaledBlit(LICE_IBitmap *dest, LICE_IBitmap *src,
    LICE_pixel_chan *pdest = (LICE_pixel_chan *)dest->getBits();
    if (!psrc || !pdest) return;
  
@@ -751,6 +1361,146 @@ index d1a7c30..682ec27 100644
 +
 +  if (srcoffs_x < 0) { if (fidx>=0) return; srcoffs_x=0; }
 +  if (srcoffs_y < 0) { if (fidy>=0) return; srcoffs_y=0; }
++  // 元の画像の外から始まるなら下の clip_r / clip_b が 1 未満で描かない。先に帰る(反転した軸は
++  // 元で切っていないので srcoffs が大きく、srcoffs_y * src_span が int で溢れて psrc が飛ぶ)。
++  if (srcoffs_x >= srcbm_w || srcoffs_y >= srcbm_h) return;
  
    if (src->isFlipped())
    {
+@@ -2048,10 +2064,10 @@ void LICE_MultiplyAddRect(LICE_IBitmap *dest, int x, int y, int w, int h,
+     while (n--) 
+     {
+       LICE_pixel_chan *ptr=(LICE_pixel_chan *)p++;
+-      _LICE_MakePixelClamp(ptr,(ptr[LICE_PIXEL_R]*ir+ir2)>>8,
+-                          (ptr[LICE_PIXEL_G]*ig+ig2)>>8,
+-                          (ptr[LICE_PIXEL_B]*ib+ib2)>>8,
+-                          (ptr[LICE_PIXEL_A]*ia+ia2)>>8);
++      _LICE_MakePixelClamp(ptr,lice_wrap_muladd(ptr[LICE_PIXEL_R],ir,ir2)>>8,
++                          lice_wrap_muladd(ptr[LICE_PIXEL_G],ig,ig2)>>8,
++                          lice_wrap_muladd(ptr[LICE_PIXEL_B],ib,ib2)>>8,
++                          lice_wrap_muladd(ptr[LICE_PIXEL_A],ia,ia2)>>8);
+     }
+     p+=sp-w;
+   }
+diff --git a/thirdparty/WDL/source/WDL/lice/lice_arc.cpp b/thirdparty/WDL/source/WDL/lice/lice_arc.cpp
+index 231389b..046d9fc 100644
+--- a/thirdparty/WDL/source/WDL/lice/lice_arc.cpp
++++ b/thirdparty/WDL/source/WDL/lice/lice_arc.cpp
+@@ -307,6 +307,7 @@ public:
+       xlo = lice_max(xlo, clip[0]);
+       xhi = lice_min(xhi, clip[2]-1);
+     }
++    if (xlo > xhi) return; // 描かない線は番地も作らない(大きな円だと画像の外を指す)
+     LICE_pixel* px = dest->getBits()+y*dest->getRowSpan()+xlo;
+     while (xlo <= xhi) 
+     {
+@@ -325,6 +326,7 @@ public:
+       ylo = lice_max(ylo, clip[1]);
+       yhi = lice_min(yhi, clip[3]-1);
+     }
++    if (ylo > yhi) return; // 同じく。大きな円だと ylo*span が int で溢れる
+     int span=dest->getRowSpan();
+     LICE_pixel* px = dest->getBits()+ylo*span+x;
+     while (ylo <= yhi) 
+@@ -418,7 +420,7 @@ public:
+       }
+       
+       ++x;
+-      yf=sqrt(r2-(double)(x*x));
++      yf=sqrt(r2-(double)x*x); // x*x は半径が 65536 を超えると int で溢れる
+       yl=(int)(yf+0.5);
+     }
+   }
+@@ -511,6 +513,28 @@ static void __DrawCircleClipped(LICE_IBitmap* dest, float cx, float cy, float ra
+ }
+ 
+ 
++// **画像より大きな円を早く片付ける。** 回すのには半径に比例した時間が掛かり、ysfx が収める
++// 半径 2^28 だと 1 本で数十秒止まる。輪(塗らない円と弧)の画素は中心から半径 ±2 px の帯の中に
++// しか無い(中心と半径を整数に丸める分と AA の 1 px)ので、画像の画素が丸ごと帯の外なら描かない。
++// 塗る円は、画像が丸ごと内側なら画像を覆う半径まで縮める。どちらも画像に書く画素は変わらない。
++// 戻り値: 描かないなら 0 未満、描くなら使う半径。
++static float __CircleRadiusForImage(int w, int h, float cx, float cy, float rad, bool filled)
++{
++  if (!(rad > 64.0f) || cx != cx || cy != cy || w < 1 || h < 1) return rad; // 小さい円・負の半径・NaN は今までどおり
++  const double fx = cx, fy = cy, mx = w-1, my = h-1;
++  const double nx = fx < 0.0 ? -fx : fx > mx ? fx-mx : 0.0, ny = fy < 0.0 ? -fy : fy > my ? fy-my : 0.0;
++  const double ax = fx < mx*0.5 ? mx-fx : fx, ay = fy < my*0.5 ? my-fy : fy;
++  const double dmin = sqrt(nx*nx+ny*ny), dmax = sqrt(ax*ax+ay*ay);
++  if (dmin > rad + 8.0) return -1.0f;
++  if (dmax < rad - 8.0)
++  {
++    if (!filled) return -1.0f;
++    const float r2 = (float) (dmax + 64.0); // float の丸め(2^28 付近で 32)を見込んで余らせる
++    if (r2 < rad && r2 >= dmax + 8.0) return r2;
++  }
++  return rad;
++}
++
+ static void __DrawArc(int w, int h, LICE_IBitmap* dest, float cx, float cy, float rad, double anglo, double anghi,
+   LICE_pixel color, int ialpha, bool aa, int mode)
+ {
+@@ -526,6 +550,7 @@ static void __DrawArc(int w, int h, LICE_IBitmap* dest, float cx, float cy, floa
+       __LICE_SC(rad);
+     }
+   }
++  if (__CircleRadiusForImage(w, h, cx, cy, rad, false) < 0.0f) return;
+   // -2PI <= anglo <= anghi <= 2PI
+   anglo += 2.0*_PI;
+   anghi += 2.0*_PI;
+@@ -636,6 +661,7 @@ void LICE_Circle(LICE_IBitmap* dest, float cx, float cy, float r, LICE_pixel col
+   if (!ia) return;
+ 
+   if (CachedCircle(dest, cx, cy, r, color, alpha, mode|LICE_BLIT_IGNORE_SCALING, aa, false)) return;
++  if (__CircleRadiusForImage(w, h, cx, cy, r, false) < 0.0f) return;
+ 
+   if (dest->isFlipped()) cy=h-1-cy;
+ 
+@@ -671,6 +697,8 @@ void LICE_FillCircle(LICE_IBitmap* dest, float cx, float cy, float r, LICE_pixel
+   if (!ia) return;
+ 
+   if (CachedCircle(dest, cx, cy, r, color, alpha, mode|LICE_BLIT_IGNORE_SCALING, aa, true)) return;
++  r = __CircleRadiusForImage(w, h, cx, cy, r, true);
++  if (r < 0.0f) return;
+ 
+   if (dest->isFlipped()) cy=h-1-cy;
+ 
+diff --git a/thirdparty/WDL/source/WDL/lice/lice_line.cpp b/thirdparty/WDL/source/WDL/lice/lice_line.cpp
+index 5314da1..5a431cd 100644
+--- a/thirdparty/WDL/source/WDL/lice/lice_line.cpp
++++ b/thirdparty/WDL/source/WDL/lice/lice_line.cpp
+@@ -1678,8 +1678,17 @@ void LICE_FillTrapezoidF(LICE_IBitmap* dest, double fx1a, double fx1b, int y1, d
+ 
+   if (y1<0)
+   {
+-    a -= dxady*y1;
+-    b -= dxbdy*y1;
++    // 画面の上から入る辺を y=0 まで進める。傾き(最大 2^29)× 行数を int のまま掛けると溢れるので
++    // 64bit で進め、進んだ x は ±2^28 に収める。画面の行は 2048 までで 1 行に動くのは 2^13 px
++    // までなので、画面の外に居る x は収めても外のまま(描く画素は変わらない)。
++    const long long lim = (long long)1 << 28;
++    const long long a64 = a - (long long)dxady*y1, b64 = b - (long long)dxbdy*y1;
++    const long long xa = x1a + (astep<0 ? -(a64>>16) : (a64>>16));
++    const long long xb = x1b + (bstep<0 ? -(b64>>16) : (b64>>16));
++    x1a = (int) (xa < -lim ? -lim : xa > lim ? lim : xa);
++    x1b = (int) (xb < -lim ? -lim : xb > lim ? lim : xb);
++    a = (int) (a64 & 65535);
++    b = (int) (b64 & 65535);
+     y1=0;
+   }
+   if (a< 0 || a >= 65536)
+diff --git a/thirdparty/WDL/source/WDL/wdlstring.h b/thirdparty/WDL/source/WDL/wdlstring.h
+index 131de32..7376f14 100644
+--- a/thirdparty/WDL/source/WDL/wdlstring.h
++++ b/thirdparty/WDL/source/WDL/wdlstring.h
+@@ -165,7 +165,9 @@ class WDL_String
+       int l=m_hb.GetSize()-1;
+       char *p=(char *)m_hb.Get();
+       if (l<0 || !*p || position < 0 || position >= l) return;
+-      if (position+len > l) len=l-position;
++      // position+len は len が INT_MAX 近く(str_delsub の長さは飽和する)だと溢れて負になり、
++      // 切り詰めを抜けた len で memmove の長さが負(巨大)になっていた。引き算で比べる。
++      if (len > l-position) len=l-position;
+       if (len>0)
+       {
+         memmove(p+position,p+position+len,l-position-len+1);
