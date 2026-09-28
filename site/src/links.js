@@ -19,6 +19,11 @@ export const ISSUES = "https://github.com/satomasahiro2005/EffectDeck/issues";
 export const JSFX_MD = "https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md";
 // アプリのBuild a chain with ChatGPTが読ませるもの（EffectPickerView.buildChain）。
 export const CHAIN_MD = "https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md";
+// Discordサーバー（EffectDeck Base）の入口。招待リンクを替えても外のリンクを直さずに済むよう、
+// 人に見せるのは DISCORD だけで、招待リンクへは fxdb の 302 で飛ばす（worker.js の頭）。
+export const DISCORD_HOST = "fxdb.nemut.ai";
+export const DISCORD = `https://${DISCORD_HOST}`;
+export const DISCORD_INVITE = "https://discord.gg/Y3DYJJmmDE";
 export const TWITTER = "https://twitter.com/ainemut";
 export const EMAIL = "support@nemut.ai";
 export const EFFETUNE = "https://github.com/Frieve-A/effetune";

@@ -1,4 +1,5 @@
-# effectdeck.nemut.ai（共有リンクとページ・AASA）と fxd.nemut.ai（人が打つ別名・全部 301）を 1 本で受ける。
+# effectdeck.nemut.ai（共有リンクとページ・AASA）と fxd.nemut.ai（人が打つ別名・全部 301）と
+# fxdb.nemut.ai（Discord の招待リンクへ 302）を 1 本で受ける。
 # 振り分けは src/worker.js の頭を読むこと。
 #
 # 出すとき: cd site && wrangler deploy
@@ -16,6 +17,7 @@ workers_dev = false
 routes = [
   { pattern = "fxd.nemut.ai", custom_domain = true },
   { pattern = "effectdeck.nemut.ai", custom_domain = true },
+  { pattern = "fxdb.nemut.ai", custom_domain = true },
 ]
 
 # App Store のバッジ（Apple 配布の SVG をそのまま）、アイコン（リポジトリの docs/ を直接読む）、

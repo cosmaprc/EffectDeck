@@ -8,7 +8,7 @@
 
 **Effects for any player on your phone**
 
-Website: [effectdeck.nemut.ai](https://effectdeck.nemut.ai/)
+Website: [effectdeck.nemut.ai](https://effectdeck.nemut.ai/) · Discord: [fxdb.nemut.ai](https://fxdb.nemut.ai/)
 
 [![Release](https://img.shields.io/github/v/release/satomasahiro2005/EffectDeck?label=release&color=3B82F6)](https://github.com/satomasahiro2005/EffectDeck/releases)
 [![iOS](https://img.shields.io/badge/iOS-27%2B-000000?logo=apple&logoColor=white)](#building)

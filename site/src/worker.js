@@ -19,7 +19,7 @@ import { chainEntries } from "./parse.js";
 import { TEXT, FAQ, PRIVACY, LLMS_TXT } from "./text.js";
 import { ORIGIN, homeLd } from "./seo.js";
 import {
-  DECK_HOST, LINK_HOST, APP_ID, APP_STORE, APP_STORE_ID, GITHUB, RELEASES, TESTFLIGHT, TWITTER,
+  DECK_HOST, LINK_HOST, DISCORD_HOST, DISCORD_INVITE, DISCORD, APP_ID, APP_STORE, APP_STORE_ID, GITHUB, RELEASES, TESTFLIGHT, TWITTER,
   CHATGPT, CHATGPT_Q,
 } from "./links.js";
 import badgeEn from "../assets/app-store-en.svg";
@@ -79,6 +79,14 @@ export default {
           location: `https://${DECK_HOST}${url.pathname}${url.search}`,
           "cache-control": "public, max-age=86400",
         },
+      });
+    }
+
+    // **fxdb は Discord の招待リンクへ 302。**招待リンクは替わりうるので 301 にしない。
+    if (url.hostname === DISCORD_HOST) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: DISCORD_INVITE, "cache-control": "no-store" },
       });
     }
 
@@ -337,14 +345,14 @@ ${ld ? ldScript(ld) + "\n" : ""}<style>${CSS}</style>
 <body${width ? ` class="${width}"` : ""}>
 <header class="site"><div class="wrap">
 <a class="brand" href="/"><picture><source srcset="/icon-dark.png" media="(prefers-color-scheme: dark)"><img src="/icon.png" alt=""></picture>EffectDeck</a>
-<nav class="site"><a href="/#faq">FAQ</a><a href="/#jsfx">JSFX</a><a href="${GITHUB}">GitHub</a></nav>
+<nav class="site"><a href="/#faq">FAQ</a><a href="/#jsfx">JSFX</a><a href="${GITHUB}">GitHub</a><a href="${DISCORD}">Discord</a></nav>
 </div></header>
 <main class="wrap">
 ${body}
 </main>
 <footer class="site"><div class="wrap">
 <p>${t.disclaimer}</p>
-<a href="/privacy">${t.privacy}</a><span class="sep">·</span><a href="${GITHUB}">GitHub</a><span class="sep">·</span><a href="${RELEASES}">${t.releaseNotes}</a><span class="sep">·</span><a href="${TESTFLIGHT}">${t.betaLink}</a><span class="sep">·</span>© 2026 nemut.ai
+<a href="/privacy">${t.privacy}</a><span class="sep">·</span><a href="${GITHUB}">GitHub</a><span class="sep">·</span><a href="${DISCORD}">Discord</a><span class="sep">·</span><a href="${RELEASES}">${t.releaseNotes}</a><span class="sep">·</span><a href="${TESTFLIGHT}">${t.betaLink}</a><span class="sep">·</span>© 2026 nemut.ai
 </div></footer>
 </body>
 </html>`;

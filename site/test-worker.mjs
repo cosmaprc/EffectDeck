@@ -62,6 +62,15 @@ const sha = (s) => "sha256-" + createHash("sha256").update(s, "utf8").digest("ba
 const p = Buffer.from(JSON.stringify([{ nm: "Volume", en: true, vl: 0 }, { nm: "Parametric EQ", en: false }])).toString("base64");
 
 try {
+  await test("fxdb: every path 302s to the Discord invite, uncached", async () => {
+    for (const path of ["/", "/anything", "/?x=1"]) {
+      const r = await get("fxdb.nemut.ai", path);
+      assert.equal(r.status, 302, path);
+      assert.equal(r.headers.get("location"), "https://discord.gg/Y3DYJJmmDE", path);
+      assert.equal(r.headers.get("cache-control"), "no-store", path);
+    }
+  });
+
   await test("fxd: everything 301s to effectdeck with the same path and query, AASA included", async () => {
     for (const path of [
       "/.well-known/apple-app-site-association",

@@ -10,7 +10,7 @@
 // FOSS（無料・MIT）はリリースで変わらないので書いてよい（トップにも出す）。
 
 import {
-  APP_STORE, RELEASES, GITHUB, LICENSE, ISSUES, JSFX_MD, CHAIN_MD, TWITTER, EMAIL,
+  APP_STORE, RELEASES, GITHUB, LICENSE, ISSUES, JSFX_MD, CHAIN_MD, TWITTER, EMAIL, DISCORD,
   EFFETUNE, APPLE_PRIVACY, CLOUDFLARE_PRIVACY, OPENAI_PRIVACY,
 } from "./links.js";
 
@@ -58,7 +58,7 @@ export const TEXT = {
   ],
   supportTitle: "Support",
   support: [
-    `In the app, <strong>Settings → Report a problem</strong> fills in the diagnostics and the log for you. You can also open an issue on ${a(ISSUES, "GitHub")} or write to ${a(TWITTER, "@ainemut")} on Twitter. Email: ${mail}.`,
+    `In the app, <strong>Settings → Report a problem</strong> fills in the diagnostics and the log for you. You can also ask on ${a(DISCORD, "Discord")}, open an issue on ${a(ISSUES, "GitHub")} or write to ${a(TWITTER, "@ainemut")} on Twitter. Email: ${mail}.`,
   ],
   faqTitle: "FAQ",
   aboutTitle: "An independent project",
@@ -305,6 +305,7 @@ export const LLMS_TXT = `# EffectDeck
 - CHAIN.md: ${CHAIN_MD}
 - Write a JSFX effect with ChatGPT: https://effectdeck.nemut.ai/write
 - Issues: ${ISSUES}
+- Discord: ${DISCORD}
 - Privacy policy: https://effectdeck.nemut.ai/privacy
 - Contact: ${EMAIL}
 `;
