@@ -54,7 +54,7 @@ Five-band dynamic equalizer.
 
 5-band FIR parametric equalizer.
 
-**Not for chains:** its bands are designed in the app and a chain cannot carry them.
+**Not for chains:** its bands are designed in the app, not from the keys listed here.
 
 ## 5Band PEQ
 
@@ -110,13 +110,13 @@ Simulates the frequency response from output impedance and earphone cable intera
 
 All-pass FIR that sets the group delay of each band.
 
-**Not for chains:** its filter is designed in the app and a chain cannot carry it.
+**Not for chains:** its filter is designed in the app, not from the keys listed here.
 
 ## Group Delay PEQ
 
 All-pass FIR that shapes group delay with five parametric bands.
 
-**Not for chains:** its filter is designed in the app and a chain cannot carry it.
+**Not for chains:** its filter is designed in the app, not from the keys listed here.
 
 ## Hi Pass Filter
 

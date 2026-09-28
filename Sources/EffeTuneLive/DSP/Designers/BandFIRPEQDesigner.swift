@@ -222,6 +222,9 @@ final class BandFIRPEQDesigner: ObservableObject {
         let generation = self.generation
         pending?.cancel()
         pending = Task { @MainActor [weak self] in
+            // 走り出す前に後の仕掛けに取り消されたら送らない（scheduleと同じ）。
+            // stageは取り消しを見ずに送り込むので、ここで見ないと古い係数を送ってしまう。
+            if Task.isCancelled { return }
             guard let self else { return }
             do {
                 try await self.stage(design)

@@ -139,6 +139,9 @@ struct ETValueField: View {
 ///
 /// - **字の欄の上では受けない。**別の欄へ移る・同じ欄の中でカーソルを動かすのはUIKitに任せる
 ///   （別の欄へ移ったときは欄が外れて今も確定する）。受けると、移った先の欄まで外れうる。
+/// - **打ち込み中の欄の塗りの中でも受けない。**数値欄の塗りは高さ30pt（ETMetrics.controlHeight）で、
+///   中の字の欄は1行ぶんの高さしか持たないことがある。そのときの上下の帯は字の欄ではないので、
+///   見ないと、同じ欄の端を触っただけで確定して打ち込みが終わる。
 /// - **外すのは数値欄だけ。**合図を受けた欄が自分で確定する（etCommitsOnTapOutside）。
 ///   ほかの字の欄（Sectionの名前・プリセットの名前・検索）やJSFXのキーボード受けは触らない。
 @MainActor
@@ -175,7 +178,25 @@ final class ETTapOutside: NSObject, UIGestureRecognizerDelegate {
             if current is UITextInput { return false }
             view = current.superview
         }
-        return true
+        return !Self.insideEditingBox(touch)
+    }
+
+    /// 打ち込み中の字の欄を、塗りの高さ（ETMetrics.controlHeight）まで上下に広げた中を触ったか。
+    /// 欄は塗りの真ん中に居るので、触った所から上下に塗りの半分ずつずらした点を引けば、
+    /// 帯のどこを触っても片方が欄に当たる。当たった欄が打ち込み中のときだけ枠を測って比べる。
+    private static func insideEditingBox(_ touch: UITouch) -> Bool {
+        guard let window = touch.window else { return false }
+        let point = touch.location(in: window)
+        let reach = ETMetrics.controlHeight / 2
+        for dy in [reach, -reach] {
+            var hit = window.hitTest(CGPoint(x: point.x, y: point.y + dy), with: nil)
+            while let current = hit, !(current is UITextInput) { hit = current.superview }
+            guard let field = hit, field.isFirstResponder else { continue }
+            let frame = field.convert(field.bounds, to: window)
+            let band = max(0, (ETMetrics.controlHeight - frame.height) / 2)
+            if frame.insetBy(dx: 0, dy: -band).contains(point) { return true }
+        }
+        return false
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

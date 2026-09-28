@@ -89,6 +89,13 @@ enum ETDesignParam {
         return out
     }
 
+    /// エフェクトのプリセットが運んできた材料を今の材料へ重ねる。**書かれていない鍵は今のまま**
+    /// （EffectPresetApply.valuesと同じ。上流のsetParametersも`params.x !== undefined`のときだけ書く）。
+    static func applying(_ params: [String: Any], to design: [String: String],
+                         type: String) -> [String: String] {
+        design.merging(read(params, type: type)) { _, new in new }
+    }
+
     /// 表示の設定（ETDisplayParam.decode）より緩い。上流の読み手に合わせる:
     ///   -数は字でも受ける。parseFiniteNumberと`Number(params.tp)`は"32768"も通す
     ///     （plugin-base.js:1174-1194）

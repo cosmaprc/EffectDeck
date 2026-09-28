@@ -152,7 +152,7 @@ final class DesignParamsTests: XCTestCase {
     }
 
     /// エフェクトのプリセット。保存する辞書に材料が入り、当てるときはETDesignParam.readで拾う
-    /// （EffeTuneDSP.applyDesign）。入れないとlt / fdしか残らなかった。
+    /// （EffeTuneDSP.setValuesのdesign）。入れないとlt / fdしか残らなかった。
     func testFIRSurvivesEffectPreset() throws {
         let item = try firItem()
         var node = ETChainNode(spec: item.spec, values: item.values)
@@ -165,6 +165,17 @@ final class DesignParamsTests: XCTestCase {
         let values = EffectPresetApply.values(for: item.spec, params: params, current: item.spec.defaults)
         let applied = try loaded(fir, design: design, values: values)
         XCTAssertEqual(firSettings(of: applied), firSettings)
+    }
+
+    /// プリセットが書いていない鍵は今のまま残る（上流のsetParametersと同じ）。
+    /// 型の材料でない鍵（vlなど）と読めない値は拾わない。
+    func testPresetOverlaysOnlyTheKeysItCarries() {
+        let now = ["pm": "lin", "f0": "100.0", "tp": "4096.0"]
+        let params: [String: Any] = ["f0": 200, "g1": "-3", "vl": 5, "q2": "abc"]
+        XCTAssertEqual(ETDesignParam.applying(params, to: now, type: fir),
+                       ["pm": "lin", "f0": "200.0", "g1": "-3.0", "tp": "4096.0"])
+        XCTAssertEqual(ETDesignParam.applying([:], to: now, type: fir), now)
+        XCTAssertEqual(ETDesignParam.applying(params, to: [:], type: "VolumePlugin"), [:])
     }
 
     // MARK: - 5Band FIR PEQの読み方

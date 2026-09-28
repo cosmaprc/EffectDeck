@@ -157,6 +157,11 @@ final class JSFXHost {
 
     var processor: ETExternalProcessor { ETJSFX_Processor(raw) }
 
+    /// 鎖が渡す音の時刻（秒）。1ブロック通すたびにその長さだけ進む（AudioIOのelapsedと同じ）。
+    /// triggerは、この時刻が前のブロックの終わりと合わないと捨てられる（ETJSFXHost.cppのprocess）。
+    /// 0へ戻すと鳴らし直し（AudioIO.start）の形になる。
+    var time: Double = 0
+
     /// 1 ブロック通す。戻り値は descriptor の process と同じ（0 = 成功）。
     @discardableResult
     func process(_ planar: inout [Float],
@@ -164,10 +169,20 @@ final class JSFXHost {
                  frames: UInt32,
                  sampleRate: Double = JSFX.sampleRate) -> Int32 {
         let descriptor = processor
+        let now = time
+        time += Double(frames) / sampleRate
         return planar.withUnsafeMutableBufferPointer { buffer in
             descriptor.process!(descriptor.context, buffer.baseAddress, channels, frames,
-                                sampleRate, 0)
+                                sampleRate, now)
         }
+    }
+
+    /// 鎖がこの段を飛ばしたブロック。時刻だけ進めてprocessは呼ばない
+    /// （段・Section・全体の入切、無音で休む）。
+    func skip(blocks: Int = 1,
+              frames: UInt32 = JSFX.maxFrames,
+              sampleRate: Double = JSFX.sampleRate) {
+        time += Double(blocks) * Double(frames) / sampleRate
     }
 
     /// 中身を見ないで 1 ブロックだけ回す。@block / @slider を進めるためのもの。

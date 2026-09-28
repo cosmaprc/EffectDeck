@@ -40,8 +40,8 @@ void ETJSFX_SetSlider(ETJSFX *host, uint32_t index, double value);
 double ETJSFX_GetSlider(ETJSFX *host, uint32_t index);
 /// trigger を送る。**running でなければ false を返して捨てる。**
 /// 溜めると、再開した最初の 1 ブロックで一斉に発火して、押した覚えの無い音が出る。
-/// runningのまま鎖がこの段を飛ばしている間（段・Section・全体の入切）は受け取るが、
-/// 再開した最初のブロックで捨てる（前のブロックから0.25秒より空いたとき）。
+/// runningのまま鎖がこの段を飛ばしている間（段・Section・全体の入切・無音で休む）は受け取るが、
+/// 再開した最初のブロックで捨てる（processのsampleTimeが前のブロックの終わりと合わないとき）。
 bool ETJSFX_SendTrigger(ETJSFX *host, uint32_t index);
 /// trigger の本数（ysfx_max_triggers）。UI が 10 を直書きしないため。
 uint32_t ETJSFX_MaxTriggers(void);

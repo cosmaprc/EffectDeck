@@ -35,10 +35,6 @@ constexpr size_t kGlobalFramebuffer = 64 * 1024 * 1024;
 constexpr uint32_t kMaxLatency = 192000;
 /// @slider のブロックを締切から外すのは、続けて超えた回数がこれ以下のあいだだけ。
 constexpr uint32_t kSliderGrace = 16;
-/// 前のブロックが終わってからこれより空いていたら、溜まっていたtriggerを捨てる（秒）。
-/// 普段の空きはブロック1つぶんより短い（44.1kHzの4096フレームでも93ms）。
-/// 大きなブロックで届いてしまわないよう、ブロック4つぶんとの大きいほうを使う（process）。
-constexpr double kTriggerStale = 0.25;
 std::atomic<size_t> gFramebufferBytes{};
 constexpr uint32_t kStateMagic = 0x534A4445;
 enum class Mode : uint8_t { running, maintenance, automaticBypass };
@@ -200,9 +196,10 @@ struct ETJSFX {
     /// deadlineWorst は「1 ブロックの持ち時間に対する割合」の最大値を 1/1000 で持つ。
     std::atomic<uint32_t> deadlineTrips{}, deadlineWorst{};
     std::atomic<uint32_t> pendingTriggers{};
-    /// 前のブロックが終わった時刻。**processの中でだけ読み書きする**（audioActiveで1本ずつ）。
-    /// 空きが長ければ、鎖がこの段を飛ばしていた（processが呼ばれなかった）とみなす。
-    std::chrono::steady_clock::time_point lastBlockEnd{};
+    /// 前のブロックが終わった音の時刻（秒。processのsampleTime + frames / sampleRate）。
+    /// **processの中でだけ読み書きする**（audioActiveで1本ずつ）。1度も走っていなければNaN。
+    /// 次のブロックのsampleTimeがこれと合わなければ、鎖がこの段を飛ばしていた。
+    double nextBlockTime{std::numeric_limits<double>::quiet_NaN()};
     /// 本文に `trigger` が出たか。作るときに 1 度だけ見る。
     bool usesTrigger{};
     std::atomic<bool> latencyChanged{};
@@ -319,7 +316,7 @@ static bool applySliders(ETJSFX *h)
 }
 
 static int32_t process(void *ctx, float *planar, uint32_t channels, uint32_t frames,
-                       double sampleRate, double)
+                       double sampleRate, double sampleTime)
 {
     auto *h = static_cast<ETJSFX *>(ctx);
     if (!h || !h->effect || !planar || !channels || channels > ysfx_max_channels ||
@@ -332,14 +329,21 @@ static int32_t process(void *ctx, float *planar, uint32_t channels, uint32_t fra
     }
     auto began = std::chrono::steady_clock::now();
     // **止まっていた後の最初のブロックでは、溜まっていたtriggerを捨てる。**
-    // SendTriggerはrunningかどうかしか見ない。段・Section・全体（All effects）を切ると
-    // 鎖はこの段を飛ばしてprocessを呼ばないが、hostはrunningのままなので受け取って溜め、
-    // 再開した最初のブロックで一斉に発火していた（588ce07が捨てたかったのと同じ形）。
-    // 空きは前のブロックの終わりから測る。重いブロックそのものの長さは数えない。
-    // 1度も走っていないとき（lastBlockEndが0）は空きが起動からの時間になり、捨てる側に倒れる。
+    // SendTriggerはrunningかどうかしか見ない。段・Section・全体（All effects）を切る・
+    // 無音で休む（AudioIOのPowerGate）と鎖はこの段を飛ばしてprocessを呼ばないが、hostは
+    // runningのままなので受け取って溜め、再開した最初のブロックで一斉に発火していた
+    // （588ce07が捨てたかったのと同じ形）。
+    //
+    // **飛ばされたかは音の時刻で見る。壁の時計では見ない。**sampleTimeは鎖に渡した時刻
+    // （AudioIOのelapsed）で、この段を飛ばしたブロックでも進む。続けて回っていれば前の
+    // ブロックの終わりとちょうど合い、1ブロックでも飛ばされるとその長さだけずれる。
+    // 鳴らし直し（AudioIO.startが時刻を0から数え直す）は戻る側にずれる。
+    // 壁の時計の空き（0.25秒）で見ていたときは、込んだMacでテストの呼び出しの間がそれを
+    // 超えると、続けて回したtriggerまで捨てうる形だった。
+    // ずれはブロックの半分と比べる（丸めの差はそれよりずっと小さい）。
+    // 1度も走っていないとき（NaN）は比較が偽になり、捨てる側に倒れる。
     const bool triggersStale =
-        std::chrono::duration<double>(began - h->lastBlockEnd).count() >
-        std::max(kTriggerStale, 4.0 * frames / sampleRate);
+        !(std::fabs(sampleTime - h->nextBlockTime) <= 0.5 * frames / sampleRate);
     bool slidersRan = false;
     // C の関数ポインタ越しに呼ばれる。**例外を外へ出さない**（出ると terminate）。
     // 投げなければ try は何もしない（確保も錠も無い）。
@@ -366,9 +370,8 @@ static int32_t process(void *ctx, float *planar, uint32_t channels, uint32_t fra
         if (latency != h->latency.exchange(latency)) h->latencyChanged.store(true);
     } catch (...) {}
     scrub(planar, (size_t)channels * frames);
-    const auto ended = std::chrono::steady_clock::now();
-    h->lastBlockEnd = ended;
-    double elapsed = std::chrono::duration<double>(ended - began).count();
+    h->nextBlockTime = sampleTime + frames / sampleRate;
+    double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
     {   // 最大値を残す。使ったのは持ち時間の何割か。
         double budget = (double)frames / sampleRate;
         uint32_t ratio = budget > 0 ? (uint32_t)(elapsed / budget * 1000.0) : 0;

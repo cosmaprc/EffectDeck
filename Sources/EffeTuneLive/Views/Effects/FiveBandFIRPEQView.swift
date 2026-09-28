@@ -188,18 +188,16 @@ struct FiveBandFIRPEQView: View {
         .onChange(of: node.channelSpec) { _, _ in designer?.refresh() }
     }
 
-    /// engine を組むときに渡している幅のつもりの値。**いまは食い違っている。**AudioIO は
-    /// engine を出力の幅（2〜16、EffeTuneDSP.prepare の maxChannels）で組み、
-    /// AssetReattach は EffeTuneDSP.maxChannels を渡すが、ここは 2 のまま。
-    /// 段ごとの担当幅は designer が chain の channelSpec から自分で引く
+    /// engineの幅は置き場のsync / adoptと同じEffeTuneDSP.maxChannelsを渡す（AudioIOが
+    /// engineを組んだ出力の幅、2〜16）。前はここだけ2で、3ch以上の出力ではカードが出るたびに
+    /// 2と出力の幅を行き来し、そのたびに設計と送り込みをやり直していた（鎖全体が一瞬素通しになる）。
+    /// 段ごとの担当幅はdesignerがchainのchannelSpecから自分で引く
     /// （BandFIRPEQDesigner.processingChannels）。
-    private static let engineChannels = 2
-
     private func attach() {
         designer = BandFIRPEQDesignerStore.shared.designer(
             for: node,
             sampleRate: dsp.sampleRate,
-            outputChannelCount: Self.engineChannels)
+            outputChannelCount: Int(dsp.maxChannels))
     }
 
     /// designer がまだ無いとき。instance が出来ていないか、作り直しの最中。

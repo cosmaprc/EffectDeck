@@ -825,22 +825,6 @@ final class EffeTuneDSP: ObservableObject {
         persistSoon()
     }
 
-    /// エフェクトのプリセットが運んできた設計の材料を当てる。
-    ///
-    /// **書かれていない鍵は今のまま**（EffectPresetApply.valuesと同じ。上流のsetParametersも
-    /// `params.x !== undefined`のときだけ書く）。当てたらdesignerに読み直させる
-    /// （ETAssetReattach.paramsChanged）。畳んだカードにはビューが無いので、ここで呼ばないと誰も呼ばない。
-    func applyDesign(from params: [String: Any], at index: Int) {
-        guard chain.indices.contains(index) else { return }
-        let incoming = ETDesignParam.read(params, type: chain[index].spec.type)
-        guard !incoming.isEmpty else { return }
-        let merged = chain[index].design.merging(incoming) { _, new in new }
-        guard merged != chain[index].design else { return }
-        chain[index].design = merged
-        ETAssetReattach.paramsChanged(chain[index])
-        persistSoon()
-    }
-
     /// パラメータを 1 つ変える。offset は ETParam.offset（配列なら +i）。
     func setValue(_ value: Float, at index: Int, offset: Int) {
         guard chain.indices.contains(index),
@@ -877,12 +861,25 @@ final class EffeTuneDSP: ObservableObject {
     ///     読み直す（DesignParams.swift）。Room EQとCrosstalkは材料が測定なので何も引き直さない。
     ///     プリセットのlt / fdはその2種では次に設計し直すまで係数に効かない
     ///     （カーネルは入っている係数の遅延のまま鳴り続けるので、無音にはならない）。
-    func setValues(_ values: [Float], at index: Int) {
+    ///
+    /// `design`はエフェクトのプリセットが運んできた辞書。そこにある設計の材料（5Band FIR PEQの
+    /// 帯域など。DSP/DesignParams.swift）も同じ回で当てる。**書かれていない鍵は今のまま**
+    /// （ETDesignParam.applying）。
+    ///
+    /// **値と材料を書いてから、designerに1度だけ読み直させる。**値を当てて読み直させ、材料を当てて
+    /// もう1度読み直させていたときは、5Band FIR PEQでltの違うプリセットがまず古い帯域のまま
+    /// その場で送り込まれ（遅延だけの違いはすぐ送り直す）、帯域も違えば続けて本当の設計が
+    /// もう1度送り込まれた。送り込むたびに鎖全体が一瞬素通しになる（AssetUploadのholdOffAudioThread）。
+    func setValues(_ values: [Float], at index: Int, design params: [String: Any] = [:]) {
         guard chain.indices.contains(index),
               values.count == chain[index].values.count else { return }
         let before = instanceLatency(of: chain[index])
         let changed = Set(values.indices.filter { values[$0] != chain[index].values[$0] })
+        let design = ETDesignParam.applying(params, to: chain[index].design,
+                                            type: chain[index].spec.type)
+        let redesign = design != chain[index].design
         chain[index].values = values
+        if redesign { chain[index].design = design }
         pushParams(chain[index])
         if !changed.isEmpty {
             if !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
@@ -891,6 +888,9 @@ final class EffeTuneDSP: ObservableObject {
             } else if instanceLatency(of: chain[index]) != before {
                 republish(reason: "遅延が変わった")
             }
+        }
+        // 畳んだカードにはビューが無いので、ここで呼ばないと誰も呼ばない。
+        if !changed.isEmpty || redesign {
             ETAssetReattach.paramsChanged(chain[index])
         }
         // setValue と同じ理由で publish() は通さず、端末にだけ残す。

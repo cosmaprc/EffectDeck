@@ -58,7 +58,7 @@ Adds DC offset to the audio signal.
 
 Split stereo into frequency bands with steep FIR filters.
 
-**Not for chains:** its crossover is designed in the app and a chain cannot carry it.
+**Not for chains:** its crossover is designed in the app, not from the keys listed here.
 
 ## Matrix
 

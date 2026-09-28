@@ -104,6 +104,13 @@ struct PresetsView: View {
         }
     }
     @State private var dialogs = ETAlertQueue<Dialog>()
+    /// 下の.alertのisPresented。書き戻しには、組んだときに出していた1枚の番号を添える
+    /// （ETAlertQueue.closed）。前の1枚の書き戻しが遅れて来ても、次の1枚を消さない。
+    private var dialogShown: Binding<Bool> {
+        let ticket = dialogs.ticket
+        return Binding(get: { dialogs.current != nil },
+                       set: { if !$0 { dialogs.closed(ticket) } })
+    }
     /// 名前を打たせているもの。Rename と新しいフォルダで使い回す。
     @State private var naming: Naming?
     @State private var typed = ""
@@ -262,8 +269,7 @@ struct PresetsView: View {
             // （PipelineView.swift:27-30 と IRReverbView.swift:79-80 に記録がある）。
             // 取り込みの確認と、読めなかったときの知らせを 1 つの .alert に束ねる。
             .alert(dialog?.title ?? "",
-                   isPresented: Binding(get: { dialog != nil },
-                                        set: { if !$0 { dialog = nil } }),
+                   isPresented: dialogShown,
                    presenting: dialog) { what in
                 switch what {
                 case .importClipboard(let text):

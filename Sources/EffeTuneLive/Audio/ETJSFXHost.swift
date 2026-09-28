@@ -832,8 +832,9 @@ final class ETJSFXHost: ObservableObject {
     /// trigger を送る。**受け取られたかを返す。**
     /// running でない（自動バイパス中・状態保存中・再設定中）ときは捨てられる。
     /// 呼び出し側はそれを見せる（黙って溜めると再開時に一斉に鳴る）。
-    /// 鎖がこの段を飛ばしている間はtrueが返るが、再開した最初のブロックで捨てられる
-    /// （ETJSFX_SendTrigger）。札はisProcessingで先に押せなくしてある（EffectCardView）。
+    /// 鎖がこの段を飛ばしている間（無音で休んでいる間も）はtrueが返るが、再開した最初の
+    /// ブロックで捨てられる（ETJSFX_SendTrigger）。札はisProcessingとAudioIO.restingで先に
+    /// 押せなくしてある（EffectCardView）。
     @discardableResult
     func sendTrigger(instanceID: String, index: UInt32) -> Bool {
         guard let host = instances[instanceID]?.host else { return false }

@@ -102,7 +102,9 @@ swift "${args[@]}" "${passthrough[@]}" 2>&1 | tee -a "$log"
 status=${PIPESTATUS[0]}
 set -e
 
-executed=$(grep -Eo "Executed [0-9]+ tests?, with [0-9]+ failures?" "$log" | tail -1 || true)
+# 最後の行が全体の数（組ごとの行が先に出る）。飛ばしたものがあると "with 1 test skipped and 0 failures"
+# になるので、そこも拾う。拾わないと飛ばした回は最後の組の数（2件など）を全体として出していた。
+executed=$(grep -Eo "Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?" "$log" | tail -1 || true)
 echo "== LINUX: ${executed:-no XCTest summary}; skip.txt ${skipped}; exit ${status}" | tee -a "$log"
 echo "== log $log"
 exit "$status"

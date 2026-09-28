@@ -130,15 +130,21 @@ SCALES = {
 # Polarity Inversionは鎖に置けば働くので入れない。Matrixだけは経路（mx）が
 # paramsに無く、鎖の字で書いても読まれない（MatrixRoutingが端末の中だけで持つ）。
 # 残りはAssetReattach.swiftが入れ直している型とIR Reverb。
+#
+# 5Band FIR PEQ・Group Delay EQ / PEQ・FIR Crossoverは、設計の材料（pm / tp / f0など）を
+# 鎖に持てるようになった（DSP/DesignParams.swift）。アプリから写した鎖は材料ごと戻る。
+# ただし材料の鍵はこの語彙に載せていない（floatのparamsではないのでspecsに無い）ので、
+# 依頼文で組ませると既定の設計にしかならない。「持てない」とは書かず「この一覧の鍵では
+# 設計しない」と書く。材料を持てなかった頃のビルドにも同じ版の語彙が渡りうるが、どちらにも正しい。
 CHAIN_UNSUPPORTED = {
     "MatrixPlugin": "its routing is set in the app and a chain cannot carry it",
     "IRReverbPlugin": "it needs an impulse response file that the user imports",
-    "FiveBandFIRPEQPlugin": "its bands are designed in the app and a chain cannot carry them",
-    "GroupDelayEqPlugin": "its filter is designed in the app and a chain cannot carry it",
-    "GroupDelayPEQPlugin": "its filter is designed in the app and a chain cannot carry it",
+    "FiveBandFIRPEQPlugin": "its bands are designed in the app, not from the keys listed here",
+    "GroupDelayEqPlugin": "its filter is designed in the app, not from the keys listed here",
+    "GroupDelayPEQPlugin": "its filter is designed in the app, not from the keys listed here",
     "RoomEqPlugin": "it needs a room measurement made in the app",
     "CrosstalkCancellationPlugin": "it needs a measurement made in the app",
-    "FIRCrossoverPlugin": "its crossover is designed in the app and a chain cannot carry it",
+    "FIRCrossoverPlugin": "its crossover is designed in the app, not from the keys listed here",
 }
 
 # 保存している値が見た目の数と違うもの。(type, メンバ名) -> (印, 説明)。

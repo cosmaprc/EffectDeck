@@ -25,7 +25,7 @@ up to the next Section (see CHAIN.md).
 - `Bass Management` — Route low frequencies from each input to one or more subwoofer outputs
 - `Channel Divider` — Split stereo signal into frequency bands and route to separate channels
 - `DC Offset` — Adds DC offset to the audio signal
-- `FIR Crossover` — Split stereo into frequency bands with steep FIR filters. **Not for chains:** its crossover is designed in the app and a chain cannot carry it.
+- `FIR Crossover` — Split stereo into frequency bands with steep FIR filters. **Not for chains:** its crossover is designed in the app, not from the keys listed here.
 - `Matrix` — Routes and mixes audio channels with optional phase inversion. **Not for chains:** its routing is set in the app and a chain cannot carry it.
 - `MultiChannel Panel` — Control panel for multiple channels
 - `Mute` — Mutes the audio signal by filling the output with silence
@@ -57,13 +57,13 @@ up to the next Section (see CHAIN.md).
 - `15Band GEQ` — 15-band graphic equalizer
 - `15Band PEQ` — 15-band parametric equalizer
 - `5Band Dynamic EQ` — Five-band dynamic equalizer
-- `5Band FIR PEQ` — 5-band FIR parametric equalizer. **Not for chains:** its bands are designed in the app and a chain cannot carry them.
+- `5Band FIR PEQ` — 5-band FIR parametric equalizer. **Not for chains:** its bands are designed in the app, not from the keys listed here.
 - `5Band PEQ` — 5-band parametric equalizer
 - `Band Pass Filter` — Band-pass filter using cascaded hi/lo-pass filters
 - `Comb Filter` — Digital comb filter with feedback/feedforward for harmonic coloration
 - `Earphone Cable Sim` — Simulates the frequency response from output impedance and earphone cable interacting with the earphone load impedance
-- `Group Delay EQ` — All-pass FIR that sets the group delay of each band. **Not for chains:** its filter is designed in the app and a chain cannot carry it.
-- `Group Delay PEQ` — All-pass FIR that shapes group delay with five parametric bands. **Not for chains:** its filter is designed in the app and a chain cannot carry it.
+- `Group Delay EQ` — All-pass FIR that sets the group delay of each band. **Not for chains:** its filter is designed in the app, not from the keys listed here.
+- `Group Delay PEQ` — All-pass FIR that shapes group delay with five parametric bands. **Not for chains:** its filter is designed in the app, not from the keys listed here.
 - `Hi Pass Filter` — High-pass filter with adjustable frequency and slope
 - `Lo Pass Filter` — Low-pass filter with adjustable frequency and slope
 - `Loudness Equalizer` — Small volume playback frequency balance correction

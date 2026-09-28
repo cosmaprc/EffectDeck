@@ -414,7 +414,11 @@ private struct ExternalProcessorView: View {
     let isDragPreview: Bool
     /// 鎖がこの段に音を通しているか。段の入切・上のSectionの入切・全体の入切（All effects）の3つ。
     /// どれかが切れていると、鎖はこの段を飛ばしてprocessを呼ばない。
+    /// 無音で休んでいる間（AudioIO.resting）も鎖ごと飛ぶが、そちらは札のところで見る（triggerChips）。
     let isProcessing: Bool
+    /// ioを丸ごと観測せず、休んでいるかだけを写す（PipelineViewと同じ）。
+    private let io = AudioIO.shared
+    @State private var resting = false
     @State private var controller: UIViewController?
     @State private var requestingView = false
     @State private var fullScreen = false
@@ -676,6 +680,10 @@ private struct ExternalProcessorView: View {
     /// 切っている間に1と2を押すと、再開で発火数が0から2へ一度に上がった）。
     /// 溜まったぶんはhostの側でも捨てる（ETJSFXHost.cppのprocess。止まっていた後の最初のブロック）。
     ///
+    /// **無音で休んでいる間も無効にする**（AudioIO.resting）。省電力が1秒・3秒のとき、入力が
+    /// 無いとAudioIOは鎖ごと通さないので、押しても音が戻った最初のブロックで捨てられる。
+    /// 段の入切と同じく「効かないのか溜まっているのか」が区別できない。
+    ///
     /// **`trigger` を読まないスクリプトには出さない。**REAPER では MIDI や
     /// アクションから叩くもので、EffectDeck には叩く手段が無い。同梱 3 本と
     /// 手元の実物 6 本のうち読んでいるのは検証用の 1 本だけで、残りでは
@@ -687,7 +695,7 @@ private struct ExternalProcessorView: View {
     }
 
     private var triggerChips: some View {
-        let live = isProcessing && jsfx.isRunning(instanceID: instanceID)
+        let live = isProcessing && !resting && jsfx.isRunning(instanceID: instanceID)
         return VStack(alignment: .leading, spacing: 6) {
             Text("Trigger (trigger bits 1–\(ETJSFX_MaxTriggers()))")
                 .font(.caption).foregroundStyle(.secondary)
@@ -702,6 +710,9 @@ private struct ExternalProcessorView: View {
                 }
             }
         }
+        // 写した値の初期合わせ。購読の初回配信に頼らない。
+        .onAppear { resting = io.resting }
+        .onReceive(io.$resting) { resting = $0 }
     }
 }
 

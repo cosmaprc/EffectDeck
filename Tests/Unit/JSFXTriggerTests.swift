@@ -102,17 +102,17 @@ final class JSFXTriggerTests: XCTestCase {
         XCTAssertEqual(host.get(1), 1)
     }
 
-    /// 鎖がこの段を飛ばしている間（段・Section・全体の入切）はprocessが呼ばれないが、
+    /// 鎖がこの段を飛ばしている間（段・Section・全体の入切・無音で休む）はprocessが呼ばれないが、
     /// hostはrunningのままなので送ると受け取る。**再開した最初のブロックで発火させない。**
     /// シミュレータでは、全体を切っている間に1と2を押すと、再開で発火数が0から2へ一度に上がった。
-    /// 飛ばされている間は、ブロックとブロックの間を空けて写す（kTriggerStaleは0.25秒）。
+    /// 飛ばされたブロックは時刻だけ進める（host.skip。AudioIOのelapsedも飛ばしたブロックで進む）。
     func testTriggersQueuedWhileSkippedAreDroppedOnResume() throws {
         let host = try JSFX.load("trigger_count")
         host.run(blocks: 1)
 
         XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0), "running なので受け取る")
         XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 1))
-        Thread.sleep(forTimeInterval: 0.5)               // 鎖がこの段を飛ばしている間
+        host.skip(blocks: 1)                             // 鎖がこの段を飛ばした1ブロック
         host.run(blocks: 1)
         XCTAssertEqual(host.get(0), 0, "飛ばされている間に押したぶんが再開で発火した")
 
@@ -121,5 +121,33 @@ final class JSFXTriggerTests: XCTestCase {
         host.run(blocks: 1)
         XCTAssertEqual(host.get(0), 1)
         XCTAssertEqual(host.get(1), 1, "bit 0")
+    }
+
+    /// 鳴らし直し（AudioIO.startは時刻を0から数え直す）を跨いだものも捨てる。
+    /// 1度も走っていないhostへ送ったものも同じ（前のブロックが無い）。
+    func testTriggersQueuedAcrossARestartAreDropped() throws {
+        let host = try JSFX.load("trigger_count")
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0))
+        host.run(blocks: 1)
+        XCTAssertEqual(host.get(0), 0, "最初のブロックより前に送ったものが発火した")
+
+        host.run(blocks: 3)
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0))
+        host.time = 0                                    // 鳴らし直し
+        host.run(blocks: 1)
+        XCTAssertEqual(host.get(0), 0, "鳴らし直しを跨いだものが発火した")
+    }
+
+    /// **捨てるかは音の時刻だけで決まる。**ブロックの間に壁の時計がどれだけ空いても、
+    /// 続けて回っていれば届く。壁の時計で見ていたときは、込んだMacでここが0.25秒を超えると
+    /// 上のテストまで落ちえた。
+    func testTriggersSurviveAWallClockPauseBetweenBlocks() throws {
+        let host = try JSFX.load("trigger_count")
+        host.run(blocks: 1)
+
+        XCTAssertTrue(ETJSFX_SendTrigger(host.raw, 0))
+        Thread.sleep(forTimeInterval: 0.4)
+        host.run(blocks: 1)
+        XCTAssertEqual(host.get(0), 1, "続けて回っているのに捨てた")
     }
 }

@@ -52,6 +52,13 @@ struct EffectPickerView: View {
         }
     }
     @State private var alerts = ETAlertQueue<Alert>()
+    /// 下の.alertのisPresented。書き戻しには、組んだときに出していた1枚の番号を添える
+    /// （ETAlertQueue.closed）。前の1枚の書き戻しが遅れて来ても、次の1枚を消さない。
+    private var alertShown: Binding<Bool> {
+        let ticket = alerts.ticket
+        return Binding(get: { alerts.current != nil },
+                       set: { if !$0 { alerts.closed(ticket) } })
+    }
     @State private var linkText = ""
 
     private var alertTitle: String {
@@ -324,8 +331,7 @@ struct EffectPickerView: View {
             // 先に付いたほうが出なくなる。このリポジトリで 4 度目の踏み方
             // （PresetsView.swift:148-151 に 3 度目までの記録がある）。
             // 積んだせいで取り込みの失敗が全部無言になっていた。
-            .alert(alertTitle, isPresented: Binding(
-                get: { alert != nil }, set: { if !$0 { alert = nil } })) {
+            .alert(alertTitle, isPresented: alertShown) {
                     if alert == .link {
                         TextField("https://github.com/…", text: $linkText)
                             .textInputAutocapitalization(.never)
@@ -503,21 +509,23 @@ struct EffectPickerView: View {
                                     let scripts = jsfxEntries(vendor: vendor)
                                     ForEach(scripts) { entry in
                                         jsfxRow(entry)
-                                            // **同梱の見本にはDeleteを出さない。**onDeleteはForEachの
-                                            // 行ぜんぶに付くので、見本でも払うとDeleteが出た。
-                                            // 払い切るとListが先に行を消し（onDeleteの中で弾いても
-                                            // 戻らない）、一覧を組み直すまで見本が画面から消えていた。
-                                            .deleteDisabled(entry.isDebugFixture)
-                                    }
-                                    // **消す口。**行は Button で onDrag も付いているので、
-                                    // 自前のスワイプを重ねるとタップ・ドラッグ・払いの 3 つが
-                                    // 同じ行で競合する。List の onDelete なら List 側の
-                                    // 仕組みなので競合しない。
-                                    // 同梱の見本は消させない（行のdeleteDisabledとremoveEntryの2か所）。
-                                    .onDelete { offsets in
-                                        pendingDeleteJSFX = offsets
-                                            .compactMap { scripts.indices.contains($0) ? scripts[$0] : nil }
-                                            .first { !$0.isDebugFixture }
+                                            // **消す口。**行はButtonでonDragも付いているので、
+                                            // 自前のスワイプを重ねるとタップ・ドラッグ・払いの3つが
+                                            // 同じ行で競合する。swipeActionsはList側の仕組みなので競合しない。
+                                            //
+                                            // **.onDeleteを使わない。**あれはListが先に行を消す。見本では
+                                            // onDeleteの中で弾いても行は戻らず、一覧を組み直すまで画面から
+                                            // 消えていた（シミュレータ）。確かめでCancelを押したときも同じ形になる。
+                                            // ボタンは確かめを出すだけで、行は消えたときにListから消える。
+                                            // 押した時点では消さないのでroleは付けず、赤はtintで付ける。
+                                            // 完全スワイプでは消さない（取り消しが無い。PresetsViewと同じ）。
+                                            // 同梱の見本には出さない（こことremoveEntryの2か所）。
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                                if !entry.isDebugFixture {
+                                                    Button("Delete") { pendingDeleteJSFX = entry }
+                                                        .tint(.red)
+                                                }
+                                            }
                                     }
                                 } header: {
                                     Text(vendor)
