@@ -40,6 +40,8 @@ enum PipelineStore {
         var irId: String = ""
         /// 音に関わらない表示の設定（`cl` / `sc` など）。DisplayParams.swift を読むこと。
         var display: [String: String] = [:]
+        /// designerで作る型の設計の材料（`pm` / `tp` / `f0`など）。DesignParams.swiftを読むこと。
+        var design: [String: String] = [:]
         var externalID: String = ""
         var externalInstanceID: String = ""
         var externalState: Data? = nil
@@ -125,6 +127,8 @@ enum PipelineStore {
         if !item.irId.isEmpty { o[irKey] = item.irId }
         // 図の見せ方（float に載らない）。綴りは上流のまま。
         ETDisplayParam.write(item.display, type: item.spec.type, into: &o)
+        // designerの材料（floatに載らない）。綴りは上流のまま。
+        ETDesignParam.write(item.design, type: item.spec.type, into: &o)
         return o
     }
 
@@ -215,7 +219,8 @@ enum PipelineStore {
                 channelSpec: ETChannel.spec(from: ch),
                 sectionName: "",
                 irId: params[irKey] as? String ?? "",
-                display: ETDisplayParam.read(params, type: spec.type)))
+                display: ETDisplayParam.read(params, type: spec.type),
+                design: ETDesignParam.read(params, type: spec.type)))
         }
         return out
     }

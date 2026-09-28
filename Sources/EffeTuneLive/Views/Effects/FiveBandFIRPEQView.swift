@@ -34,6 +34,7 @@
 //  dragBands に控え、図はその控えで引く。毎フレーム書くと素通しが連続して音が切れる。
 //  ホイールが無いので Q は下のつまみのまま（5band も同じ割り切り）。
 
+import Combine
 import SwiftUI
 import Foundation
 
@@ -51,6 +52,11 @@ import Foundation
 ///
 /// 鍵は Node.id。鎖を組み直しても Node の値は残るので id は変わらず、段を消して入れ直せば
 /// 別の id になる。
+///
+/// **設定の正はNode.design（とvaluesのlt）。**置き場はメモリの中にしか無いので、ここにしか
+/// 無い設定はアプリを開き直す・プリセットを読む・共有リンクを開くと既定へ戻っていた
+/// （fd:16384を持つ鎖がMinimum Phase・遅延0で戻った）。作るときは段の材料から組み、
+/// settingsが変わるたびにNode.designへ書き戻す（DSP/DesignParams.swift）。
 @MainActor
 final class BandFIRPEQDesignerStore {
 
@@ -62,6 +68,8 @@ final class BandFIRPEQDesignerStore {
     private struct Entry {
         let tapId: UInt32
         let designer: BandFIRPEQDesigner
+        /// settingsが変わるたびにNode.designへ書き戻す見張り。Entryと一緒に捨てる。
+        let watch: AnyCancellable
     }
 
     private var entries: [UUID: Entry] = [:]
@@ -85,14 +93,63 @@ final class BandFIRPEQDesignerStore {
         }
 
         // instance が作り直された。帯域の設定は人が置いたものなので引き継ぐ。
+        // 初めて作るときは段が持っている材料から組む。
         let made = BandFIRPEQDesigner(instance: node.instance,
-                                      settings: entries[node.id]?.designer.settings ?? .default,
+                                      settings: entries[node.id]?.designer.settings
+                                          ?? Self.settings(of: node),
                                       sampleRate: sampleRate,
                                       outputChannelCount: outputChannelCount)
-        entries[node.id] = Entry(tapId: node.tapId, designer: made)
+        let id = node.id
+        // @Publishedは書く直前に新しい値を流すので、受けた値をそのまま書く。
+        // 最初の1回（今の値）は落とす。作っただけでは材料は変わっていない。
+        let watch = made.$settings.dropFirst().sink { settings in
+            EffeTuneDSP.shared.setDesign(settings.designParams, nodeID: id)
+        }
+        entries[node.id] = Entry(tapId: node.tapId, designer: made, watch: watch)
         prune()
         made.start()
         return made
+    }
+
+    /// 段に繋ぎ直す（instanceの作り直し・鎖を読んだ直後。ETAssetReattach.one）。
+    /// **置き場が無く、段も材料を持っていなければ作らない。**作ると既定の平らな設計を
+    /// 送り込みに行き、そのあいだ鎖全体が素通しになる（AssetUploadのholdOffAudioThread）。
+    func sync(node: EffeTuneDSP.Node) {
+        guard entries[node.id] != nil || Self.carriesDesign(node) else { return }
+        let dsp = EffeTuneDSP.shared
+        _ = designer(for: node, sampleRate: dsp.sampleRate,
+                     outputChannelCount: Int(dsp.maxChannels))
+    }
+
+    /// 段の材料が外から変わった（プリセットの適用・既定へ戻す）。
+    /// ltとNode.designから組み直して、違っていればdesignerへ渡す。
+    func adopt(node: EffeTuneDSP.Node) {
+        guard entries[node.id] != nil || Self.carriesDesign(node) else { return }
+        let dsp = EffeTuneDSP.shared
+        guard let designer = designer(for: node, sampleRate: dsp.sampleRate,
+                                      outputChannelCount: Int(dsp.maxChannels)) else { return }
+        let next = Self.settings(of: node)
+        if designer.settings != next { designer.settings = next }
+    }
+
+    /// 段が持っている材料から組んだ設定。ltとfdはvaluesから読む。
+    static func settings(of node: EffeTuneDSP.Node) -> BandFIRPEQSettings {
+        BandFIRPEQSettings(designParams: node.design,
+                           latency: BandFIRPEQLatency(parameterIndex: value("latencyMode", of: node) ?? 1),
+                           filterDelaySamples: value("filterDelaySamples", of: node))
+    }
+
+    /// 既定（平ら）でない設計を持っているか。材料を書いていなかった頃の鎖はfdだけで
+    /// 線形位相を持っている（BandFIRPEQSettings.init(designParams:)の但し書き）。
+    static func carriesDesign(_ node: EffeTuneDSP.Node) -> Bool {
+        guard node.spec.type == BandFIRPEQDesigner.kernelType else { return false }
+        return !node.design.isEmpty || (value("filterDelaySamples", of: node) ?? 0) > 0
+    }
+
+    private static func value(_ name: String, of node: EffeTuneDSP.Node) -> Float? {
+        guard let param = node.spec.params.first(where: { $0.name == name }),
+              node.values.indices.contains(param.offset) else { return nil }
+        return node.values[param.offset]
     }
 
     /// 鎖から消えた段を捨てる。instance は段と一緒に破棄されるので、資産を外す手当ては要らない。

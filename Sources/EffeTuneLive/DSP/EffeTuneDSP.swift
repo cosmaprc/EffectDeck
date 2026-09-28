@@ -613,6 +613,7 @@ final class EffeTuneDSP: ObservableObject {
             node.sectionName = item.sectionName
             node.irId = item.irId
             node.display = item.display
+            node.design = item.design
             node.externalID = item.externalID.isEmpty ? nil : item.externalID
             if node.isExternal {
                 // 身元は presetInsertion が新しく付け直してある（同じ AU を 2 枚のカードが取り合わない）。
@@ -729,6 +730,7 @@ final class EffeTuneDSP: ObservableObject {
         node.sectionName = item.sectionName
         node.irId = item.irId
         node.display = item.display
+        node.design = item.design
         node.externalID = item.externalID.isEmpty ? nil : item.externalID
         if node.isExternal {
             // 空か、既に鎖に居る外部の段と同じ身元なら新しく作る（ETChainEditing.externalInstanceID）。
@@ -811,6 +813,34 @@ final class EffeTuneDSP: ObservableObject {
         persistSoon()
     }
 
+    /// designerで作る型の設計の材料を覚える。**音には伝えない。**
+    ///
+    /// 係数はdesignerが送り込んでいて、ここに書くのは「次に鎖を読んだときどう設計し直すか」の印
+    /// （DSP/DesignParams.swift）。書き手はdesignerの置き場で、settingsが変わるたびに来る。
+    /// 位置ではなくidで引くのは、置き場が段をidで持っていて、並べ替えを跨ぐため。
+    func setDesign(_ design: [String: String], nodeID: UUID) {
+        guard let index = chain.firstIndex(where: { $0.id == nodeID }),
+              chain[index].design != design else { return }
+        chain[index].design = design
+        persistSoon()
+    }
+
+    /// エフェクトのプリセットが運んできた設計の材料を当てる。
+    ///
+    /// **書かれていない鍵は今のまま**（EffectPresetApply.valuesと同じ。上流のsetParametersも
+    /// `params.x !== undefined`のときだけ書く）。当てたらdesignerに読み直させる
+    /// （ETAssetReattach.paramsChanged）。畳んだカードにはビューが無いので、ここで呼ばないと誰も呼ばない。
+    func applyDesign(from params: [String: Any], at index: Int) {
+        guard chain.indices.contains(index) else { return }
+        let incoming = ETDesignParam.read(params, type: chain[index].spec.type)
+        guard !incoming.isEmpty else { return }
+        let merged = chain[index].design.merging(incoming) { _, new in new }
+        guard merged != chain[index].design else { return }
+        chain[index].design = merged
+        ETAssetReattach.paramsChanged(chain[index])
+        persistSoon()
+    }
+
     /// パラメータを 1 つ変える。offset は ETParam.offset（配列なら +i）。
     func setValue(_ value: Float, at index: Int, offset: Int) {
         guard chain.indices.contains(index),
@@ -843,8 +873,9 @@ final class EffeTuneDSP: ObservableObject {
     ///   - designer で作る型: 値から材料を引き直させる（ETAssetReattach.paramsChanged）。
     ///     FIR Crossover は lt / bc を、Bass Management は全部を params から読む。
     ///     カードを畳んだまま当てるとビューが無いので、ここで呼ばないと誰も呼ばない。
-    ///     他の 5 種は材料が置き場にあり、値からは何も引き直さない。
-    ///     プリセットの lt / fd はその 5 種では次に設計し直すまで係数に効かない
+    ///     5Band FIR PEQ・Group Delay EQ / PEQはltをvaluesから、残りの材料をNode.designから
+    ///     読み直す（DesignParams.swift）。Room EQとCrosstalkは材料が測定なので何も引き直さない。
+    ///     プリセットのlt / fdはその2種では次に設計し直すまで係数に効かない
     ///     （カーネルは入っている係数の遅延のまま鳴り続けるので、無音にはならない）。
     func setValues(_ values: [Float], at index: Int) {
         guard chain.indices.contains(index),
@@ -870,6 +901,9 @@ final class EffeTuneDSP: ObservableObject {
         guard chain.indices.contains(index) else { return }
         let before = instanceLatency(of: chain[index])
         chain[index].values = chain[index].spec.defaults
+        // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
+        // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
+        chain[index].design = [:]
         pushParams(chain[index])
         // 既定へ戻すと選択肢も戻る。資産の解決に使う値がその中にあるので、
         // 1 つ変えたときと同じ後始末をする。

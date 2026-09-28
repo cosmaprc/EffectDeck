@@ -29,6 +29,10 @@ struct ETChainNode: Identifiable {
     /// sectionName / irId と同じで float に載らないのでここに持つ。
     /// 綴りも値も上流のまま。DSP/DisplayParams.swift を読むこと。
     var display: [String: String] = [:]
+    /// designerで作る型の設計の材料（上流の`pm` / `tp` / `f0`など）。
+    /// displayと同じでfloatに載らないのでここに持つ。綴りも値も上流のまま。
+    /// DSP/DesignParams.swiftを読むこと。
+    var design: [String: String] = [:]
 
     /// Native EffeTune nodeではない外部processor。instanceは持たず、
     /// publish時にexternal callback nodeへ変換する。

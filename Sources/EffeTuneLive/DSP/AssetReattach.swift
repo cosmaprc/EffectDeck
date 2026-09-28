@@ -18,6 +18,10 @@
 //  （EffeTuneDSP.setValues）と鎖を読んだ直後（loaded）にもここから設計させる。
 //  そうしないと、畳んだカードの Linear は Sub と LFE が無音のまま残る
 //  （bass_management/kernel.cpp:329-381）。
+//
+//  5Band FIR PEQ・Group Delay EQ / PEQ・FIR Crossoverは、材料をNode.designにも持つ
+//  （DSP/DesignParams.swift）。鎖を読んだ直後は、材料を持っている段だけここから設計させる。
+//  持っていない段は既定の設計（平ら）なので、置き場を作ると送り込みで音が一瞬切れるだけになる。
 
 import Foundation
 
@@ -41,20 +45,17 @@ enum ETAssetReattach {
             RoomEQStore.shared.resendIfGone(node: node)
         case "CrosstalkCancellationPlugin":
             CrosstalkStore.shared.resend(node: node)
-        case "GroupDelayEqPlugin":
+        case ETDesignParam.groupDelayEQ:
             ETGroupDelayEQDesigners.shared.sync(node: node)
-        case "GroupDelayPEQPlugin":
+        case ETDesignParam.groupDelayPEQ:
             GroupDelayPEQDesigners.shared.sync(node: node)
-        case "FIRCrossoverPlugin":
+        case ETDesignParam.firCrossover:
             FIRCrossoverDesigners.shared.sync(node: node)
-        case "FiveBandFIRPEQPlugin":
-            // この置き場は designer を引くついでに繋ぎ直す。tapId が変わっていれば
-            // 設定を引き継いだまま作り直して start() まで進む
-            // （FiveBandFIRPEQView.swift の BandFIRPEQDesignerStore）。
-            _ = BandFIRPEQDesignerStore.shared.designer(
-                for: node,
-                sampleRate: EffeTuneDSP.shared.sampleRate,
-                outputChannelCount: Int(EffeTuneDSP.shared.maxChannels))
+        case ETDesignParam.fiveBandFIRPEQ:
+            // 置き場が既にあるか、段が材料を持っているときだけ。tapIdが変わっていれば
+            // 設定を引き継いだまま作り直してstart()まで進む
+            // （FiveBandFIRPEQView.swiftのBandFIRPEQDesignerStore）。
+            BandFIRPEQDesignerStore.shared.sync(node: node)
         case BassManagementDesigners.type:
             // 値が送ってある係数と同じなら何もしない（BassManagementDesigner.evaluate）。
             BassManagementDesigners.shared.sync(node: node)
@@ -63,28 +64,38 @@ enum ETAssetReattach {
         }
     }
 
-    /// 値が変わった直後（プリセットの適用・既定へ戻す・Routing の幅）。
-    /// **材料を params から読む型だけ**を見る。FIR Crossover は lt / bc を
-    /// （FIRCrossoverView.swift の FIRCrossoverDesigners.sync）、Bass Management は全部を読む。
+    /// 値か設計の材料が変わった直後（プリセットの適用・既定へ戻す・Routingの幅）。
+    /// **材料をparamsかNode.designから読む型だけ**を見る。
+    ///   - FIR Crossoverはlt / bcとNode.designを（FIRCrossoverView.swiftのFIRCrossoverDesigners.sync）、
+    ///     Bass Managementは全部を読む
+    ///   - 5Band FIR PEQ・Group Delay EQ / PEQはltとNode.designから設定を組み直す（各置き場のadopt）
     ///
-    /// 他の 5 種は材料が置き場にあり、値が変わっても送るものは変わらない。
-    /// しかも 5Band FIR PEQ は置き場が空だと既定の平らな設計を送り込みに行く
-    /// （BandFIRPEQDesignerStore.designer(for:) が作って start() する）ので、ここでは触らない。
+    /// Room EQとCrosstalkは材料が置き場（測定）にあり、値が変わっても送るものは変わらない。
     static func paramsChanged(_ node: EffeTuneDSP.Node) {
-        guard node.instance != 0, readsParams.contains(node.spec.type) else { return }
-        one(node)
-    }
-
-    /// 鎖へ読み込んだ直後。**材料が params だけで揃う型だけ**を見る。
-    /// FIR Crossover は置き場に designer が居ないと何もしないので、読み込んだ直後は外す。
-    static func loaded(_ nodes: [EffeTuneDSP.Node]) {
-        for node in nodes where node.instance != 0 && buildsFromParams.contains(node.spec.type) {
+        guard node.instance != 0 else { return }
+        switch node.spec.type {
+        case ETDesignParam.fiveBandFIRPEQ:
+            BandFIRPEQDesignerStore.shared.adopt(node: node)
+        case ETDesignParam.groupDelayEQ:
+            ETGroupDelayEQDesigners.shared.adopt(node: node)
+        case ETDesignParam.groupDelayPEQ:
+            GroupDelayPEQDesigners.shared.adopt(node: node)
+        case ETDesignParam.firCrossover, BassManagementDesigners.type:
             one(node)
+        default:
+            break
         }
     }
 
-    /// 設計に使う値の一部でも params から読む型。
-    private static let readsParams: Set<String> = ["FIRCrossoverPlugin", BassManagementDesigners.type]
-    /// 設計の材料が全部 params にある型。
-    private static let buildsFromParams: Set<String> = [BassManagementDesigners.type]
+    /// 鎖へ読み込んだ直後。**材料がparamsとNode.designで揃う段だけ**を見る。
+    /// Bass Managementは常に、designerの4種は材料を持っているときだけ
+    /// （持っていなければ各置き場のsyncが黙って戻る）。
+    static func loaded(_ nodes: [EffeTuneDSP.Node]) {
+        for node in nodes where node.instance != 0 {
+            if node.spec.type == BassManagementDesigners.type || !node.design.isEmpty
+                || BandFIRPEQDesignerStore.carriesDesign(node) {
+                one(node)
+            }
+        }
+    }
 }

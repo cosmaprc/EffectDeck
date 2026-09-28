@@ -15,8 +15,7 @@
 //  開いているときで、位置が違うので @StateObject にすると別物が 2 つできる。
 //  しかも畳む／開くたびに作り直されるので、そのたびに designer の既定へ戻って
 //  262144 点 FFT を 3 回やり直すことになる。
-//  周波数・傾き・位相・taps は ETParam に席が無く designer しか持っていないので、
-//  それも畳んだ瞬間に消える。
+//  周波数・傾き・位相・tapsはETParamに席が無く、それも畳んだ瞬間に消える。
 //  だから段（Node.id）ごとの置き場に入れて、両方の位置から同じものを引く。
 //  Matrix の経路が同じ理由で MatrixRouting（MatrixView.swift）に入っている。
 //
@@ -40,10 +39,10 @@
 //  Generated/EffectCatalog.swift の FIRCrossoverPlugin はそれを写したもの。
 //
 //  Phase（pm、fir_crossover.js:635-638）と Taps（tp、同 639-645）も同じ。
-//  置き場に入れたので畳んでも消えなくなったが、PipelineStore が読み書きするのは
-//  spec.params だけで（PipelineForm の shortForm と parse）、アプリを終うと既定へ戻る。
-//  保存できない値を触らせると、戻ったときに音が変わった理由が分からなくなる。
-//  だから操作は出さず、designer の既定のまま使う。
+//  これらは上流が鎖に書くので（fir_crossover.js:96-121のgetParameters）、Node.designに
+//  同じ綴りで持つ（DSP/DesignParams.swift）。web版やプリセットから来た値は
+//  FIRCrossoverDesigners.syncが読んで設計に使い、保存するときもそのまま書き戻す。
+//  操作はまだ出していないので、この画面から変えることはできない。
 //
 //  Filter Delay Samples（fd）は逆に、パラメータなのに画面へ出さない。
 //  上流は fir_crossover.js:90 の `fd: this.pm === 'min' ? 0 : this.tp / 2` で
@@ -316,11 +315,11 @@ private struct FIRCrossoverChoiceStrip: View {
 /// 段ごとの FIRCrossoverDesigner。
 ///
 /// designer は周波数・傾き・位相・taps を持っていて、それらは float ではないので
-/// Node.values にも PipelineStore にも席が無い。ビューの @StateObject に置くと、
+/// Node.valuesに席が無い。ビューの@StateObjectに置くと、
 /// EffectCardView が畳んだとき／開いたときで別のビューを作るぶん
 /// 別々の designer ができ、しかも畳むたびに設計からやり直しになる。
-/// Node と PipelineStore に席ができるまでは、ここにしか無い（保存されず、アプリを終えると
-/// 既定へ戻る）。Matrix の経路も同じ形で逃がしてある（MatrixView.swift の MatrixRouting）。
+/// 保存するほうはNode.designが持つ（DSP/DesignParams.swift）。syncのたびにそこから読む。
+/// Matrixの経路も同じ形で逃がしてある（MatrixView.swiftのMatrixRouting）。
 ///
 /// 鍵は Node.id。rebuildAll は instance を作り直すが id は据え置く
 /// （EffeTuneDSP.rebuildAll）ので、engine を組み直しても同じ designer が残る。
@@ -343,6 +342,9 @@ final class FIRCrossoverDesigners {
     /// 既にビューで作られた designer だけを、現在の engine / instance / 処理幅へ繋ぐ。
     /// rebuildAll 後はカードが畳まれていても ETAssetReattach から呼ばれる。
     func sync(node: EffeTuneDSP.Node) {
+        // カードがまだ出ていなくても、段が材料を持っていれば作って繋ぐ（鎖を読んだ直後・
+        // instanceの作り直し。ETAssetReattach.one）。
+        if byNode[node.id] == nil, !node.design.isEmpty { _ = designer(for: node.id) }
         guard let designer = byNode[node.id] else { return }
 
         // index ではなく instance で引き直す。並べ替え後も正しい段へ書き戻せる。
@@ -368,8 +370,10 @@ final class FIRCrossoverDesigners {
             return node.values[parameter.offset]
         }
 
-        // Node に保存される lt / bc を attach より先に復元する。
+        // Nodeに保存されるlt / bcと、Node.designの周波数・傾き・位相・tapsを
+        // attachより先に復元する。材料が無ければ既定（applying(designParams:)）。
         designer.update {
+            $0 = $0.applying(designParams: node.design)
             $0.latencyModeIndex = Int(parameterValue("lt", fallback: 1).rounded())
             $0.bandCount = Int(parameterValue("bc", fallback: 2).rounded())
         }

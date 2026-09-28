@@ -264,6 +264,7 @@ extension PipelineStore.Loaded {
                   sectionName: node.sectionName,
                   irId: node.irId,
                   display: node.display,
+                  design: node.design,
                   externalID: node.externalID ?? "",
                   externalInstanceID: node.externalInstanceID,
                   externalState: node.externalState,

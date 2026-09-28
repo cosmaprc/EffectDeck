@@ -15,7 +15,8 @@
 //  latency を動かす口は下の Latency（setHeadBlock）の方。
 //
 //  帯の遅延 15 本と taps は**カーネルのパラメータではない**（designer:485）。
-//  鎖にも PipelineStore にも載らないので、アプリを立ち上げ直すと消える。
+//  valuesには載らないので、Node.designに上流と同じ綴り（tp / d0-14）で持つ
+//  （DSP/DesignParams.swift）。置き場が作るときにそこから組み、変わるたびに書き戻す。
 //
 //  --- 図を出していない理由 ---
 //  材料はある。designer.filter?.response に目標と実測の群遅延（ms）が入っていて、
@@ -25,6 +26,7 @@
 //  --- 状態の置き場 ---
 //  designer はビューの中では持てない。下の ETGroupDelayEQDesigners を参照。
 
+import Combine
 import SwiftUI
 import Foundation
 
@@ -53,6 +55,8 @@ final class ETGroupDelayEQDesigners {
         let designer: GroupDelayEQDesigner
         /// 最後に面倒を見た instance の世代。
         var tapId: UInt32
+        /// 遅延とtapsが変わるたびにNode.designへ書き戻す見張り。Entryと一緒に捨てる。
+        var watch: AnyCancellable?
         init(designer: GroupDelayEQDesigner, tapId: UInt32) {
             self.designer = designer
             self.tapId = tapId
@@ -70,10 +74,25 @@ final class ETGroupDelayEQDesigners {
     /// 繋ぐのは onAppear から呼ぶ sync(node:) の方。
     func designer(for node: EffeTuneDSP.Node) -> GroupDelayEQDesigner {
         if let found = entries[node.id] { return found.designer }
-        let made = GroupDelayEQDesigner(sampleRate: EffeTuneDSP.shared.sampleRate,
-                                        taps: Self.taps(of: node),
-                                        headBlock: Self.headBlock(of: node))
-        entries[node.id] = Entry(designer: made, tapId: 0)
+        let rate = EffeTuneDSP.shared.sampleRate
+        let taps = Self.taps(of: node)
+        let made = GroupDelayEQDesigner(sampleRate: rate,
+                                        taps: taps,
+                                        headBlock: Self.headBlock(of: node),
+                                        delaysMs: GroupDelayEQDesign.delays(designParams: node.design,
+                                                                            taps: taps,
+                                                                            sampleRate: rate))
+        let entry = Entry(designer: made, tapId: 0)
+        let id = node.id
+        // @Publishedは書く直前に新しい値を流すので、組で受けた値をそのまま書く。
+        // 最初の1回（今の値）は落とす。作っただけでは材料は変わっていない。
+        entry.watch = Publishers.CombineLatest(made.$delaysMs, made.$taps)
+            .dropFirst()
+            .sink { delays, taps in
+                EffeTuneDSP.shared.setDesign(
+                    GroupDelayEQDesign.designParams(taps: taps, delaysMs: delays), nodeID: id)
+            }
+        entries[node.id] = entry
         return made
     }
 
@@ -81,6 +100,10 @@ final class ETGroupDelayEQDesigners {
     /// 作り直されたときに呼ぶ。
     func sync(node: EffeTuneDSP.Node) {
         release()
+        // カードがまだ出ていなくても、段が遅延を持っていれば作って繋ぐ（鎖を読んだ直後・
+        // instanceの作り直し。ETAssetReattach.one）。全部0msなら作らない。繋ぐと資産を外しに行き、
+        // AssetUpload.clearが音を一瞬止める（下のonAppearの但し書き）。
+        if entries[node.id] == nil, Self.hasDelay(node) { _ = designer(for: node) }
         guard let entry = entries[node.id] else { return }
         let designer = entry.designer
 
@@ -121,13 +144,37 @@ final class ETGroupDelayEQDesigners {
         }
     }
 
+    /// 段の材料が外から変わった（プリセットの適用・既定へ戻す）。
+    /// ltとNode.designから組み直してdesignerへ渡す。同じ値ならどの口も黙って戻る。
+    func adopt(node: EffeTuneDSP.Node) {
+        if let designer = entries[node.id]?.designer {
+            let taps = Self.taps(of: node)
+            // tapsを先に。遅延の上限はtapsで決まる（group_delay_eq.js:147-162と同じ順）。
+            designer.setTaps(taps)
+            designer.setDelays(GroupDelayEQDesign.delays(designParams: node.design, taps: taps,
+                                                         sampleRate: designer.sampleRate))
+            designer.setHeadBlock(Self.headBlock(of: node))
+        }
+        sync(node: node)
+    }
+
     // MARK: 鎖に残っている値から戻す
 
-    /// taps は fd（filterDelaySamples）= taps/2 から戻せる（designer:832）。
+    /// tapsはNode.designのtpから。無ければfd（filterDelaySamples）= taps/2から戻す（designer:832）。
+    /// fdから戻す道は、材料を書いていなかった頃の鎖のため。
     private static func taps(of node: EffeTuneDSP.Node) -> Int {
-        guard let param = node.spec.params.first(where: { $0.name == "filterDelaySamples" }),
-              node.values.indices.contains(param.offset) else { return 16384 }
-        return Int(node.values[param.offset].rounded()) * 2
+        var delay: Float?
+        if let param = node.spec.params.first(where: { $0.name == "filterDelaySamples" }),
+           node.values.indices.contains(param.offset) {
+            delay = node.values[param.offset]
+        }
+        return GroupDelayEQDesign.taps(designParams: node.design, filterDelaySamples: delay)
+    }
+
+    /// 段が0msでない遅延を持っているか。
+    private static func hasDelay(_ node: EffeTuneDSP.Node) -> Bool {
+        GroupDelayEQDesign.delays(designParams: node.design, taps: taps(of: node),
+                                  sampleRate: EffeTuneDSP.shared.sampleRate).contains { $0 != 0 }
     }
 
     /// headBlock は lt（latencyMode）の**添字**から戻せる（designer:831）。

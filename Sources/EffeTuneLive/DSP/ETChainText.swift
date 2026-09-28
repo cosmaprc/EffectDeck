@@ -580,6 +580,9 @@ enum ETChainText {
             }
         }
         let display = ETDisplayParam.table(for: spec.type)
+        // designerの材料も読む鍵（PipelineStore.parseがETDesignParam.readで拾う）。
+        // 寄せるのはdesignerへ渡すとき（DesignParams.swift）なので、ここでは素通しする。
+        let design = ETDesignParam.table(for: spec.type)
         let quiet = quietKeys[spec.type] ?? []
 
         for key in params.keys.sorted() where !skip.contains(key) {
@@ -591,8 +594,8 @@ enum ETChainText {
                 params[key] = fixRows(raw, members: members, spec: spec, label: label, report: &report)
             } else if let p = lists[key] {
                 params[key] = fixList(raw, p, spec: spec, label: label, report: &report)
-            } else if display[key] != nil || quiet.contains(key) || quietEverywhere.contains(key)
-                        || key == irKey {
+            } else if display[key] != nil || design[key] != nil || quiet.contains(key)
+                        || quietEverywhere.contains(key) || key == irKey {
                 continue
             } else {
                 report.add(label, to: \.ignored)

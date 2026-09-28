@@ -76,6 +76,9 @@ struct EffectPresetsView: View {
         guard let node = node else { return }
         let next = EffectPresetApply.values(for: spec, params: params, current: node.values)
         dsp.setValues(next, at: index)
+        // designerの材料（5Band FIR PEQの帯域など）もfloatに載らないので鍵で運ぶ
+        // （DSP/DesignParams.swift）。当てたあとの設計のやり直しもDSPがやる。
+        dsp.applyDesign(from: params, at: index)
 
         // IR Reverb の素材だけは float に載らないので鍵で運ぶ
         // （PipelineStore.swift:74-77 と同じ扱い）。段に書いてから入れ直す。

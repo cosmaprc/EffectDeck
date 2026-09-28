@@ -313,6 +313,10 @@ targets:
       # DisplayParams・ETChannel・ETParamCoding・EffectSpecで、どれも上で入れてある。
       # Sectionの終端（rootReset）が再起動・プリセット・共有リンクを通って残るかを見る。
       - path: Sources/EffeTuneLive/DSP/PipelineForm.swift
+      # designerで作る4種の設計の材料（pm / tp / f0など）を上流の綴りで鎖に書く・読む（DesignParamsTests）。
+      # 設定の型を引くので、下のDesigners/*Design.swiftも要る。PipelineForm・ETChainText・
+      # EffectPresetStoreCoreが引く。
+      - path: Sources/EffeTuneLive/DSP/DesignParams.swift
       # CHAIN.mdの見本と、積んでいる版の語彙（chain/v<版>/effects.json）を実行時に読む。
       # **chainはフォルダのまま入れる。**版ごとに同じ名前のeffects.jsonが並ぶので、
       # 平らに束ねると名前がぶつかる。
