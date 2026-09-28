@@ -3,6 +3,7 @@
 // Builds the images the site serves from its own origin:
 //   assets/shot-*.webp  from docs/shot-*.png (the README screenshots, 552x1200)
 //   assets/og.png       1200x630 Open Graph card (icon, name, tagline, two screenshots)
+//   assets/og-discord.png  the same card for fxdb.nemut.ai (the Discord server)
 //
 // sharp comes in with miniflare/wrangler (site/node_modules). Re-run this when the
 // screenshots or the icon in docs/ change, and commit the outputs.
@@ -61,15 +62,26 @@ const right = await phone("analyzers", 250, 6);
 
 const icon = await sharp(repo("docs/icon.png")).resize(132).png().toBuffer();
 
-const text = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
-  <text x="84" y="342" font-family="Cascadia Mono, Consolas, Menlo, monospace" font-weight="600" font-size="70" fill="#1f1f1f" letter-spacing="-1">EffectDeck</text>
-  <text x="86" y="400" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="31" fill="#656d76">Audio effects for any app on iPhone</text>
-  <text x="86" y="446" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="24" fill="#656d76">EffeTune's DSP · iOS 27 · effectdeck.nemut.ai</text>
-</svg>`);
+const MONO = "Cascadia Mono, Consolas, Menlo, monospace";
+const SANS = "Segoe UI, Helvetica Neue, Arial, sans-serif";
+const svg = (inner) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">${inner}</svg>`);
+
+const cards = {
+  "og.png": svg(`
+  <text x="84" y="342" font-family="${MONO}" font-weight="600" font-size="70" fill="#1f1f1f" letter-spacing="-1">EffectDeck</text>
+  <text x="86" y="400" font-family="${SANS}" font-size="31" fill="#656d76">Audio effects for any app on iPhone</text>
+  <text x="86" y="446" font-family="${SANS}" font-size="24" fill="#656d76">EffeTune's DSP · iOS 27 · effectdeck.nemut.ai</text>`),
+  "og-discord.png": svg(`
+  <text x="84" y="342" font-family="${MONO}" font-weight="600" font-size="70" fill="#1f1f1f" letter-spacing="-1">EffectDeck</text>
+  <text x="84" y="414" font-family="${MONO}" font-weight="600" font-size="70" fill="#2563eb" letter-spacing="-1">Base</text>
+  <text x="86" y="472" font-family="${SANS}" font-size="31" fill="#656d76">The official Discord server</text>
+  <text x="86" y="518" font-family="${SANS}" font-size="24" fill="#656d76">Bugs · Questions · Ideas · fxdb.nemut.ai</text>`),
+};
 
 // sharp will not composite an overlay larger than the base, and the tilted phones run off
 // the bottom edge. Compose on an oversized canvas, then cut the card out of the middle.
 const M = 800;
+for (const [name, text] of Object.entries(cards)) {
 const big = await sharp({ create: { width: W + 2 * M, height: H + 2 * M, channels: 3, background: BG } })
   .composite([
     { input: left.data, left: M + 600, top: M + 64 },
@@ -82,5 +94,6 @@ const big = await sharp({ create: { width: W + 2 * M, height: H + 2 * M, channel
 const og = await sharp(big)
   .extract({ left: M, top: M, width: W, height: H })
   .png({ compressionLevel: 9 })
-  .toFile(out("og.png"));
-console.log("og.png", og.width, og.height, og.size);
+  .toFile(out(name));
+console.log(name, og.width, og.height, og.size);
+}

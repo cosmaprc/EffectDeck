@@ -24,6 +24,7 @@ import {
 } from "./links.js";
 import badgeEn from "../assets/app-store-en.svg";
 import ogImage from "../assets/og.png";
+import ogDiscord from "../assets/og-discord.png";
 import shotEffects from "../assets/shot-effects.webp";
 import shotAnalyzers from "../assets/shot-analyzers.webp";
 import shotRouting from "../assets/shot-routing.webp";
@@ -62,6 +63,37 @@ function aasa() {
   });
 }
 
+// X・Discord・LINE・Slack・Facebook・Bluesky・Mastodon・Misskey 等のリンクプレビュー用クローラー。
+// iMessage は facebookexternalhit と Twitterbot を名乗るのでここに入る。
+const PREVIEW_BOT = /Twitterbot|facebookexternalhit|Facebot|Discordbot|Slackbot|LinkedInBot|TelegramBot|WhatsApp|Line\/|Bluesky|Cardyb|Mastodon|Misskey|SummalyBot|Pleroma|Akkoma|redditbot|Embedly|Iframely|Skype|vkShare|KakaoTalk/i;
+
+function discordCard() {
+  const title = "EffectDeck Base";
+  const description = "The official EffectDeck Discord server. Bugs, questions and ideas welcome. 日本語のチャンネルもあります。";
+  const invite = esc(DISCORD_INVITE);
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>${title}</title>
+<meta name="robots" content="noindex">
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="EffectDeck">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${esc(description)}">
+<meta property="og:url" content="${DISCORD}">
+<meta property="og:image" content="https://${DECK_HOST}/og-discord.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="EffectDeck Base, the official Discord server">
+<meta name="twitter:card" content="summary_large_image">
+<meta http-equiv="refresh" content="0; url=${invite}">
+</head><body><a href="${invite}">Join EffectDeck Base on Discord</a></body></html>`;
+  return new Response(html, {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600", "x-robots-tag": "noindex" },
+  });
+}
+
 const AASA_PATHS = new Set(["/.well-known/apple-app-site-association", "/apple-app-site-association"]);
 
 // MARK: - 入口
@@ -83,7 +115,9 @@ export default {
     }
 
     // **fxdb は Discord の招待リンクへ 302。**招待リンクは替わりうるので 301 にしない。
+    // リンクのプレビューを作るクローラーにだけ、転送せず自前のOGPを返す（招待リンクのOGPは Discord の汎用のもの）。
     if (url.hostname === DISCORD_HOST) {
+      if (PREVIEW_BOT.test(request.headers.get("user-agent") || "")) return discordCard();
       return new Response(null, {
         status: 302,
         headers: { location: DISCORD_INVITE, "cache-control": "no-store" },
@@ -137,6 +171,8 @@ async function deck(url) {
       return asset(badgeEn, "image/svg+xml");
     case "/og.png":
       return asset(ogImage, "image/png");
+    case "/og-discord.png":
+      return asset(ogDiscord, "image/png");
     case "/icon.png":
     case "/favicon.ico":
     case "/apple-touch-icon.png":

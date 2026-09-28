@@ -71,6 +71,20 @@ try {
     }
   });
 
+  await test("fxdb: link-preview bots get the card, not the redirect", async () => {
+    for (const ua of ["Twitterbot/1.0", "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)", "facebookexternalhit/1.1"]) {
+      const res = await mf.dispatchFetch("https://fxdb.nemut.ai/", { headers: { "user-agent": ua }, redirect: "manual" });
+      const body = await res.text();
+      assert.equal(res.status, 200, ua);
+      assert.match(body, /<meta property="og:title" content="EffectDeck Base">/, ua);
+      assert.match(body, /og:image" content="https:\/\/effectdeck\.nemut\.ai\/og-discord\.png"/, ua);
+      assert.match(body, /url=https:\/\/discord\.gg\/Y3DYJJmmDE/, ua);
+    }
+    const img = await get("effectdeck.nemut.ai", "/og-discord.png");
+    assert.equal(img.status, 200);
+    assert.equal(img.headers.get("content-type"), "image/png");
+  });
+
   await test("fxd: everything 301s to effectdeck with the same path and query, AASA included", async () => {
     for (const path of [
       "/.well-known/apple-app-site-association",
