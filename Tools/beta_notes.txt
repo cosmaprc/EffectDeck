@@ -1,5 +1,8 @@
 Everything new since 2026.09.20, the version on the App Store.
 
+If EffectDeck does not show up in the output list after switching between
+this build and the App Store version, restart the iPhone.
+
 JSFX
 The big one. EffectDeck now hosts JSFX, the script format REAPER uses, so an
 effect can be a text file you wrote or downloaded rather than something we
