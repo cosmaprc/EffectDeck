@@ -42,7 +42,16 @@ struct EffectPickerView: View {
         case failed(String)
         case shareFailed(String)
     }
-    @State private var alert: Alert?
+    /// **書いてもその場では出さない。**出ているものが閉じてから出る（ETAlertQueue。
+    /// 下の.alertの.onChangeが次の回に出す）。From LinkのImportの中で断りを立てると、
+    /// 閉じる側の書き戻しが同じ回でnilにして、"That does not look like a link."が出ていなかった。
+    private var alert: Alert? {
+        get { alerts.current }
+        nonmutating set {
+            if let newValue { alerts.present(newValue) } else { alerts.dismissed() }
+        }
+    }
+    @State private var alerts = ETAlertQueue<Alert>()
     @State private var linkText = ""
 
     private var alertTitle: String {
@@ -323,6 +332,7 @@ struct EffectPickerView: View {
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
                         Button("Cancel", role: .cancel) { alert = nil }
+                        // fetchLinkがその場で立てる断りは、この1枚が閉じてから出る（alertの注記）。
                         Button("Import") { let text = linkText; alert = nil; fetchLink(text) }
                     } else {
                         Button("OK", role: .cancel) { alert = nil }
@@ -335,6 +345,11 @@ struct EffectPickerView: View {
                         EmptyView()
                     }
                 }
+            // 頼まれた1枚を出す。**出ていた1枚が消えた回に鳴り、出すのはその次の回。**
+            // .alertが「閉じた」と「次の1枚」を同じ回で受けると、次の1枚が出ない（AlertQueue.swift）。
+            .onChange(of: alerts.canAdvance) { _, ready in
+                if ready { Task { @MainActor in alerts.advance() } }
+            }
             // 一覧と検索結果の両方を覆う階層に 1 つ置く。行ごとに持たせると
             // 検索から払ったときに出ない。
             .confirmationDialog(pendingDeleteJSFX.map { "Delete “\($0.name)”?" } ?? "",

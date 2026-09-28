@@ -93,7 +93,17 @@ struct PresetsView: View {
             }
         }
     }
-    @State private var dialog: Dialog?
+    /// 出している1枚。**書いてもその場では出さない。**出ているものが閉じてから出る
+    /// （ETAlertQueue。下の.alertの.onChangeが次の回に出す）。
+    /// 取り込みの確認のImportの中で控えや断りを立てると、閉じる側の書き戻しが同じ回で
+    /// nilにして、何も出ていなかった。名前を打たせる.alertのSaveから出す断りも同じ道を通す。
+    private var dialog: Dialog? {
+        get { dialogs.current }
+        nonmutating set {
+            if let newValue { dialogs.present(newValue) } else { dialogs.dismissed() }
+        }
+    }
+    @State private var dialogs = ETAlertQueue<Dialog>()
     /// 名前を打たせているもの。Rename と新しいフォルダで使い回す。
     @State private var naming: Naming?
     @State private var typed = ""
@@ -184,22 +194,25 @@ struct PresetsView: View {
     /// 出なくなっていた。このリポジトリで 3 度目の踏み方）。
     ///
     /// 知らないエフェクトが混じっていれば PipelineStore.parse が黙って落とすので、
-    /// 1 本も残らなかったときは黙って閉じずに理由を出す。
+    /// 1 本も残らなかったときは黙って閉じずに理由を出す。置けなかった段があれば
+    /// それを名指しする（"Not found: JSFX tape wobble."。ETChainImportResult）。
     /// 共有リンクの取り込みだけは**置き換え**。鎖まるごとの写しなので、
     /// 足すと二重になる（上流も読み込みは置き換え）。
+    ///
+    /// 取り込みの確認のImportから呼ぶ。出す1枚は確認が閉じてから出る（dialogの注記）。
     private func importChain(_ text: String) {
         let (loaded, report) = store.importFrom(text)
-        if loaded.isEmpty {
-            dialog = .failed("Nothing readable on the clipboard.")
-        } else {
+        switch ETChainImportResult.of(loaded: loaded.count, report: report,
+                                      unreadable: "Nothing readable on the clipboard.") {
+        case .failed(let why):
+            dialog = .failed(why)
+        case .done:
             dsp.replaceChain(with: loaded)
+            dismiss()
+        case .imported(let note):
             // 直したもの・落としたものがあれば、閉じる前に1行だけ出す（ChatGPTに組ませた鎖）。
-            // 何も無ければ前と同じく黙って閉じる。
-            if report.isEmpty {
-                dismiss()
-            } else {
-                dialog = .imported(report.message)
-            }
+            dsp.replaceChain(with: loaded)
+            dialog = .imported(note)
         }
     }
 
@@ -283,6 +296,11 @@ struct PresetsView: View {
                 }
             } message: { what in
                 Text(what.message)
+            }
+            // 頼まれた1枚を出す。**出ていた1枚が消えた回に鳴り、出すのはその次の回。**
+            // .alertが「閉じた」と「次の1枚」を同じ回で受けると、次の1枚が出ない（AlertQueue.swift）。
+            .onChange(of: dialogs.canAdvance) { _, ready in
+                if ready { Task { @MainActor in dialogs.advance() } }
             }
             // **名前を打たせるのは別の提示にする。**同じ .alert に混ぜると
             // 用件ごとにボタンの並びが変わって読みにくい。出す条件が

@@ -341,6 +341,9 @@ targets:
       - path: Sources/EffeTuneLive/PreferencesValues.swift
       # Status節とツールバーの帯が出す数字と言い回し。両方が同じ関数で丸める（StatusReadingsTests）。
       - path: Sources/EffeTuneLive/Views/StatusReadings.swift
+      # 警告を1枚ずつ、前の1枚が閉じてから出す順番と、鎖を取り込んだ後に出すもの（AlertQueueTests）。
+      # Foundationだけ。引くETChainText・ETShareLinkは上で入れてある。
+      - path: Sources/EffeTuneLive/Views/AlertQueue.swift
       # AudioIOから出した、値だけで決まる判断（本数・レート・組み直し・中断・出力の書き出し・外部の枠・
       # ロック画面・休む判断・撮影用の音）。AVAudioSessionにもCoreAudioにも触らない
       # （ProcessingChannels・SampleRateRules・PeerFollow・FeedbackLoop・AudioLifecycle・RouteRebuildRule・
