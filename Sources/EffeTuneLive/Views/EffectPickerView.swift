@@ -842,6 +842,10 @@ struct EffectPickerView: View {
             ForEach(systemCategories, id: \.self) { category in
                 Section {
                     if category == Self.debugJSFXCategory {
+                        // **Debugの版だけ。**見出し（systemCategories）はDebugでしか出ないが、
+                        // 呼ぶ側を囲わないとDebugPresets.swiftの鎖の字がReleaseにも入る
+                        // （Scripts/check_release_binary.shのdebugonlyが見る）。
+                        #if DEBUG
                         presetRow(name: "JSFX Host Test",
                                   payload: "preset:debug:jsfx-host") {
                             jsfx.debugPresetItems()
@@ -855,6 +859,7 @@ struct EffectPickerView: View {
                                 ETShareLink.parse(item.json, catalog: ETCatalog)
                             }
                         }
+                        #endif
                     } else {
                         let presets = ETSystemPresets.filter { $0.category == category }
                         ForEach(Array(presets.enumerated()), id: \.element.id) { offset, preset in
