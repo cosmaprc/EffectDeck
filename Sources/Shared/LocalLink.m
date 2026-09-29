@@ -270,6 +270,9 @@ static os_log_t ETLinkLog(void) {
     uint8_t *_rxBuf;
     size_t _rxLen;
     uint64_t _badSamples;
+    // 今の相手を受けた時点の _receivedFrames。枯れの判定はこの相手から
+    // 受け取った分で見る（累計で見ると 2 本目以降の立ち上がりを枯れと数える）。
+    uint64_t _receivedAtAccept;
     // いまタイマーに入れてある周期が「相手が居る側」か。
     BOOL _timedLive;
 }
@@ -437,6 +440,7 @@ static void ETLinkReceiverTakeChunk(void *ctx, const uint8_t *payload, uint32_t 
             fcntl(c, F_SETFL, fl | O_NONBLOCK);
             _peerFd = c;
             _rxLen = 0;     // 前の相手の書きかけを新しいストリームに混ぜない
+            _receivedAtAccept = _receivedFrames;
             // **浅い側から始め直す。**前の相手で枯れて深くしたぶんを
             // 引き継ぐと、一度の混み合いで遅れが増えたまま固定される。
             [ETLinkReceiver resetLinkState];
@@ -477,9 +481,15 @@ static void ETLinkReceiverTakeChunk(void *ctx, const uint8_t *payload, uint32_t 
     //
     // **鳴る前の空回りは枯れではない。**相手が居るかと受信済みのフレーム数を渡すのは
     // そのため（相手が繋がる前も音のコールバックは回っていて、毎枠足りない）。
+    // **渡すのは今の相手から受けた分。**累計を渡すと、起動から 1 秒鳴った後は
+    // 繋ぎ直すたびに立ち上がりの溜め込みを枯れと数え、3 回で 2048 へ逃げていた。
     ETLinkStarve starve;
+    // 2 つは _q で書かれ、ここは音のスレッド。順序の保証が無いので、
+    // 受けた直後に古い累計が見えても桁あふれで「鳴っている」にしない。
+    uint64_t total = _receivedFrames, base = _receivedAtAccept;
+    uint64_t received = total > base ? total - base : 0;
     uint32_t got = ETLinkJitterRead(&gJitter, _ring, ET_LINK_RECV_RING_SAMPLES, w, &r,
-                                    out, frames, _peerFd >= 0, _receivedFrames, &starve);
+                                    out, frames, _peerFd >= 0, received, &starve);
     if (starve.counted) {
         // **最初の何回かだけ書き出す。**毎枠出すと洪水になって、
         // 肝心の間隔が読めなくなる。頻度は Diagnostics の数で見る。
@@ -490,7 +500,7 @@ static void ETLinkReceiverTakeChunk(void *ctx, const uint8_t *payload, uint32_t 
                          starve.filledFrames, starve.wantFrames,
                          (unsigned long long)starve.bufferedFrames,
                          starve.target,
-                         (unsigned long long)_receivedFrames,
+                         (unsigned long long)received,
                          starve.runBefore + 1);
         }
     }

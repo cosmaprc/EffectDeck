@@ -134,6 +134,7 @@ typedef struct ETLinkStarve {
 /// 足りない分は無音で埋める。返すのは実際に読めたフレーム数。
 /// w は書き位置（acquire で読んだもの）、*r は読み位置で、読んだぶん進める。
 /// hasPeer と receivedFrames は「鳴る前の空回り」を枯れと数えないために使う。
+/// receivedFrames は**今の相手から**受け取ったフレーム数（起動からの累計ではない）。
 /// starve は NULL でよい。
 uint32_t ETLinkJitterRead(ETLinkJitter *j, const float *ring, uint64_t ringSamples,
                           uint64_t w, uint64_t *r, float *out, uint32_t frames,
