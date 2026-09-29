@@ -47,7 +47,7 @@ ET_CASE(render_440_stereo)
         ET_CHECK(audio[i] == audio[48000 + i]);
         ET_CHECK(fabsf(audio[i]) <= 0.064f);
         if (i && audio[i - 1] < 0 && audio[i] >= 0) ++crossings;
-        energy += audio[i] * audio[i];
+        energy += (double)audio[i] * audio[i];
     }
     ET_CHECK(crossings >= 439 && crossings <= 440);
     ET_CHECK(energy / 48000 > 0.0019 && energy / 48000 < 0.0021);
