@@ -16,6 +16,7 @@ export function homeLd() {
   return {
     "@context": "https://schema.org",
     "@graph": [
+      { "@type": "WebSite", "@id": `${ORIGIN}/#website`, name: "EffectDeck", url: `${ORIGIN}/` },
       {
         "@type": "SoftwareApplication",
         "@id": `${ORIGIN}/#app`,
