@@ -172,17 +172,17 @@ extension ETRemoteAddress {
     /// Preferences.remoteAddress に書く字（`host:port/token`）。parse がそのまま読む。
     var text: String { "\(host):\(port)/\(token)" }
 
-    /// PC が QR に出すリンク `effectdeck://remote?h=<IPv4>:47300&t=<token>` を読む。
-    /// 違う scheme・違う行き先・h か t が無いものは nil（カメラで拾った別の QR を受けない）。
+    /// PC が QR に出す接続先 `ws://<IPv4>:47300/?t=<token>` を読む。
+    /// **QR には API の接続先そのものを入れる**（2026-09-30 本人の決定）。EffectDeck の名前の
+    /// リンクにすると、PC 側が特定のクライアントを知ることになる。代わりにカメラのアプリからは
+    /// 開けないので、読むのはアプリの中の読み取り（RemoteScannerView）だけ。
+    /// ws 以外・t の無いもの・パスが / 以外のものは nil（カメラで拾った別の QR を受けない）。
     static func pairingLink(_ url: URL) -> ETRemoteAddress? {
-        guard url.scheme?.lowercased() == "effectdeck", url.host?.lowercased() == "remote",
-              let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        let items = c.queryItems ?? []
-        guard let h = items.first(where: { $0.name == "h" })?.value,
-              let t = items.first(where: { $0.name == "t" })?.value,
-              !h.contains("/"), !t.contains("/") else { return nil }
-        // 素の形（host:port/token）へ寄せて読む。ポートが無ければ 47300。
-        return parse("\(h)/\(t)")
+        guard url.scheme?.lowercased() == "ws",
+              let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              c.path.isEmpty || c.path == "/",
+              let t = c.queryItems?.first(where: { $0.name == "t" })?.value, !t.isEmpty else { return nil }
+        return parse(url.absoluteString)
     }
 }
 

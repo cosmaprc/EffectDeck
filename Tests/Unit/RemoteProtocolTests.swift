@@ -7,7 +7,7 @@
 //    - 外部の段の externalState は PC へ渡す形に入らない（符号化する前に振り分ける）
 //    - params には動かせるパラメータのショートキーだけが入る
 //    - 接続先の字の読み方（host:port/token・ws:// の URL・読めない字）
-//    - v2: QR のリンク（effectdeck://remote）、state の origin / seq の振り分け、
+//    - v2: QR のリンク（ws://host:port/?t=token）、state の origin / seq の振り分け、
 //      プリセットの足し合わせ（名前の付け足し・2 回目は何もしない・PC の字と手元の保存が同じ中身）、
 //      IR の塊の切り方と継ぎ方、PC の変更を値だけで当てられるか
 
@@ -148,7 +148,7 @@ final class RemoteProtocolTests: XCTestCase {
     // MARK: - v2: QR のリンク
 
     func testPairingLinkReadsHostPortAndToken() throws {
-        let url = try XCTUnwrap(URL(string: "effectdeck://remote?h=192.168.1.10:47300&t=ab12cd34"))
+        let url = try XCTUnwrap(URL(string: "ws://192.168.1.10:47300/?t=ab12cd34"))
         let a = ETRemoteAddress.pairingLink(url)
         XCTAssertEqual(a, ETRemoteAddress(host: "192.168.1.10", port: 47300, token: "ab12cd34"))
         // 控える字は parse がそのまま読み戻せる。
@@ -156,17 +156,18 @@ final class RemoteProtocolTests: XCTestCase {
     }
 
     func testPairingLinkDefaultsThePort() throws {
-        let url = try XCTUnwrap(URL(string: "EffectDeck://Remote?t=tok&h=10.0.0.5"))
+        let url = try XCTUnwrap(URL(string: "WS://10.0.0.5?t=tok"))
         XCTAssertEqual(ETRemoteAddress.pairingLink(url),
                        ETRemoteAddress(host: "10.0.0.5", port: 47300, token: "tok"))
     }
 
     func testPairingLinkRejectsOtherLinks() throws {
         for text in ["https://effectdeck.nemut.ai/remote?h=1.2.3.4:47300&t=x",   // 共有リンクの側
-                     "effectdeck://chain?h=1.2.3.4:47300&t=x",                   // 行き先が違う
-                     "effectdeck://remote?h=1.2.3.4:47300",                      // トークンが無い
-                     "effectdeck://remote?t=x",                                  // 相手が無い
-                     "effectdeck://remote?h=1.2.3.4:99999&t=x"] {                // ポートが範囲の外
+                     "effectdeck://remote?h=1.2.3.4:47300&t=x",                  // 前の形（使わない）
+                     "ws://1.2.3.4:47300/chain?t=x",                             // 行き先が違う
+                     "ws://1.2.3.4:47300/",                                      // トークンが無い
+                     "wss://1.2.3.4:47300/?t=x",                                 // 暗号つき（作らない）
+                     "ws://1.2.3.4:99999/?t=x"] {                                // ポートが範囲の外
             let url = try XCTUnwrap(URL(string: text))
             XCTAssertNil(ETRemoteAddress.pairingLink(url), text)
         }

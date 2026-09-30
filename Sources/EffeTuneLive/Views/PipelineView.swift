@@ -337,8 +337,6 @@ struct PipelineView: View {
         // **共有リンク（effectdeck.nemut.ai。別名の fxd.nemut.ai も読む）も同じ口に来る。**
         // Universal Link は SwiftUI では onOpenURL に届く。ファイルより先に見る。
         .onOpenURL { url in
-            // PoC: PC の EffeTune の QR（effectdeck://remote?…）。控えてつなぐ（RemoteMirror）。
-            if RemoteMirror.shared.pair(url) { return }
             if let route = ETFXDLink.route(url) {
                 openLink(route)
                 return
