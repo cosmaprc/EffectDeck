@@ -107,6 +107,8 @@ struct PipelineView: View {
     /// ここへ届くのは本当に変わったときだけ。初期値は onAppear で合わせる。
     @State private var running = false
     @State private var hasPeer = false
+    /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
+    @State private var isRemote = false
     @State private var processingRate: Double = 48000
 
     // MARK: - 並べ方（1列/2列）
@@ -302,6 +304,7 @@ struct PipelineView: View {
             // 写した値の初期合わせ。購読の初回配信に頼らない。
             running = io.running
             hasPeer = io.hasPeer || RemoteMirror.shared.isRemote
+            isRemote = RemoteMirror.shared.isRemote
             processingRate = io.processingRate
         }
         .onReceive(slow) { _ in io.tick() }
@@ -367,6 +370,7 @@ struct PipelineView: View {
         // 鳴っているのは PC で、No audio yet の帯や電源の沈みはこの端末の話でしかない。
         .onReceive(io.$hasPeer.combineLatest(RemoteMirror.shared.$isRemote)) { peer, remote in
             hasPeer = peer || remote
+            isRemote = remote
         }
         .onReceive(io.$processingRate) { processingRate = $0 }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
@@ -832,7 +836,11 @@ struct PipelineView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
 
-            if !hasPeer {
+            if isRemote {
+                RemoteBanner(openRemote: { presentSheet(.remote) })
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+            } else if !hasPeer {
                 ConnectBanner(openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
@@ -2071,6 +2079,48 @@ private struct ConnectBanner: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Known limitations")
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// PC の鎖を編集しているあいだ、No audio yet の代わりに鎖の頭に出る。
+/// 状態だけを言う。つなぎ先は host だけ（トークンは出さない）。
+private struct RemoteBanner: View {
+    let openRemote: () -> Void
+
+    var body: some View {
+        Card {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.blue)
+                    .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Remote")
+                        .font(.system(size: 15, weight: .semibold))
+                    if let host = ETRemoteAddress.parse(Preferences.shared.remoteAddress)?.host {
+                        Text(host)
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                // 大きさは ConnectBanner の Help に揃える。
+                Button(action: openRemote) {
+                    Text("Settings")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Remote settings")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
