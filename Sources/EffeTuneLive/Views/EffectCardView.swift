@@ -108,6 +108,9 @@ struct EffectCardView: View {
                             ETEffectViews.view(index: index, node: node, dsp: dsp)
                                 .id(node.resetCount)
                                 .environment(\.etGraphOnly, false)
+                        } else if let tabs = ETParamTabs.tabs(for: node.spec.type) {
+                            // 上流がタブに分けているもの（AM Radio・TV Audio・Vinyl）。
+                            TabbedParameterList(index: index, node: node, dsp: dsp, tabs: tabs)
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
                                 ForEach(node.spec.params) { param in
