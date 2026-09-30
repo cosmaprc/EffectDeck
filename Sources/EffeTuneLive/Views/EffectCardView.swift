@@ -118,6 +118,8 @@ struct EffectCardView: View {
             }
         }
         .opacity(node.isMuted ? 0.55 : 1)
+        // PoC: PC の鎖を編集しているあいだ、Analyzer の図を沈める（Views/RemoteScannerView.swift）。
+        .modifier(ETRemoteMeasurementDim(applies: node.spec.isAnalyzer))
         .sheet(item: $sheet) { which in
             switch which {
             case .routing: EffectRoutingSheet(index: index, node: node, dsp: dsp)

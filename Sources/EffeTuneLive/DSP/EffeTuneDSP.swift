@@ -359,8 +359,13 @@ final class EffeTuneDSP: ObservableObject {
         pendingPersist = nil
 
         // PoC: PC の EffeTune へ写す（DSP/RemoteMirror.swift）。下の門は端末へ残すかの話で、
-        // 起動直後の既定の鎖も PC へは送るので、門より前に呼ぶ。
+        // PC の鎖を編集しているあいだは端末へは書かずに PC へだけ送るので、門より前に呼ぶ。
         RemoteMirror.shared.chainChanged(chain)
+
+        // **PC の鎖を編集しているあいだは端末へ書かない**（RemoteMirror.isRemote）。
+        // いま並んでいるのは PC の鎖で、手元の鎖は退避してある。書くと pipeline.last と
+        // iCloud（CloudMirror）が PC の鎖で上書きされ、切ったときに戻す先が消える。
+        guard !RemoteMirror.shared.isRemote else { return }
 
         // **restore() が置いた既定の 1 本は残さない**（ETChainEditing.shouldPersist）。
         // 書くと iCloud 側の鎖が Level Meter 1 本で上書きされ、遅れて降りてくる鎖を
@@ -383,6 +388,19 @@ final class EffeTuneDSP: ObservableObject {
         }
         PipelineStore.saveLast(chain)
         persistExpanded()
+    }
+
+    /// PoC: PC の鎖を編集する前に、手元の鎖を退避する形（RemoteMirror）。
+    ///
+    /// **待っている遅延保存を先に書き切る。**退避した後は persist() が書かないので、
+    /// 0.5 秒待ちの編集が落ちる。外部の段は persist() と同じく生きた instance の state を取る。
+    func remoteStashForm() -> [[String: Any]] {
+        if pendingPersist != nil { persist() }
+        var nodes = chain
+        for index in nodes.indices where nodes[index].isExternal {
+            nodes[index].externalState = externalState(for: nodes[index]) ?? nodes[index].externalState
+        }
+        return PipelineStore.shortForm(nodes)
     }
 
     /// 走っている遅延保存。まとめるために持っている。
@@ -408,6 +426,8 @@ final class EffeTuneDSP: ObservableObject {
     }
 
     private func persistExpanded() {
+        // PC の鎖の開閉は手元の鎖の位置と合わない。persist() と同じく書かない。
+        guard !RemoteMirror.shared.isRemote else { return }
         PipelineStore.saveExpanded(chain.indices.filter { expanded.contains(chain[$0].id) })
     }
 
@@ -486,7 +506,8 @@ final class EffeTuneDSP: ObservableObject {
     /// 人が何か足していれば isDefaultChain が false になり、ここは素通りする。
     /// 遅れて届いた古い鎖で、いま触っている鎖を潰さないため。
     func adoptSeededChain() {
-        guard ready, isDefaultChain else { return }
+        // PC の鎖を編集している最中に降りてきた鎖で、PC の鎖を潰さない（RemoteMirror）。
+        guard ready, isDefaultChain, !RemoteMirror.shared.isRemote else { return }
         guard let saved = PipelineStore.loadLast(catalog: ETCatalog), !saved.isEmpty else { return }
         replaceChain(with: saved)
     }

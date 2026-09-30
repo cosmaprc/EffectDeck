@@ -38,6 +38,22 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- PoC: PC の EffeTune が出す QR（effectdeck://remote?h=<IP>:47300&t=<token>）。
+	     カメラのアプリで読んでも、アプリの中の読み取り（RemoteScannerView）で読んでも
+	     PipelineView の .onOpenURL → RemoteMirror.pair へ来る。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.nemut.effectdeck.remote</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>effectdeck</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>EffectDeck uses the camera to scan the pairing code shown by EffeTune on your computer.</string>
 	<!-- 暗号を使わない。入れておかないと、アップロードのたびに
 	     App Store Connect 側で「輸出コンプライアンスが無い」と言われ、
 	     API か web で答えるまでベータ審査へ出せない。 -->

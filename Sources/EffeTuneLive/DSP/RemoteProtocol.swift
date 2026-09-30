@@ -5,7 +5,9 @@
 //  引くので単体テストに入れられない。こちらは判断だけを持つ（RemoteProtocolTests）:
 //    - 手元の鎖を、上流（PC の EffeTune）が読める形へ写す。**写した段の番号の対応表も返す**
 //    - 手元の 1 段のパラメータを、params メッセージの中身へ写す
-//    - 画面で打たれた接続先の読み方（host:port/token・ws:// の URL）
+//    - 画面で打たれた接続先の読み方（host:port/token・ws:// の URL）と、PC の QR のリンク
+//    - v2: state の出どころ（origin / seq）で追うか捨てるか、プリセットと IR の足し合わせの決まり、
+//      PC の変更を値だけで当てられるか（ETRemoteFollow）
 //
 //  ---------------------------------------------------------------------------
 //  **外部の段（AU / JSFX）は、符号化する前に振り分ける。**
@@ -160,5 +162,205 @@ struct ETRemoteAddress: Equatable {
     private static func make(host: String, port: Int, token: String) -> ETRemoteAddress? {
         guard !host.isEmpty, (1...65535).contains(port), !token.isEmpty else { return nil }
         return ETRemoteAddress(host: host, port: port, token: token)
+    }
+}
+
+// MARK: - v2（remote-v1 の足し分。"v" は 1 のまま）
+
+extension ETRemoteAddress {
+
+    /// Preferences.remoteAddress に書く字（`host:port/token`）。parse がそのまま読む。
+    var text: String { "\(host):\(port)/\(token)" }
+
+    /// PC が QR に出すリンク `effectdeck://remote?h=<IPv4>:47300&t=<token>` を読む。
+    /// 違う scheme・違う行き先・h か t が無いものは nil（カメラで拾った別の QR を受けない）。
+    static func pairingLink(_ url: URL) -> ETRemoteAddress? {
+        guard url.scheme?.lowercased() == "effectdeck", url.host?.lowercased() == "remote",
+              let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let items = c.queryItems ?? []
+        guard let h = items.first(where: { $0.name == "h" })?.value,
+              let t = items.first(where: { $0.name == "t" })?.value,
+              !h.contains("/"), !t.contains("/") else { return nil }
+        // 素の形（host:port/token）へ寄せて読む。ポートが無ければ 47300。
+        return parse("\(h)/\(t)")
+    }
+}
+
+/// state の push を手元へ入れるか（origin と seq）。
+///
+/// **"local" は PC の上で起きた変更**（PC の画面・取り消し・PC でのプリセット読み込み）なので追う。
+/// **"remote" は誰かのコマンドの結果。**seq が自分の送ったものなら、手元はもうその形なので捨てる
+/// （入れると、つまみを動かしている最中に 1 つ前の値へ引き戻される）。seq が無いか自分のものでなければ、
+/// 同じ PC につないだ別の端末の変更なので追う。
+/// origin が無いのは v1 の PC。どこから来たか分からないので、v1 のときと同じく読み捨てる。
+enum ETRemoteStateFilter {
+    static func follows(origin: String?, seq: Int?, ours: Set<Int>) -> Bool {
+        switch origin {
+        case "local":
+            return true
+        case "remote":
+            guard let seq else { return true }
+            return !ours.contains(seq)
+        default:
+            return false
+        }
+    }
+}
+
+/// プリセットの足し合わせ（つないだ瞬間に 1 回）。**消さない・上書きしない。**
+///
+/// 中身は canonical（ショート形式を鍵の順を固定した JSON）で比べる。両側とも同じ読み書き
+/// （ETShareLink.parse → ETRemoteProjection.project）を通してから比べるので、
+/// 数の表し方（0.1 と 0.10000000149）の違いでは「違う」にならない。
+///
+/// 名前が同じで中身が違えば、相手側に `名前 (PC)` / `名前 (iPad)` で置く。空いていなければ
+/// `名前 (PC 2)` …。**何度つないでも増えない**ように、次の 2 つは写さない:
+///   - 相手に同じ名前・同じ中身が在る（付け足した名前のほうも含めて）
+///   - 自分が前に相手へ置いた写し（`名前 (iPad)` が PC に在り、その中身が手元の `名前` と同じ）
+enum ETRemotePresetSync {
+
+    static let pcTag = "PC"
+    static let localTag = "iPad"
+
+    struct Copy: Equatable {
+        /// 元の側での名前。
+        let source: String
+        /// 置く側での名前。
+        let target: String
+    }
+
+    struct Plan: Equatable {
+        var toLocal: [Copy] = []
+        var toPC: [Copy] = []
+    }
+
+    static func canonical(_ pipeline: [[String: Any]]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: pipeline, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "" }
+        return text
+    }
+
+    /// `名前 (PC)` / `名前 (iPad 3)` を（名前, "PC"）へ分ける。付け足しが無ければ nil。
+    static func split(_ name: String) -> (base: String, tag: String)? {
+        guard name.hasSuffix(")"), let open = name.range(of: " (", options: .backwards) else { return nil }
+        let inner = name[open.upperBound..<name.index(before: name.endIndex)]
+        let words = inner.split(separator: " ")
+        guard let first = words.first, [pcTag, localTag].contains(String(first)),
+              words.count <= 2 else { return nil }
+        if words.count == 2 {
+            guard let n = Int(words[1]), n >= 2 else { return nil }
+        }
+        return (String(name[name.startIndex..<open.lowerBound]), String(first))
+    }
+
+    /// - Parameters:
+    ///   - pc: PC のプリセット（手元の名前の整え方に寄せた名前 → canonical）
+    ///   - local: 手元のプリセット（名前 → canonical）
+    ///   - localBlocked: PC へ送らない手元のプリセット（AU / JSFX の段を持つもの）
+    static func plan(pc: [String: String], local: [String: String],
+                     localBlocked: Set<String> = []) -> Plan {
+        var plan = Plan()
+        var localAfter = local
+        for name in pc.keys.sorted() {
+            guard let content = pc[name] else { continue }
+            if let s = split(name), s.tag == localTag, local[s.base] == content { continue }
+            if let target = place(name, content, tag: pcTag, in: &localAfter) {
+                plan.toLocal.append(Copy(source: name, target: target))
+            }
+        }
+        var pcAfter = pc
+        for name in local.keys.sorted() where !localBlocked.contains(name) {
+            guard let content = local[name] else { continue }
+            if let s = split(name), s.tag == pcTag, pc[s.base] == content { continue }
+            if let target = place(name, content, tag: localTag, in: &pcAfter) {
+                plan.toPC.append(Copy(source: name, target: target))
+            }
+        }
+        return plan
+    }
+
+    /// 置く名前。同じ中身がもう在れば nil。
+    private static func place(_ name: String, _ content: String, tag: String,
+                              in existing: inout [String: String]) -> String? {
+        var candidate = name
+        var n = 1
+        while let there = existing[candidate] {
+            if there == content { return nil }
+            candidate = n == 1 ? "\(name) (\(tag))" : "\(name) (\(tag) \(n))"
+            n += 1
+        }
+        existing[candidate] = content
+        return candidate
+    }
+}
+
+/// IR の受け渡し（listIRs / getIR / putIR）。鍵は IRLibraryFiles.key と同じ 24 桁。
+enum ETRemoteIRSync {
+
+    /// 1 回に送る生のバイト数（base64 にする前）。PC の枠の上限は 4 MB。
+    static let chunkSize = 512 * 1024
+
+    /// 取りに行く鍵と、送る鍵。どちらも並びを固定する。
+    static func plan(pc: [String], local: [String]) -> (download: [String], upload: [String]) {
+        let p = Set(pc), l = Set(local)
+        return (p.subtracting(l).sorted(), l.subtracting(p).sorted())
+    }
+
+    /// `bytes` を size ごとに切った範囲。0 バイトでも空の塊を 1 つ返す（total が 0 にならない）。
+    static func chunks(_ bytes: Int, size: Int = chunkSize) -> [Range<Int>] {
+        guard bytes > 0 else { return [0..<0] }
+        return stride(from: 0, to: bytes, by: size).map { $0..<min($0 + size, bytes) }
+    }
+
+    /// 受け取った IR を置き場へ入れるときのファイル名。IRLibrary.importFile は元の名前から
+    /// 見出しと拡張子を取るので、ここで `名前.拡張子` にしておく。名前に拡張子が付いていても二重にしない。
+    static func fileName(name: String, ext: String) -> String {
+        let cleanExt = String(ext.filter { $0.isLetter || $0.isNumber })
+        var base = String(name.map { "/\\:".contains($0) ? "-" : $0 })
+        if !cleanExt.isEmpty, base.lowercased().hasSuffix("." + cleanExt.lowercased()) {
+            base = String(base.dropLast(cleanExt.count + 1))
+        }
+        if base.trimmingCharacters(in: .whitespaces).isEmpty { base = "IR" }
+        return cleanExt.isEmpty ? base : "\(base).\(cleanExt)"
+    }
+
+    /// 塊を順に継ぐ。**順が飛んだら失敗にする**（1 本の接続で順に来る決まり）。
+    struct Assembly {
+        private(set) var total = 0
+        private(set) var next = 0
+        private(set) var data = Data()
+        private(set) var failed = false
+
+        var isComplete: Bool { !failed && total > 0 && next == total }
+
+        mutating func add(index: Int, total: Int, data chunk: Data) {
+            guard !failed else { return }
+            guard total > 0, index == next, self.total == 0 || self.total == total else {
+                failed = true
+                return
+            }
+            self.total = total
+            data.append(chunk)
+            next += 1
+        }
+    }
+}
+
+/// PC で起きた変更を手元の鎖へ入れる形。
+enum ETRemoteFollow {
+    /// 並び・入切・バス・材料・見せ方が同じで、違いうるのは値（values）だけか。
+    /// そうなら段を作り直さず値だけ当てる（カードの開閉も音の途切れも起きない）。
+    static func sameShape(_ a: [PipelineStore.Loaded], _ b: [PipelineStore.Loaded]) -> Bool {
+        guard a.count == b.count else { return false }
+        for (x, y) in zip(a, b) {
+            guard x.spec.type == y.spec.type, x.enabled == y.enabled,
+                  x.inputBus == y.inputBus, x.outputBus == y.outputBus,
+                  x.channelSpec == y.channelSpec, x.sectionName == y.sectionName,
+                  x.irId == y.irId, x.display == y.display, x.design == y.design,
+                  x.isRootReset == y.isRootReset,
+                  x.externalID.isEmpty, y.externalID.isEmpty,
+                  x.values.count == y.values.count else { return false }
+        }
+        return true
     }
 }

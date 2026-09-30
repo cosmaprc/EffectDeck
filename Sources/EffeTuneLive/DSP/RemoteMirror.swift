@@ -1,33 +1,50 @@
 //  RemoteMirror.swift
-//  PC の EffeTune（fork）を LAN から操る PoC。EffectDeck が操作する側（remote-v1）。
+//  PC の EffeTune（fork）を LAN から操る PoC。EffectDeck が操作する側（remote-v1 と v2 の足し分）。
 //
-//  手元の鎖の変更を WebSocket で PC へ写す。**正は手元。**PC は写された結果を鳴らすだけで、
-//  こちらから PC の変更を取りに行くのは「Pull Chain from PC」「Import Presets from PC」を
-//  押したときだけ。PC が勝手に変えた鎖（state の push）は読み捨てる。
+//  **つないでいるあいだ、EffectDeck は PC の鎖の編集画面になる。**
+//    1. つないだ瞬間に手元の鎖を退避する（UserDefaults の remote.stash）
+//    2. PC の鎖（hello の返事の state）を画面へ入れる
+//    3. 以後の手元の編集は PC へ送る。PC の上での編集（state の origin "local"）は追って画面へ入れる
+//    4. 切ったら・切れたら、退避した鎖を戻す
+//  編集しているあいだ persist() は端末へ書かない（EffeTuneDSP.persist の門）。pipeline.last と
+//  iCloud は手元の鎖のまま残るので、途中でアプリが落ちても次の起動は手元の鎖から始まる。
+//  退避が残ったまま起動したら、つながっていなくても戻して消す（start）。
+//
+//  つないだ直後に、プリセットと IR を両方向へ足し合わせる（syncAll）。消さない・上書きしない。
+//  決まりは RemoteProtocol.swift（ETRemotePresetSync・ETRemoteIRSync）。
 //
 //  つなぎ先: ws://<host>:47300/?t=<token>（ETRemoteAddress）。トークンが違うと PC は
 //  コード 4401 で閉じるので、その場合は再接続しない（繰り返しても通らない）。
+//  PC の画面の QR（effectdeck://remote?h=…&t=…）から来たら pair(_:) が控えてつなぐ。
 //
 //  ---------------------------------------------------------------------------
-//  **何を送るか（メッセージの一覧は remote-v1）**
-//    hello       つないだ直後に 1 回。返事は state で、それが来たら Connected にする
-//    chain       鎖ごと入れ替え。つないだ直後と、並び・入切・バス・段の中身が変わったとき
+//  **何を送るか（メッセージの一覧は remote-v1 と v2）**
+//    hello       つないだ直後に 1 回。返事の state で PC の鎖を入れ、Connected にする
+//    chain       鎖ごと入れ替え。並び・入切・バス・段の中身が変わったとき
 //    params      1 段のパラメータ。つまみ操作。30 Hz でまとめ、段ごとに最後の値だけ送る
 //    bypass      全体のバイパス
-//    get / listPresets / getPreset   Pull と Import のとき
+//    listPresets / getPreset / savePreset   つないだ直後のプリセットの足し合わせ
+//    listIRs / getIR / putIR               同じく IR。512 KiB ずつ base64 で
+//
+//  **返事は seq で待つ**（request）。データの返事（presets・preset・state）は ack の後に同じ seq で来る。
+//  getIR だけは塊（irChunk）が先で ack が最後。
+//
+//  **PC から来た state は origin で振る**（ETRemoteStateFilter）。自分のコマンドの結果（origin
+//  "remote" で seq が自分のもの）は捨てる。手元のコマンドが ack を待っているあいだの "local" も捨てる
+//  （そのコマンドより前の PC の形かもしれず、入れるとつまみが 1 つ前の値へ戻る）。
 //
 //  **鎖は persist() の入口で受ける**（EffeTuneDSP.persist）。鎖を触る経路は全部ここへ来る。
-//  ただし persist() の先頭の門（ETChainEditing.shouldPersist）は起動直後の既定の鎖を
-//  端末へ残さないためのもので、こちらには関係ないので、門より前に呼ぶ。
 //
 //  **同じ中身は送らない。**つまみを動かした後の 0.5 秒遅れの persist() が、もう params で
 //  送った値の鎖をもう一度送らないように、params を送るたびに「最後に送った鎖」の
-//  その段も書き換えておく。
+//  その段も書き換えておく。PC から入れた鎖も「送った」ことにしておく。
 //
-//  **外部の段（AU / JSFX）は PC へ渡らない**（RemoteProtocol.swift）。段の番号が
-//  ずれるので、params は最後に送った鎖の対応表で PC の番号へ直して送る。
+//  **外部の段（AU / JSFX）は PC へ渡らない**（RemoteProtocol.swift）。編集中に足しても送らない
+//  だけで、足すこと自体は止めない。段の番号がずれるので、params は最後に送った鎖の対応表で
+//  PC の番号へ直して送る。
 //
 //  音のスレッドには触らない。ここは全部メインで、通信は URLSession が別のスレッドで持つ。
+//  IR のファイルの読み書きと鍵の計算はメインの外（Task.detached）。
 //  ---------------------------------------------------------------------------
 
 import Foundation
@@ -55,6 +72,19 @@ final class RemoteMirror: ObservableObject {
     }
 
     @Published private(set) var status: Status = .off
+    /// つないだ直後の足し合わせの進み（"Syncing 3/7"）。済んだら nil。
+    @Published private(set) var progress: String?
+    /// PC の鎖を編集しているか。**手元の鎖は退避してあり、persist() は端末へ書かない。**
+    @Published private(set) var isRemote = false
+
+    /// Status の行に出す字。
+    var statusText: String {
+        if status == .connected, let progress { return progress }
+        return status.label
+    }
+
+    /// つなぎ先を控えてあるか。無ければツールバーのボタンは QR の読み取りを開く。
+    var hasPairing: Bool { ETRemoteAddress.parse(Preferences.shared.remoteAddress) != nil }
 
     private let log = Logger(subsystem: "ai.nemut.effetune", category: "remote")
     private let session = URLSession(configuration: .default)
@@ -75,20 +105,49 @@ final class RemoteMirror: ObservableObject {
     private var pendingParams: Set<Int> = []
     private var flushTask: Task<Void, Never>?
 
-    /// Pull で受けた鎖を入れているあいだ。入れた結果の persist() を PC へ送り返さない。
+    /// PC から来た鎖を入れているあいだ。入れた結果の persist() や params を PC へ送り返さない。
     private var applyingRemote = false
-    private var pullRequested = false
-    /// persist() が 1 度でも来たか（= restore() が済んだ）。済む前の空の鎖は送らない。
+    /// persist() が 1 度でも来たか（= restore() が済んだ）。待たせていたものを片付ける合図。
     private var localChainReady = false
-    /// Import で返事を待っているプリセットの名前。
-    private var presetsPending: Set<String> = []
+
+    // MARK: 返事の待ち合わせ
+
+    /// seq ごとの待ち手。届いたものを渡し、true を返したら外す。nil は切れた・時間切れ。
+    private typealias Waiter = ([String: Any]?) -> Bool
+    private var waiters: [Int: Waiter] = [:]
+    /// 鎖を変えるコマンド（chain・params・bypass）の seq。自分の結果の state を見分ける。
+    private var ours: Set<Int> = []
+    /// 鎖を変えるコマンドのうち、まだ ack が来ていないもの（送った時刻）。
+    /// ack が落ちても追うのが止まりっぱなしにならないよう、2 秒で見なくなる。
+    private var inFlight: [Int: Date] = [:]
+    private var waitingForAck: Bool {
+        inFlight.values.contains { $0.timeIntervalSinceNow > -2 }
+    }
+
+    // MARK: 追う・退避
+
+    /// PC で起きた変更の最後の state。150 ms まとめてから入れる。
+    private var pendingFollow: [String: Any]?
+    private var followTask: Task<Void, Never>?
+    /// hello の返事が restore() より先に来たとき、済むまで取っておく。
+    private var pendingHello: [String: Any]?
+    /// 起動したときに退避が残っていた。restore() が済んだら戻す。
+    private var pendingRestore = false
+    private var syncTask: Task<Void, Never>?
+
+    private static let stashKey = "remote.stash"
+    private static let stashBypassKey = "remote.stashBypass"
 
     private init() {}
 
     // MARK: - 設定
 
     /// 起動で 1 回。**App の init から呼ぶ**（EffeTuneLiveApp.swift）。
-    func start() { apply() }
+    func start() {
+        // 編集中に落ちた。pipeline.last は手元の鎖のままだが、書き切る前だった分も含めて退避から戻す。
+        pendingRestore = UserDefaults.standard.data(forKey: Self.stashKey) != nil
+        apply()
+    }
 
     /// Toggle が変わった。すぐ反映する。
     func enabledChanged() {
@@ -109,6 +168,25 @@ final class RemoteMirror: ObservableObject {
         }
     }
 
+    /// PC の QR のリンク（effectdeck://remote?h=…&t=…）。読めたら控えてつなぐ。
+    /// PipelineView の onOpenURL と、アプリの中の読み取り（RemoteScannerView）から。
+    @discardableResult
+    func pair(_ url: URL) -> Bool {
+        guard let address = ETRemoteAddress.pairingLink(url) else { return false }
+        let prefs = Preferences.shared
+        prefs.remoteAddress = address.text
+        // 同じ値でも didSet は走る。enabledChanged が上の addressChanged の待ちを消してつなぎ直す。
+        prefs.remoteEnabled = true
+        return true
+    }
+
+    /// 控えを消して切る。
+    func forget() {
+        let prefs = Preferences.shared
+        prefs.remoteEnabled = false
+        prefs.remoteAddress = ""
+    }
+
     private func apply() {
         disconnect()
         guard Preferences.shared.remoteEnabled else {
@@ -122,15 +200,19 @@ final class RemoteMirror: ObservableObject {
 
     /// 鎖の並び・入切・バス・中身が変わったとき。persist() の入口から。
     func chainChanged(_ chain: [ETChainNode]) {
-        // 1 度でも来たら restore() は済んでいる。それ以降の空の鎖は人が空にしたもの。
-        localChainReady = true
-        guard task != nil, !applyingRemote else { return }
-        sendChain(chain, force: false)
+        if !localChainReady {
+            // 1 度でも来たら restore() は済んでいる。待たせていたものをここで片付ける。
+            // persist() の最中なので、鎖の入れ替えは次の回へ回す。
+            localChainReady = true
+            Task { @MainActor [weak self] in self?.localChainDidBecomeReady() }
+        }
+        guard isRemote, task != nil, !applyingRemote else { return }
+        sendChain(chain)
     }
 
     /// つまみが動いたとき。setValue / setValues / resetParams から。
     func paramsChanged(at index: Int) {
-        guard task != nil, !applyingRemote else { return }
+        guard isRemote, task != nil, !applyingRemote else { return }
         pendingParams.insert(index)
         guard flushTask == nil else { return }
         flushTask = Task { @MainActor [weak self] in
@@ -142,23 +224,19 @@ final class RemoteMirror: ObservableObject {
 
     /// 全体のバイパス。NowPlaying が切り替えたものも来る（PoC なので区別しない）。
     func bypassChanged(_ on: Bool) {
-        guard task != nil, !applyingRemote else { return }
-        send(["op": "bypass", "on": on])
+        guard isRemote, task != nil, !applyingRemote else { return }
+        sendEdit(["op": "bypass", "on": on])
     }
 
-    // MARK: - PC から取る
-
-    /// PC の鎖を手元へ入れる。返事（state）が来たら入れ替える。
-    func pullChain() {
-        guard status == .connected else { return }
-        pullRequested = true
-        send(["op": "get"])
-    }
-
-    /// PC のプリセットを名前付きの鎖として取り込む。
-    func importPresets() {
-        guard status == .connected else { return }
-        send(["op": "listPresets"])
+    private func localChainDidBecomeReady() {
+        if pendingRestore {
+            pendingRestore = false
+            if !isRemote { restoreStash() }
+        }
+        if let hello = pendingHello {
+            pendingHello = nil
+            enterRemote(hello)
+        }
     }
 
     // MARK: - 接続
@@ -177,12 +255,17 @@ final class RemoteMirror: ObservableObject {
         t.resume()
         listen(t, generation: gen)
 
-        // つないだ直後: hello → 手元の鎖 → バイパス。EffectDeck が操る側なので、こちらの状態を渡す。
+        // hello の返事（state）が PC の鎖。それを入れて編集を始める。
         // 送りの順は保たれる。open を待たずに積んでよい（URLSession が開いてから流す）。
-        send(["op": "hello", "app": "EffectDeck", "v": 1])
-        sentForm = nil
-        sendChain(EffeTuneDSP.shared.chain, force: true)
-        send(["op": "bypass", "on": EffeTuneDSP.shared.bypass])
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let state = await self.request(["op": "hello", "app": "EffectDeck", "v": 1],
+                                           reply: "state", timeout: 20)
+            guard gen == self.generation, let state else { return }
+            self.status = .connected
+            self.backoff = 1
+            self.enterRemote(state)
+        }
     }
 
     private func disconnect() {
@@ -191,13 +274,25 @@ final class RemoteMirror: ObservableObject {
         reconnectTask = nil
         flushTask?.cancel()
         flushTask = nil
+        followTask?.cancel()
+        followTask = nil
+        syncTask?.cancel()
+        syncTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         sentForm = nil
         sentMap = []
         pendingParams.removeAll()
-        pullRequested = false
-        presetsPending.removeAll()
+        pendingFollow = nil
+        pendingHello = nil
+        ours.removeAll()
+        inFlight.removeAll()
+        progress = nil
+        // 待っている request を全部終わらせる（nil で返る）。
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending.values { _ = waiter(nil) }
+        leaveRemote()
     }
 
     private func listen(_ t: URLSessionWebSocketTask, generation gen: Int) {
@@ -244,33 +339,203 @@ final class RemoteMirror: ObservableObject {
         }
     }
 
+    // MARK: - 退避と、PC の鎖の編集
+
+    /// hello の返事が来た。手元の鎖を退避して PC の鎖を入れる。
+    private func enterRemote(_ state: [String: Any]) {
+        let dsp = EffeTuneDSP.shared
+        // restore() の前に入れ替えると、後から restore() が手元の鎖を並べ直す。済むまで待つ。
+        // ready は prepare() の中で restore() の直前に立つ（同じ回で続けて走る）ので、立っていれば済んでいる。
+        guard dsp.ready else {
+            pendingHello = state
+            return
+        }
+        guard !isRemote else { return }
+        // 前の起動の退避が残っている。先に戻して消してから退避し直す。
+        if pendingRestore {
+            pendingRestore = false
+            restoreStash()
+        }
+        let form = dsp.remoteStashForm()
+        guard let data = try? JSONSerialization.data(withJSONObject: form, options: [.sortedKeys]) else {
+            log.error("remote: 鎖を退避できない")
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.stashKey)
+        UserDefaults.standard.set(dsp.bypass, forKey: Self.stashBypassKey)
+        // 先に立てる。入れ替えの persist() が端末へ書かないように。
+        isRemote = true
+        adopt(state, rebuild: true)
+        let gen = generation
+        syncTask = Task { @MainActor [weak self] in
+            await self?.syncAll(generation: gen)
+        }
+    }
+
+    /// 切った・切れた。退避した鎖を戻す。
+    private func leaveRemote() {
+        guard isRemote else { return }
+        applyingRemote = true
+        restoreStash()
+        applyingRemote = false
+        isRemote = false
+    }
+
+    /// 退避した鎖を画面へ戻して、退避を消す。いまの鎖と同じなら作り直さない。
+    private func restoreStash() {
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: Self.stashKey) else { return }
+        let dsp = EffeTuneDSP.shared
+        if let json = try? JSONSerialization.jsonObject(with: data) {
+            let items = PipelineStore.parse(json, catalog: ETCatalog)
+            let now = try? JSONSerialization.data(withJSONObject: dsp.remoteStashForm(),
+                                                  options: [.sortedKeys])
+            if now != data {
+                dsp.replaceChain(with: items)
+                // 手元の鎖の開閉は、編集中は書いていないので前のまま残っている。
+                let open = PipelineStore.loadExpanded().filter { dsp.chain.indices.contains($0) }
+                dsp.expanded = Set(open.map { dsp.chain[$0].id })
+            }
+        }
+        if defaults.object(forKey: Self.stashBypassKey) != nil {
+            let bypass = defaults.bool(forKey: Self.stashBypassKey)
+            if dsp.bypass != bypass { dsp.bypass = bypass }
+        }
+        defaults.removeObject(forKey: Self.stashKey)
+        defaults.removeObject(forKey: Self.stashBypassKey)
+    }
+
+    /// PC の state を画面へ入れる。
+    ///
+    /// rebuild が偽（PC で起きた変更を追うとき）は、形が同じなら値だけ当てて段を作り直さない
+    /// （ETRemoteFollow.sameShape）。形が違えば入れ替えて、開いていた位置を開き直す。
+    private func adopt(_ state: [String: Any], rebuild: Bool) {
+        let dsp = EffeTuneDSP.shared
+        let loaded = items(from: state["pipeline"])
+        let current = dsp.chain.map { PipelineStore.Loaded($0) }
+        let incoming = ETRemoteProjection.project(loaded).pipeline
+        let same = !rebuild && ETRemotePresetSync.canonical(incoming)
+            == ETRemotePresetSync.canonical(ETRemoteProjection.project(current).pipeline)
+
+        // 前の鎖の番号で積んだ params は、入れた後の鎖では別の段を指しうる。
+        flushTask?.cancel()
+        flushTask = nil
+        pendingParams.removeAll()
+
+        applyingRemote = true
+        if !same {
+            if !rebuild && ETRemoteFollow.sameShape(current, loaded) {
+                for i in loaded.indices where loaded[i].values != current[i].values {
+                    dsp.setValues(loaded[i].values, at: i)
+                }
+            } else {
+                let open = rebuild ? [] : dsp.chain.indices.filter { dsp.expanded.contains(dsp.chain[$0].id) }
+                dsp.replaceChain(with: loaded)
+                if !open.isEmpty {
+                    dsp.expanded = Set(open.filter { dsp.chain.indices.contains($0) }.map { dsp.chain[$0].id })
+                }
+            }
+        }
+        if let bypass = state["masterBypass"] as? Bool, dsp.bypass != bypass {
+            dsp.bypass = bypass
+        }
+        applyingRemote = false
+        // いま入れた鎖は PC と同じなので、送ったことにして控えを合わせる。
+        let projected = ETRemoteProjection.project(dsp.chain)
+        sentForm = projected.pipeline
+        sentMap = projected.remoteIndex
+    }
+
+    /// PC で起きた変更。150 ms まとめて入れる。手元のコマンドの返事を待っているあいだは入れない。
+    private func follow(_ state: [String: Any]) {
+        pendingFollow = state
+        guard followTask == nil else { return }
+        followTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.followTask = nil
+            guard self.isRemote, !self.waitingForAck, let state = self.pendingFollow else { return }
+            self.pendingFollow = nil
+            self.adopt(state, rebuild: false)
+        }
+    }
+
     // MARK: - 送る
 
+    /// 1 通送る。返事を待つなら waiter を渡す。送れなければ nil。
     @discardableResult
-    private func send(_ message: [String: Any]) -> Bool {
-        guard let t = task else { return false }
+    private func send(_ message: [String: Any], waiter: Waiter? = nil) -> Int? {
+        guard let t = task else { return nil }
         seq += 1
+        let n = seq
         var m = message
-        m["seq"] = seq
+        m["seq"] = n
         guard let data = try? JSONSerialization.data(withJSONObject: m),
-              let text = String(data: data, encoding: .utf8) else { return false }
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        if let waiter { waiters[n] = waiter }
         let log = self.log
         t.send(.string(text)) { error in
             // 送れなかったときは receive 側も失敗して、つなぎ直しに入る。ここは記録だけ。
             if let error { log.notice("remote: 送れない \(error.localizedDescription, privacy: .public)") }
         }
-        return true
+        return n
     }
 
-    private func sendChain(_ chain: [ETChainNode], force: Bool) {
-        // 起動直後は鎖がまだ空（restore() の前）。空で送ると PC の鎖が消える。
-        // restore() が並べ終えれば persist() から来る。済んだ後に人が空にした鎖は送る。
-        guard !chain.isEmpty || localChainReady else { return }
+    /// 鎖を変えるコマンド。自分の結果の state を見分けるために seq を控える。
+    private func sendEdit(_ message: [String: Any]) {
+        guard let n = send(message) else { return }
+        ours.insert(n)
+        inFlight[n] = Date()
+        if ours.count > 4096 {
+            let floor = n - 2048
+            ours = ours.filter { $0 > floor }
+        }
+    }
+
+    /// 返事を待つ。reply が "ack" なら ok の ack を、ほかは同じ seq のその op を返す。
+    /// ok:false の ack・切れた・時間切れは nil。
+    private func request(_ message: [String: Any], reply: String,
+                         timeout seconds: Double = 30) async -> [String: Any]? {
+        await withCheckedContinuation { (c: CheckedContinuation<[String: Any]?, Never>) in
+            var finished = false
+            let finish: ([String: Any]?) -> Void = { result in
+                guard !finished else { return }
+                finished = true
+                c.resume(returning: result)
+            }
+            let n = send(message) { m in
+                guard let m else { finish(nil); return true }
+                let op = m["op"] as? String
+                if op == "ack" {
+                    if m["ok"] as? Bool == false { finish(nil); return true }
+                    if reply == "ack" { finish(m); return true }
+                    return false
+                }
+                if op == reply { finish(m); return true }
+                return false
+            }
+            guard let n else { finish(nil); return }
+            armTimeout(n, seconds: seconds)
+        }
+    }
+
+    private func armTimeout(_ n: Int, seconds: Double) {
+        let gen = generation
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, gen == self.generation,
+                  let waiter = self.waiters.removeValue(forKey: n) else { return }
+            self.log.notice("remote: 返事が来ない seq=\(n)")
+            _ = waiter(nil)
+        }
+    }
+
+    private func sendChain(_ chain: [ETChainNode]) {
         let projected = ETRemoteProjection.project(chain)
         sentMap = projected.remoteIndex
-        if !force, let sent = sentForm, (sent as NSArray).isEqual(to: projected.pipeline) { return }
+        if let sent = sentForm, (sent as NSArray).isEqual(to: projected.pipeline) { return }
         sentForm = projected.pipeline
-        send(["op": "chain", "pipeline": projected.pipeline])
+        sendEdit(["op": "chain", "pipeline": projected.pipeline])
     }
 
     private func flushParams() {
@@ -283,7 +548,7 @@ final class RemoteMirror: ObservableObject {
         for index in pending {
             guard chain.indices.contains(index), let remote = sentMap[index],
                   let params = ETRemoteProjection.params(for: chain[index]) else { continue }
-            send(["op": "params", "index": remote, "params": params])
+            sendEdit(["op": "params", "index": remote, "params": params])
             // 後から来る persist() の鎖と食い違わないよう、送ったぶんを控えへ写す。
             if sentForm?.indices.contains(remote) == true,
                let entry = ETRemoteProjection.entry(for: PipelineStore.Loaded(chain[index])) {
@@ -303,32 +568,25 @@ final class RemoteMirror: ObservableObject {
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let op = object["op"] as? String else { return }
+        let n = object["seq"] as? Int
 
-        switch op {
-        case "state":
-            if status != .connected { status = .connected }
-            backoff = 1
-            // PC が勝手に変えた鎖は読み捨てる。Pull を頼んだときだけ入れる。
-            if pullRequested {
-                pullRequested = false
-                applyPulled(object["pipeline"])
-            }
-        case "ack":
+        if op == "ack", let n {
+            inFlight.removeValue(forKey: n)
             if object["ok"] as? Bool == false {
-                let seq = object["seq"] as? Int ?? -1
                 let why = object["error"] as? String ?? ""
-                log.notice("remote: 拒否 seq=\(seq) \(why, privacy: .public)")
+                log.notice("remote: 拒否 seq=\(n) \(why, privacy: .public)")
             }
-        case "presets":
-            guard let names = object["names"] as? [String] else { return }
-            presetsPending = Set(names)
-            for name in names { send(["op": "getPreset", "name": name]) }
-        case "preset":
-            guard let name = object["name"] as? String, presetsPending.remove(name) != nil else { return }
-            savePreset(named: name, pipeline: object["pipeline"])
-        default:
-            break
         }
+        // 待っている返事なら待ち手へ。
+        if let n, let waiter = waiters[n] {
+            if waiter(object) { waiters.removeValue(forKey: n) }
+            return
+        }
+        guard op == "state", isRemote else { return }
+        guard ETRemoteStateFilter.follows(origin: object["origin"] as? String, seq: n, ours: ours) else { return }
+        // 手元のコマンドが PC に着く前の形かもしれない。着いた後の state（自分の seq）は上で捨てる。
+        guard !waitingForAck else { return }
+        follow(object)
     }
 
     /// ショート形式の配列を段の並びへ。読めない値は寄せ、知らない段は落ちる（ETShareLink.parse）。
@@ -339,39 +597,192 @@ final class RemoteMirror: ObservableObject {
         return ETShareLink.parse(text, catalog: ETCatalog)
     }
 
-    private func applyPulled(_ pipeline: Any?) {
-        let loaded = items(from: pipeline)
-        guard !loaded.isEmpty else { return }
-        // 前の鎖の番号で積んだ params は、入れ替えた後の鎖では別の段を指す。
-        flushTask?.cancel()
-        flushTask = nil
-        pendingParams.removeAll()
-        applyingRemote = true
-        EffeTuneDSP.shared.replaceChain(with: loaded)
-        applyingRemote = false
-        // いま入れた鎖は PC と同じなので、送ったことにして控えを合わせる。
-        let projected = ETRemoteProjection.project(EffeTuneDSP.shared.chain)
-        sentForm = projected.pipeline
-        sentMap = projected.remoteIndex
-    }
+    // MARK: - プリセットと IR の足し合わせ
 
-    /// 同じ名前が手元に在れば " (PC)" を付ける。それでも在れば " (PC 2)" …
-    private func savePreset(named pcName: String, pipeline: Any?) {
-        let loaded = items(from: pipeline)
-        guard !loaded.isEmpty else { return }
+    private func syncAll(generation gen: Int) async {
+        func alive() -> Bool { gen == generation && isRemote && !Task.isCancelled }
+        progress = "Syncing"
+        defer { if gen == generation { progress = nil } }
+
+        // --- プリセット ---
         let store = PresetStore.shared
-        func exists(_ name: String) -> Bool {
-            store.names.contains(store.savedName(for: name) ?? name)
-        }
-        var name = pcName
-        if exists(name) {
-            name = "\(pcName) (PC)"
-            var n = 2
-            while exists(name) {
-                name = "\(pcName) (PC \(n))"
-                n += 1
+        var pcItems: [String: [PipelineStore.Loaded]] = [:]
+        var pcCanon: [String: String] = [:]
+        if let list = await request(["op": "listPresets"], reply: "presets"),
+           let names = list["names"] as? [String] {
+            for name in names {
+                guard alive() else { return }
+                guard let reply = await request(["op": "getPreset", "name": name], reply: "preset") else { continue }
+                let loaded = items(from: reply["pipeline"])
+                // 手元の保存と同じ整え方の名前で比べる。整えると空になる名前は受けない。
+                guard !loaded.isEmpty, let key = store.savedName(for: name) else { continue }
+                pcItems[key] = loaded
+                pcCanon[key] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded).pipeline)
             }
         }
-        store.save(name, items: loaded)
+        guard alive() else { return }
+        var localItems: [String: [PipelineStore.Loaded]] = [:]
+        var localCanon: [String: String] = [:]
+        var blocked: Set<String> = []
+        for name in store.names {
+            let loaded = store.load(name)
+            guard !loaded.isEmpty else { continue }
+            localItems[name] = loaded
+            localCanon[name] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded).pipeline)
+            if loaded.contains(where: { !$0.externalID.isEmpty }) { blocked.insert(name) }
+        }
+        let presetPlan = ETRemotePresetSync.plan(pc: pcCanon, local: localCanon, localBlocked: blocked)
+
+        // --- IR ---
+        let library = IRLibrary.shared
+        var pcIRs: [String] = []
+        if let list = await request(["op": "listIRs"], reply: "irs"),
+           let entries = list["items"] as? [[String: Any]] {
+            pcIRs = entries.compactMap { $0["id"] as? String }
+        }
+        guard alive() else { return }
+        let irPlan = ETRemoteIRSync.plan(pc: pcIRs, local: library.entries.map(\.id))
+
+        let total = presetPlan.toLocal.count + presetPlan.toPC.count
+            + irPlan.download.count + irPlan.upload.count
+        var done = 0
+        func step() {
+            done += 1
+            progress = "Syncing \(done)/\(total)"
+        }
+        if total > 0 { progress = "Syncing 0/\(total)" }
+
+        for copy in presetPlan.toLocal {
+            guard alive() else { return }
+            if let loaded = pcItems[copy.source] { store.save(copy.target, items: loaded) }
+            step()
+        }
+        for copy in presetPlan.toPC {
+            guard alive() else { return }
+            if let loaded = localItems[copy.source] {
+                let pipeline = ETRemoteProjection.project(loaded).pipeline
+                if await request(["op": "savePreset", "name": copy.target, "pipeline": pipeline],
+                                 reply: "ack") == nil {
+                    log.notice("remote: プリセットを PC へ置けない \(copy.target, privacy: .public)")
+                }
+            }
+            step()
+        }
+
+        var fetched = false
+        for id in irPlan.download {
+            guard alive() else { return }
+            if await download(id) { fetched = true }
+            step()
+        }
+        // PC の鎖の IR Reverb が指していた素材が、いま手元に来た。
+        if fetched, alive() { EffeTuneDSP.shared.reloadAssets() }
+        for id in irPlan.upload {
+            guard alive() else { return }
+            await upload(id)
+            step()
+        }
+        log.notice("remote: 足し合わせ済み プリセット +\(presetPlan.toLocal.count)/→\(presetPlan.toPC.count) IR +\(irPlan.download.count)/→\(irPlan.upload.count)")
+    }
+
+    /// PC の IR を 1 本取って置き場へ入れる。**鍵が合わなければ入れない。**
+    private func download(_ id: String) async -> Bool {
+        guard let file = await fetchIR(id) else { return false }
+        let name = ETRemoteIRSync.fileName(name: file.name, ext: file.ext)
+        // 鍵の計算と一時ファイルはメインの外で。
+        let temp: URL? = await Task.detached(priority: .utility) { () -> URL? in
+            guard IRLibraryFiles.key(for: file.data) == id else { return nil }
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("remote-ir-\(UUID().uuidString)", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let url = dir.appendingPathComponent(name)
+                try file.data.write(to: url)
+                return url
+            } catch {
+                return nil
+            }
+        }.value
+        guard let temp else {
+            log.notice("remote: IR の鍵が合わない \(id, privacy: .public)")
+            return false
+        }
+        defer { try? FileManager.default.removeItem(at: temp.deletingLastPathComponent()) }
+        // 取り込みは画面で選んだときと同じ口（音として開けないものはここで落ちる）。
+        let imported = IRLibrary.shared.importFile(at: temp)
+        if imported != id {
+            log.notice("remote: IR を取り込めない \(id, privacy: .public)")
+            return false
+        }
+        return true
+    }
+
+    /// getIR。塊を順に継いで、ack で閉じる。
+    private func fetchIR(_ id: String) async -> (name: String, ext: String, data: Data)? {
+        await withCheckedContinuation { (c: CheckedContinuation<(name: String, ext: String, data: Data)?, Never>) in
+            var finished = false
+            let finish: ((name: String, ext: String, data: Data)?) -> Void = { result in
+                guard !finished else { return }
+                finished = true
+                c.resume(returning: result)
+            }
+            var assembly = ETRemoteIRSync.Assembly()
+            var name = ""
+            var ext = ""
+            let n = send(["op": "getIR", "id": id]) { m in
+                guard let m else { finish(nil); return true }
+                switch m["op"] as? String {
+                case "irChunk":
+                    name = m["name"] as? String ?? name
+                    ext = m["ext"] as? String ?? ext
+                    // 読めない塊は順が飛んだのと同じ扱いにする（index -1）。
+                    let chunk = (m["data"] as? String).flatMap { Data(base64Encoded: $0) }
+                    assembly.add(index: chunk == nil ? -1 : (m["index"] as? Int ?? -1),
+                                 total: m["total"] as? Int ?? 0, data: chunk ?? Data())
+                    return false
+                case "ack":
+                    if m["ok"] as? Bool == true, assembly.isComplete {
+                        finish((name: name, ext: ext, data: assembly.data))
+                    } else {
+                        finish(nil)
+                    }
+                    return true
+                default:
+                    return false
+                }
+            }
+            guard let n else { finish(nil); return }
+            armTimeout(n, seconds: 300)
+        }
+    }
+
+    /// 手元の IR を 1 本 PC へ送る。塊ごとに ack を待つ（詰め込みすぎない）。
+    private func upload(_ id: String) async {
+        guard let entry = IRLibrary.shared.entry(id: id) else { return }
+        let url = entry.url
+        // 読むのと鍵の確かめはメインの外で。置き場のファイルが差し替えられていたら送らない。
+        let data: Data? = await Task.detached(priority: .utility) { () -> Data? in
+            guard let data = try? Data(contentsOf: url), IRLibraryFiles.key(for: data) == id else { return nil }
+            return data
+        }.value
+        guard let data else {
+            log.notice("remote: IR を読めない・鍵が合わない \(id, privacy: .public)")
+            return
+        }
+        let name = (entry.name as NSString).deletingPathExtension
+        let ext = url.pathExtension
+        let ranges = ETRemoteIRSync.chunks(data.count)
+        for (index, range) in ranges.enumerated() {
+            guard isRemote, task != nil else { return }
+            let message: [String: Any] = [
+                "op": "putIR", "id": id, "name": name, "ext": ext,
+                "index": index, "total": ranges.count, "bytes": data.count,
+                "data": data.subdata(in: range).base64EncodedString(),
+            ]
+            if await request(message, reply: "ack", timeout: 60) == nil {
+                log.notice("remote: IR を PC へ置けない \(id, privacy: .public) \(index)/\(ranges.count)")
+                return
+            }
+        }
     }
 }

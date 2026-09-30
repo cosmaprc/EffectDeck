@@ -7,6 +7,9 @@
 //    - 外部の段の externalState は PC へ渡す形に入らない（符号化する前に振り分ける）
 //    - params には動かせるパラメータのショートキーだけが入る
 //    - 接続先の字の読み方（host:port/token・ws:// の URL・読めない字）
+//    - v2: QR のリンク（effectdeck://remote）、state の origin / seq の振り分け、
+//      プリセットの足し合わせ（名前の付け足し・2 回目は何もしない・PC の字と手元の保存が同じ中身）、
+//      IR の塊の切り方と継ぎ方、PC の変更を値だけで当てられるか
 
 import XCTest
 
@@ -140,5 +143,155 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:abc/tok"))
         XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:47300/?t=x"))
         XCTAssertNil(ETRemoteAddress.parse("wss://192.168.1.10:47300/?t=x"))  // ws しか作らない
+    }
+
+    // MARK: - v2: QR のリンク
+
+    func testPairingLinkReadsHostPortAndToken() throws {
+        let url = try XCTUnwrap(URL(string: "effectdeck://remote?h=192.168.1.10:47300&t=ab12cd34"))
+        let a = ETRemoteAddress.pairingLink(url)
+        XCTAssertEqual(a, ETRemoteAddress(host: "192.168.1.10", port: 47300, token: "ab12cd34"))
+        // 控える字は parse がそのまま読み戻せる。
+        XCTAssertEqual(a.flatMap { ETRemoteAddress.parse($0.text) }, a)
+    }
+
+    func testPairingLinkDefaultsThePort() throws {
+        let url = try XCTUnwrap(URL(string: "EffectDeck://Remote?t=tok&h=10.0.0.5"))
+        XCTAssertEqual(ETRemoteAddress.pairingLink(url),
+                       ETRemoteAddress(host: "10.0.0.5", port: 47300, token: "tok"))
+    }
+
+    func testPairingLinkRejectsOtherLinks() throws {
+        for text in ["https://effectdeck.nemut.ai/remote?h=1.2.3.4:47300&t=x",   // 共有リンクの側
+                     "effectdeck://chain?h=1.2.3.4:47300&t=x",                   // 行き先が違う
+                     "effectdeck://remote?h=1.2.3.4:47300",                      // トークンが無い
+                     "effectdeck://remote?t=x",                                  // 相手が無い
+                     "effectdeck://remote?h=1.2.3.4:99999&t=x"] {                // ポートが範囲の外
+            let url = try XCTUnwrap(URL(string: text))
+            XCTAssertNil(ETRemoteAddress.pairingLink(url), text)
+        }
+    }
+
+    // MARK: - v2: state の出どころ
+
+    func testStateOriginFiltering() {
+        let ours: Set<Int> = [3, 4]
+        XCTAssertTrue(ETRemoteStateFilter.follows(origin: "local", seq: nil, ours: ours))
+        XCTAssertTrue(ETRemoteStateFilter.follows(origin: "local", seq: 3, ours: ours))
+        // 自分のコマンドの結果は捨てる。ほかの端末のコマンドの結果は追う。
+        XCTAssertFalse(ETRemoteStateFilter.follows(origin: "remote", seq: 4, ours: ours))
+        XCTAssertTrue(ETRemoteStateFilter.follows(origin: "remote", seq: 9, ours: ours))
+        XCTAssertTrue(ETRemoteStateFilter.follows(origin: "remote", seq: nil, ours: ours))
+        // v1 の PC（origin が無い）は読み捨てる。
+        XCTAssertFalse(ETRemoteStateFilter.follows(origin: nil, seq: nil, ours: ours))
+    }
+
+    // MARK: - v2: プリセットの足し合わせ
+
+    func testPresetUnionCopiesMissingBothWays() {
+        let plan = ETRemotePresetSync.plan(pc: ["A": "a", "Same": "s"],
+                                           local: ["B": "b", "Same": "s"])
+        XCTAssertEqual(plan.toLocal, [.init(source: "A", target: "A")])
+        XCTAssertEqual(plan.toPC, [.init(source: "B", target: "B")])
+    }
+
+    func testPresetNameClashGetsATagOnTheOtherSide() {
+        let plan = ETRemotePresetSync.plan(pc: ["N": "pc"], local: ["N": "pad"])
+        XCTAssertEqual(plan.toLocal, [.init(source: "N", target: "N (PC)")])
+        XCTAssertEqual(plan.toPC, [.init(source: "N", target: "N (iPad)")])
+    }
+
+    func testPresetTaggedNameThatIsTakenCountsUp() {
+        let plan = ETRemotePresetSync.plan(pc: ["N": "pc"], local: ["N": "pad", "N (PC)": "other"])
+        XCTAssertEqual(plan.toLocal, [.init(source: "N", target: "N (PC 2)")])
+    }
+
+    func testPresetBlockedLocalIsNotSent() {
+        let plan = ETRemotePresetSync.plan(pc: [:], local: ["AU": "x", "Plain": "y"], localBlocked: ["AU"])
+        XCTAssertEqual(plan.toPC, [.init(source: "Plain", target: "Plain")])
+    }
+
+    /// 1 回目の結果を両側へ当てて、2 回目は何もしない。
+    func testPresetUnionIsIdempotent() {
+        var pc = ["N": "pc", "OnlyPC": "p"]
+        var local = ["N": "pad", "OnlyPad": "q", "AU": "x"]
+        let first = ETRemotePresetSync.plan(pc: pc, local: local, localBlocked: ["AU"])
+        for copy in first.toLocal { local[copy.target] = pc[copy.source] }
+        for copy in first.toPC { pc[copy.target] = local[copy.source] }
+        let second = ETRemotePresetSync.plan(pc: pc, local: local, localBlocked: ["AU"])
+        XCTAssertEqual(second, ETRemotePresetSync.Plan())
+        XCTAssertEqual(Set(local.keys), ["N", "N (PC)", "OnlyPC", "OnlyPad", "AU"])
+        XCTAssertEqual(Set(pc.keys), ["N", "N (iPad)", "OnlyPC", "OnlyPad"])
+    }
+
+    func testPresetTagSplit() {
+        XCTAssertEqual(ETRemotePresetSync.split("Rock (PC)")?.base, "Rock")
+        XCTAssertEqual(ETRemotePresetSync.split("Rock (iPad 3)")?.tag, "iPad")
+        XCTAssertNil(ETRemotePresetSync.split("Rock (live)"))
+        XCTAssertNil(ETRemotePresetSync.split("Rock (PC 1)"))
+        XCTAssertNil(ETRemotePresetSync.split("Rock"))
+    }
+
+    /// PC の字（0.1）と、手元に保存して読み戻したもの（Float を経た 0.10000000149…）が同じ中身になる。
+    func testPresetCanonicalSurvivesALocalRoundTrip() throws {
+        let volume = try effect("VolumePlugin")
+        let fromPC = "[{\"nm\":\"\(volume.spec.name)\",\"en\":true,\"vl\":-3.1}]"
+        let loaded = ETShareLink.parse(fromPC, catalog: ETCatalog)
+        XCTAssertEqual(loaded.count, 1)
+        let pcCanon = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded).pipeline)
+        // 手元の保存（PresetStore.save → shortForm）と読み戻し（PresetStore.load → parse）。
+        let stored = PipelineStore.shortForm(loaded)
+        let data = try JSONSerialization.data(withJSONObject: stored)
+        let reloaded = PipelineStore.parse(try JSONSerialization.jsonObject(with: data), catalog: ETCatalog)
+        let localCanon = ETRemotePresetSync.canonical(ETRemoteProjection.project(reloaded).pipeline)
+        XCTAssertEqual(pcCanon, localCanon)
+        XCTAssertFalse(pcCanon.isEmpty)
+    }
+
+    // MARK: - v2: IR
+
+    func testIRPlanAndChunks() {
+        let plan = ETRemoteIRSync.plan(pc: ["b", "a", "c"], local: ["c", "d"])
+        XCTAssertEqual(plan.download, ["a", "b"])
+        XCTAssertEqual(plan.upload, ["d"])
+        XCTAssertEqual(ETRemoteIRSync.chunks(0), [0..<0])
+        XCTAssertEqual(ETRemoteIRSync.chunks(10, size: 4), [0..<4, 4..<8, 8..<10])
+        XCTAssertEqual(ETRemoteIRSync.chunks(8, size: 4), [0..<4, 4..<8])
+    }
+
+    func testIRFileName() {
+        XCTAssertEqual(ETRemoteIRSync.fileName(name: "Hall", ext: "wav"), "Hall.wav")
+        XCTAssertEqual(ETRemoteIRSync.fileName(name: "Hall.WAV", ext: "wav"), "Hall.wav")
+        XCTAssertEqual(ETRemoteIRSync.fileName(name: "a/b:c", ext: "flac"), "a-b-c.flac")
+        XCTAssertEqual(ETRemoteIRSync.fileName(name: "", ext: "wav"), "IR.wav")
+    }
+
+    func testIRAssemblyNeedsEveryChunkInOrder() {
+        var ok = ETRemoteIRSync.Assembly()
+        ok.add(index: 0, total: 2, data: Data([1]))
+        XCTAssertFalse(ok.isComplete)
+        ok.add(index: 1, total: 2, data: Data([2]))
+        XCTAssertTrue(ok.isComplete)
+        XCTAssertEqual(ok.data, Data([1, 2]))
+
+        var skipped = ETRemoteIRSync.Assembly()
+        skipped.add(index: 1, total: 2, data: Data([2]))
+        skipped.add(index: 0, total: 2, data: Data([1]))
+        XCTAssertFalse(skipped.isComplete)
+    }
+
+    // MARK: - v2: PC の変更を追う
+
+    func testSameShapeOnlyWhenValuesAloneDiffer() throws {
+        let a = [try effect("VolumePlugin"), section("S")]
+        var b = a
+        b[0].values = b[0].values.map { $0 - 1 }
+        XCTAssertTrue(ETRemoteFollow.sameShape(a, b))
+        var c = a
+        c[0].enabled = false
+        XCTAssertFalse(ETRemoteFollow.sameShape(a, c))
+        XCTAssertFalse(ETRemoteFollow.sameShape(a, [a[0]]))
+        XCTAssertFalse(ETRemoteFollow.sameShape([external(inputBus: 0, outputBus: 0)],
+                                                [external(inputBus: 0, outputBus: 0)]))
     }
 }

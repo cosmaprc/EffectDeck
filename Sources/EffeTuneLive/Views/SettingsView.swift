@@ -403,7 +403,8 @@ private struct ETReportView: View {
 // MARK: - いま何が起きているか
 
 /// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
-/// 状態（Off / Connecting / Connected / Error）を読むのは RemoteMirror だけ。
+/// 状態（Off / Connecting / Connected / Syncing / Error）を読むのは RemoteMirror だけ。
+/// 入切はツールバーのボタンが主で、ここは控えたつなぎ先を見る・直す・消す所。
 private struct RemoteSection: View {
     @ObservedObject var prefs: Preferences
     @ObservedObject private var mirror = RemoteMirror.shared
@@ -416,13 +417,11 @@ private struct RemoteSection: View {
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
             LabeledContent("Status") {
-                Text(mirror.status.label)
+                Text(mirror.statusText)
                     .foregroundStyle(.secondary)
             }
-            Button("Pull Chain from PC") { mirror.pullChain() }
-                .disabled(mirror.status != .connected)
-            Button("Import Presets from PC") { mirror.importPresets() }
-                .disabled(mirror.status != .connected)
+            Button("Forget", role: .destructive) { mirror.forget() }
+                .disabled(prefs.remoteAddress.isEmpty)
         } header: {
             Text("Remote")
         }
