@@ -64,7 +64,7 @@ struct RemotePanelView: View {
                     RemoteRows()
                 }
             }
-            .navigationTitle("Remote")
+            .navigationTitle("Remote Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }

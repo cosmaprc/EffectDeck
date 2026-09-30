@@ -409,7 +409,7 @@ private struct RemoteSection: View {
         Section {
             RemoteRows()
         } header: {
-            Text("Remote")
+            Text("Remote Control")
         }
     }
 }

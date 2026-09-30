@@ -2098,7 +2098,7 @@ private struct RemoteBanner: View {
                     .frame(width: 26)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Remote")
+                    Text("Remote Control")
                         .font(.system(size: 15, weight: .semibold))
                     if let host = ETRemoteAddress.parse(Preferences.shared.remoteAddress)?.host {
                         Text(host)
