@@ -33,12 +33,21 @@ struct RemoteToolbarButton: View {
     }
 
     var body: some View {
-        Button("Remote Control", systemImage: "dot.radiowaves.left.and.right", action: open)
-            // 入れてあるあいだは色を付ける。切っているあいだは他のアイコンと同じ色のまま。
-            .foregroundStyle(prefs.remoteEnabled ? Color.accentColor : Color.primary)
+        styled(Button("Remote Control", systemImage: "dot.radiowaves.left.and.right", action: open))
             // 入れてあるのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
             .symbolEffect(.pulse, isActive: prefs.remoteEnabled && mirror.status != .connected)
             .accessibilityValue(mirror.statusText)
+    }
+
+    /// 入れてあるあいだは青く塗る。PC 側（EffeTune の見出しのアイコン）も入のとき青で塗るので合わせる。
+    /// ガラスのツールバーでは foregroundStyle の色が乗らないことがあるので、塗りのある形にする。
+    @ViewBuilder
+    private func styled<Label: View>(_ button: Button<Label>) -> some View {
+        if prefs.remoteEnabled {
+            button.buttonStyle(.borderedProminent).tint(.blue)
+        } else {
+            button
+        }
     }
 }
 
