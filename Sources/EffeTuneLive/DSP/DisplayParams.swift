@@ -8,7 +8,7 @@
 //      pitch_meter.js:96-107         ly / cl
 //      stereo_meter.js:271-279       gn
 //      chroma_spiral.js:92-96        dm / lo / hi / ft / lr / df
-//  **画面で使っていないもの（kb、Pitch Meter の ly）も表に入れる。**
+//  **画面で使っていないもの（kb）も表に入れる。**
 //  入れないと web 版から来た値が往復で消える。
 //
 //  DSP のパラメータではないので params.json に席が無く、こちらの values

@@ -27,14 +27,18 @@ struct PitchMeterView: View {
     @Environment(\.etGraphOnly) private var graphOnly
     /// 既定は Normal（pitch_meter.js v2.11.0:48）。
     @State private var color: ETPitchColor = .normal
+    /// 既定は Horizontal（pitch_meter.js v2.11.0:47）。綴りは Note Spectrogram と同じ
+    /// 'Vertical' / 'Horizontal'（同 :13）なので ETNoteLayout をそのまま使う。
+    @State private var layout: ETNoteLayout = .horizontal
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             PitchMeterGraph(tap: node.tapId, minimum: value("mn"), maximum: value("mx"),
-                            reference: value("rf"), color: color)
+                            reference: value("rf"), color: color, layout: layout)
             if !graphOnly {
-                // 上流は Color を数値の行より先に置く（pitch_meter.js v2.11.0:410-413）。
+                // 上流は Color → Layout を数値の行より先に置く（pitch_meter.js v2.11.0:410-417）。
                 colorPicker
+                layoutPicker
                 ForEach(node.spec.params) { param in
                     ParameterRow(param: param, nodeIndex: index, values: node.values, dsp: dsp)
                 }
@@ -42,6 +46,7 @@ struct PitchMeterView: View {
         }
         // 畳むとこの View ごと消えるので鎖に持たせる。上流も `cl` をプリセットに書く（同 :104-105）。
         .etSaved($color, key: "cl", index: index, dsp: dsp)
+        .etSaved($layout, key: "ly", index: index, dsp: dsp)
     }
 
     /// pitch_meter.js v2.11.0:410-413 の createRadioGroup に当たる。
@@ -51,6 +56,22 @@ struct PitchMeterView: View {
                 .font(.system(size: 14))
             Picker("Color", selection: $color) {
                 ForEach(ETPitchColor.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// pitch_meter.js v2.11.0:414-416 の createRadioGroup('Layout', …)。
+    private var layoutPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Layout")
+                .font(.system(size: 14))
+            Picker("Layout", selection: $layout) {
+                ForEach(ETNoteLayout.allCases) { option in
                     Text(option.label).tag(option)
                 }
             }
@@ -80,6 +101,7 @@ private struct PitchMeterGraph: View {
     let maximum: Double
     let reference: Double
     let color: ETPitchColor
+    let layout: ETNoteLayout
     @ETTelemetryFeed private var telemetry
     @State private var history: [ETPitchPoint] = []
     /// Heatmap の目盛り。Note Spectrogram と同じ追従（pitch_meter.js v2.11.0:287-293）。
@@ -95,24 +117,32 @@ private struct PitchMeterGraph: View {
         let current = reading
         VStack(alignment: .leading, spacing: 4) {
             Text(current?.label ?? "Waiting for audio").font(.system(.caption, design: .monospaced))
-            Canvas { context, size in
+            Canvas { screen, size in
+                // 描くのは x が時間（右が新しい）、y が音の高さ（上が高い）の面。
+                // Horizontal は上流と同じく面ごと 90 度回す（pitch_meter.js v2.11.0:526-534）。
+                // 画面では x が音の高さ（右が高い）、y が時間（下が新しい）になる。
+                let frame = rollFrame(size)
+                var context = screen
+                frame.apply(&context)
+                let width = frame.width, height = frame.height
                 let lo = min(minimum, maximum), hi = max(minimum + 1, maximum)
                 for note in Int(lo)...Int(hi) {
-                    let y = size.height * (1 - (Double(note) - lo) / (hi - lo))
+                    let y = height * (1 - (Double(note) - lo) / (hi - lo))
                     if [1, 3, 6, 8, 10].contains(note % 12) {
-                        context.fill(Path(CGRect(x: 0, y: y - size.height / (hi - lo) / 2,
-                                                 width: size.width, height: size.height / (hi - lo))),
+                        context.fill(Path(CGRect(x: 0, y: y - height / (hi - lo) / 2,
+                                                 width: width, height: height / (hi - lo))),
                                      with: .color(.secondary.opacity(0.12)))
                     }
                     if note % 12 == 0 {
-                        context.draw(Text("C\(note / 12 - 1)").font(.system(size: 9)),
-                                     at: CGPoint(x: 12, y: y))
+                        // 字は回さない。上流も Horizontal では字だけ戻して立てる（同 :587-594）。
+                        screen.draw(Text("C\(note / 12 - 1)").font(.system(size: 9)),
+                                    at: frame.point(12, y))
                     }
                 }
                 guard let last = history.last?.reading else { return }
                 func point(_ sample: ETPitchReading) -> CGPoint {
-                    CGPoint(x: size.width * (1 - (last.time - sample.time) / 2),
-                            y: size.height * (1 - (sample.midi - lo) / (hi - lo)))
+                    CGPoint(x: width * (1 - (last.time - sample.time) / 2),
+                            y: height * (1 - (sample.midi - lo) / (hi - lo)))
                 }
                 // **Normal は前のまま**、濃さを付けない 1 色の 1 本の線。
                 if color == .normal {
@@ -155,7 +185,10 @@ private struct PitchMeterGraph: View {
                         .simultaneousGesture(DragGesture(minimumDistance: 0)
                             .updating($previewActive) { _, active, _ in active = true }
                             .onChanged { touch in
-                                let t = min(1, max(0, 1 - touch.location.y / max(1, geometry.size.height)))
+                                // 音の高さは描く面の y。Horizontal では画面の x に乗っている。
+                                let frame = rollFrame(geometry.size)
+                                let local = frame.local(touch.location)
+                                let t = min(1, max(0, 1 - local.y / max(1, frame.height)))
                                 let midi = minimum + Double(t) * max(1, maximum - minimum)
                                 ETPreviewTone_SetFrequency(reference * pow(2, (midi - 69) / 12))
                             }
@@ -194,6 +227,11 @@ private struct PitchMeterGraph: View {
             history.removeAll { $0.reading.time < sample.time - 2 }
             if history.count > 600 { history.removeFirst(history.count - 600) }
         }
+    }
+
+    private func rollFrame(_ size: CGSize) -> ETNoteRollFrame {
+        ETNoteRollFrame(rect: CGRect(origin: .zero, size: size),
+                        horizontal: layout == .horizontal)
     }
 
     /// pitch_meter.js v2.11.0:514-520 の _lineColor。

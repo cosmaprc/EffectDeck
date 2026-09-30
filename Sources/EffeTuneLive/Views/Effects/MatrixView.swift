@@ -191,26 +191,8 @@ struct MatrixView: View {
 
     // MARK: DSP へ渡す
 
-    /// kernel.cpp:51-71 が読む並びに詰める。本数は 1024 まで。
-    private func packed(_ routes: [UInt8: Bool]) -> [UInt8] {
-        let keys = routes.keys.sorted().prefix(1024)
-        var bytes: [UInt8] = [1, 0, UInt8(keys.count & 0xff), UInt8(keys.count >> 8)]
-        bytes.reserveCapacity(4 + keys.count * 3)
-        for key in keys {
-            bytes.append(key >> 4)
-            bytes.append(key & 0x0f)
-            bytes.append(routes[key] == true ? 1 : 0)
-        }
-        return bytes
-    }
-
     private func push(_ routes: [UInt8: Bool]) {
-        guard dsp.engine != 0, node.instance != 0 else { return }
-        let bytes = packed(routes)
-        _ = bytes.withUnsafeBufferPointer {
-            et_instance_set_param_bytes(dsp.engine, node.instance, $0.baseAddress,
-                                        UInt32(bytes.count), node.spec.paramsHash, 0)
-        }
+        MatrixRouting.push(routes, node: node, engine: dsp.engine)
     }
 
     // MARK: 枠を読む
@@ -271,5 +253,35 @@ final class MatrixRouting {
     func prune(keeping ids: [UUID]) {
         let live = Set(ids)
         byNode = byNode.filter { live.contains($0.key) }
+    }
+
+    /// 既定の対角へ戻してカーネルへも送る。上流の Reset は mx を足した時の値へ戻す
+    /// （pipeline-item-builder.js:392-410、既定は matrix.js:105-111）。
+    /// 畳んだカードにはビューが無いので、送るのはここでやる。
+    func reset(_ node: EffeTuneDSP.Node, engine: UInt32) {
+        byNode[node.id] = nil
+        Self.push(Self.initial, node: node, engine: engine)
+    }
+
+    /// kernel.cpp:51-71 が読む並びに詰める。本数は 1024 まで。
+    static func packed(_ routes: [UInt8: Bool]) -> [UInt8] {
+        let keys = routes.keys.sorted().prefix(1024)
+        var bytes: [UInt8] = [1, 0, UInt8(keys.count & 0xff), UInt8(keys.count >> 8)]
+        bytes.reserveCapacity(4 + keys.count * 3)
+        for key in keys {
+            bytes.append(key >> 4)
+            bytes.append(key & 0x0f)
+            bytes.append(routes[key] == true ? 1 : 0)
+        }
+        return bytes
+    }
+
+    static func push(_ routes: [UInt8: Bool], node: EffeTuneDSP.Node, engine: UInt32) {
+        guard engine != 0, node.instance != 0 else { return }
+        let bytes = packed(routes)
+        _ = bytes.withUnsafeBufferPointer {
+            et_instance_set_param_bytes(engine, node.instance, $0.baseAddress,
+                                        UInt32(bytes.count), node.spec.paramsHash, 0)
+        }
     }
 }

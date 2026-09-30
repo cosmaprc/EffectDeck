@@ -928,13 +928,35 @@ final class EffeTuneDSP: ObservableObject {
         // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
         // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
         chain[index].design = [:]
+        // 表示の設定も同じ既定に入っている（plugin-manager.js:41-48 は getParameters() から
+        // type / id / enabled / バスだけを除く）。空にすれば各画面は自分の既定で描く。
+        // 画面は .etSaved で現れたときにしか読まないので、作り直させる（Node.resetCount）。
+        chain[index].display = [:]
+        chain[index].resetCount &+= 1
         pushParams(chain[index])
-        // 既定へ戻すと選択肢も戻る。資産の解決に使う値がその中にあるので、
-        // 1 つ変えたときと同じ後始末をする。
-        if !chain[index].irId.isEmpty {
-            reloadAsset(at: index)
-        } else if instanceLatency(of: chain[index]) != before {
-            republish(reason: "遅延が変わった")
+        // IR Reverb は ir も既定（''、ir_reverb.js:28）へ戻るので、素材を外して素通しにする。
+        // 入れ直すと Reset の後も同じ IR が鳴り続ける。
+        let unloaded = !chain[index].irId.isEmpty
+        if unloaded {
+            chain[index].irId = ""
+            assetInfo[chain[index].id] = nil
+            AssetUpload.clear(engine: engine, instance: chain[index].instance)
+        }
+        // 経路と測定は鎖の外の置き場にある。上流はどちらも既定に入っているので戻す。
+        switch chain[index].spec.type {
+        case "MatrixPlugin":
+            // mx は足した時の対角（matrix.js:105-111）。
+            MatrixRouting.shared.reset(chain[index], engine: engine)
+        case "CrosstalkCancellationPlugin":
+            // ll / lr / rl / rr は空、設計の指示は初期値（crosstalk_cancellation.js:46-55）。
+            CrosstalkStore.shared.reset(node: chain[index])
+        default:
+            break
+        }
+        // 素材を外すとカーネルがその段を有効と数えなくなるので組み直す
+        // （入れたときも ETIRLoader.load が組み直している）。
+        if unloaded || instanceLatency(of: chain[index]) != before {
+            republish(reason: unloaded ? "IRを外した" : "遅延が変わった")
         }
         // setValues と同じ。値から材料を引く designer に、戻した値を読ませる。
         ETAssetReattach.paramsChanged(chain[index])
