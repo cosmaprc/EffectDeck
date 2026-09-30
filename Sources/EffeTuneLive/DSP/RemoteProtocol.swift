@@ -374,6 +374,11 @@ enum ETRemoteFollow {
 ///     {"op":"telemetry","frames":[{"index":3,"nm":"Spectrum Analyzer","type":4,"data":"<base64>"}, …]}
 /// `index` は PC の鎖の番号（params の index と同じ）。`type` はヘッダの写しで、見るのはヘッダのほう。
 /// `data` は 16 + payloadBytes バイトちょうど（4 の倍数への切り上げは無い）。
+///
+/// **PEQ の重ね表示**（features の "overlays"、subscribe に `"overlays":true`）は同じ push に
+/// `role` 付きで混ざる: `{"index":2,"nm":"5Band PEQ","type":4,"role":"after","data":…}`。
+/// 中身は手元の探りと同じ Spectrum Analyzer の v1 枠（points 12・2049 本・平滑前の dB）。
+/// before は段に入る音、after は段から出た音。手元の探りの tap（EffeTuneDSP.probeTaps）へ差し込む。
 enum ETRemoteTelemetry {
 
     struct Entry {
@@ -383,7 +388,20 @@ enum ETRemoteTelemetry {
         let nm: String
         /// frame.tapId は PC の plugin.id のまま。差し込む前に frame(_:tap:) で書き換える。
         let frame: ETFrame
+        /// 重ね表示の枠なら "before" か "after"。アナライザの枠は nil。
+        let role: String?
     }
+
+    /// 重ね表示の枠を受ける手元の tap。nil はその向きの行き先が無い。
+    struct OverlayTaps: Equatable {
+        var before: UInt32?
+        var after: UInt32?
+    }
+
+    /// 手元で探り（段の前後の Spectrum Analyzer）を付ける PEQ。EffeTuneDSP.probedTypes と同じ。
+    static let overlayProbedTypes: Set<String> = ["FiveBandPEQPlugin", "FifteenBandPEQPlugin"]
+    /// FIR PEQ は探りを持たず、図は段の tapId を読む。入口が無いので after だけ受ける。
+    static let overlayFIRType = "FiveBandFIRPEQPlugin"
 
     /// 読めない項目は落とす（番号・名前が無い・base64 が解けない・長さがヘッダと合わない）。
     static func parse(_ message: [String: Any]) -> [Entry] {
@@ -395,14 +413,63 @@ enum ETRemoteTelemetry {
                   let nm = item["nm"] as? String,
                   let text = item["data"] as? String,
                   let data = Data(base64Encoded: text) else { continue }
+            // role は無いか "before" / "after"。知らない向きは落とす（別の段へ差し込まない）。
+            let role = item["role"] as? String
+            if item["role"] != nil, role != "before", role != "after" { continue }
             let bytes = [UInt8](data)
             guard bytes.count >= 16, bytes.count == 16 + Int(u16(bytes, 12)) else { continue }
             let frame = ETFrame(type: u16(bytes, 0), version: u16(bytes, 2), tapId: u32(bytes, 4),
                                 sequence: u32(bytes, 8), dropped: u16(bytes, 14) & 1 != 0,
                                 payload: Array(bytes[16...]))
-            out.append(Entry(index: index, nm: nm, frame: frame))
+            out.append(Entry(index: index, nm: nm, frame: frame, role: role))
         }
         return out
+    }
+
+    /// 手元の段が重ね表示の枠を受ける tap。probes は EffeTuneDSP.probeTaps（無ければ nil）。
+    /// PEQ でも探りが無い（バスを分けている・枠が足りない）なら受けない。手元でも図に重ならない段。
+    static func overlayTaps(_ node: ETChainNode,
+                            probes: (before: UInt32, after: UInt32)?) -> OverlayTaps {
+        if overlayProbedTypes.contains(node.spec.type), let probes {
+            return OverlayTaps(before: probes.before, after: probes.after)
+        }
+        if node.spec.type == overlayFIRType, node.tapId != 0 {
+            return OverlayTaps(before: nil, after: node.tapId)
+        }
+        return OverlayTaps(before: nil, after: nil)
+    }
+
+    /// PC の枠を手元の段の tap へ付け替える。行き先が無い・映していない（mirrored に無い）枠は落とす。
+    ///
+    /// - sentMap: 手元の番号 → PC の番号（RemoteMirror の sentMap）。鎖と本数が違えば全部落とす
+    ///   （手元で段を足し引きして、まだ PC へ鎖を送っていない）。
+    /// - sent: PC へ送った鎖の形。**名前を比べる。**PC で鎖が変わってから手元が追うまでは、
+    ///   同じ番号に別の段がいる。
+    /// - probes: 手元の番号 → 探りの tap。
+    static func route(_ entries: [Entry], chain: [ETChainNode], sentMap: [Int?],
+                      sent: [[String: Any]], mirrored: Set<UInt32>,
+                      probes: (Int) -> (before: UInt32, after: UInt32)?) -> [ETFrame] {
+        guard chain.count == sentMap.count else { return [] }
+        let local = inverse(sentMap)
+        var frames: [ETFrame] = []
+        for entry in entries {
+            guard let i = local[entry.index], chain.indices.contains(i),
+                  sent.indices.contains(entry.index),
+                  sent[entry.index]["nm"] as? String == entry.nm else { continue }
+            let node = chain[i]
+            if let role = entry.role {
+                // 重ね表示は Spectrum Analyzer の枠だけ。
+                guard entry.frame.type == 4 else { continue }
+                let taps = overlayTaps(node, probes: probes(i))
+                guard let target = role == "after" ? taps.after : taps.before,
+                      mirrored.contains(target) else { continue }
+                frames.append(frame(entry, tap: target))
+                continue
+            }
+            guard node.spec.isAnalyzer, mirrored.contains(node.tapId) else { continue }
+            frames.append(frame(entry, tap: node.tapId))
+        }
+        return frames
     }
 
     /// `remoteIndex[手元の番号]` = PC の番号（RemoteMirror の sentMap）を裏返す。PC の番号 → 手元の番号。

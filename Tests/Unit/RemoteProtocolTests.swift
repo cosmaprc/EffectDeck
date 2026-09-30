@@ -11,6 +11,7 @@
 //      プリセットの足し合わせ（名前の付け足し・2 回目は何もしない・PC の字と手元の保存が同じ中身）、
 //      IR の塊の切り方と継ぎ方、PC の変更を値だけで当てられるか
 //    - telemetry: PC の枠のヘッダの読み方・壊れた項目を落とす・tapId の付け替え・番号の対応表の裏返し
+//      PEQ の重ね表示: role の読み方、段ごとの行き先（5Band・15Band・FIR・探りの無い PEQ）、名前違いを落とす
 
 import XCTest
 
@@ -366,6 +367,98 @@ final class RemoteProtocolTests: XCTestCase {
              "data": wire(type: 1, version: 1, tap: 1, sequence: 7, flags: 0, payload: [])],
         ]]
         XCTAssertEqual(ETRemoteTelemetry.parse(message).first?.frame.payload, [])
+    }
+
+    // MARK: - telemetry: PEQ の重ね表示
+
+    func testTelemetryParseReadsRole() {
+        let frame = wire(type: 4, version: 1, tap: 9, sequence: 1, flags: 0, payload: [0, 0, 0, 0])
+        let message: [String: Any] = ["frames": [
+            ["index": 0, "nm": "Spectrum Analyzer", "type": 4, "data": frame],
+            ["index": 1, "nm": "5Band PEQ", "type": 4, "role": "before", "data": frame],
+            ["index": 1, "nm": "5Band PEQ", "type": 4, "role": "after", "data": frame],
+            ["index": 1, "nm": "5Band PEQ", "type": 4, "role": "middle", "data": frame],   // 知らない向き
+            ["index": 1, "nm": "5Band PEQ", "type": 4, "role": 1, "data": frame],          // 字でない
+            ["index": 1, "nm": "5Band PEQ", "type": 4, "role": NSNull(), "data": frame],   // null
+        ]]
+        let entries = ETRemoteTelemetry.parse(message)
+        XCTAssertEqual(entries.map(\.index), [0, 1, 1])
+        XCTAssertEqual(entries.map(\.role), [nil, "before", "after"])
+    }
+
+    private func node(_ type: String, tap: UInt32) throws -> ETChainNode {
+        let spec = try XCTUnwrap(ETCatalog.first { $0.type == type }, "カタログに無い: \(type)")
+        var n = ETChainNode(spec: spec, values: spec.defaults)
+        n.tapId = tap
+        return n
+    }
+
+    func testOverlayTapsPerStageType() throws {
+        let probes: (before: UInt32, after: UInt32) = (before: 100, after: 101)
+        // 探りのある PEQ は探りの前後。段の tapId は使わない。
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FiveBandPEQPlugin", tap: 5), probes: probes),
+                       .init(before: 100, after: 101))
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FifteenBandPEQPlugin", tap: 6), probes: probes),
+                       .init(before: 100, after: 101))
+        // 探りの無い PEQ（バスを分けている・枠が足りない）は受けない。
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FiveBandPEQPlugin", tap: 5), probes: nil),
+                       .init(before: nil, after: nil))
+        // FIR PEQ は段の tapId に after だけ。探りを渡されても使わない。
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FiveBandFIRPEQPlugin", tap: 7), probes: nil),
+                       .init(before: nil, after: 7))
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FiveBandFIRPEQPlugin", tap: 7), probes: probes),
+                       .init(before: nil, after: 7))
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("FiveBandFIRPEQPlugin", tap: 0), probes: nil),
+                       .init(before: nil, after: nil))
+        // PEQ でない段は受けない。
+        XCTAssertEqual(ETRemoteTelemetry.overlayTaps(try node("SpectrumAnalyzerPlugin", tap: 8), probes: probes),
+                       .init(before: nil, after: nil))
+    }
+
+    func testRouteOverlayFrames() throws {
+        // 手元: 0 = 5Band PEQ（探り 100/101）、1 = 外部の段（PC に無い）、2 = FIR PEQ（tap 7）、3 = Spectrum Analyzer（tap 8）
+        // PC:   0 = 5Band PEQ、1 = FIR PEQ、2 = Spectrum Analyzer
+        let peq = try node("FiveBandPEQPlugin", tap: 5)
+        let fir = try node("FiveBandFIRPEQPlugin", tap: 7)
+        let sa = try node("SpectrumAnalyzerPlugin", tap: 8)
+        let ext = ETChainNode(spec: ETEffect.external(type: "External:au:aufx-dely-abcd", name: "My Delay",
+                                                      category: "Audio Units"),
+                              values: [])
+        let chain = [peq, ext, fir, sa]
+        let sentMap: [Int?] = [0, nil, 1, 2]
+        let sent: [[String: Any]] = [["nm": peq.spec.name], ["nm": fir.spec.name], ["nm": sa.spec.name]]
+        let probes: (Int) -> (before: UInt32, after: UInt32)? = { $0 == 0 ? (before: 100, after: 101) : nil }
+        func entry(_ index: Int, _ nm: String, role: String?, type: UInt16 = 4, seq: UInt32) -> ETRemoteTelemetry.Entry {
+            ETRemoteTelemetry.Entry(index: index, nm: nm,
+                                    frame: ETFrame(type: type, version: 1, tapId: 999, sequence: seq,
+                                                   dropped: false, payload: []),
+                                    role: role)
+        }
+        let entries = [
+            entry(0, peq.spec.name, role: "before", seq: 1),
+            entry(0, peq.spec.name, role: "after", seq: 2),
+            entry(1, fir.spec.name, role: "before", seq: 3),         // FIR に入口は無い
+            entry(1, fir.spec.name, role: "after", seq: 4),
+            entry(2, sa.spec.name, role: nil, seq: 5),               // アナライザはそのまま
+            entry(0, "15Band PEQ", role: "after", seq: 6),           // 名前違い（PC の鎖が変わった直後）
+            entry(0, peq.spec.name, role: "after", type: 1, seq: 7), // Spectrum Analyzer の枠でない
+            entry(2, sa.spec.name, role: "after", seq: 8),           // PEQ でない段に向き付き
+            entry(5, peq.spec.name, role: "after", seq: 9),          // PC の番号が手元に無い
+        ]
+        let all: Set<UInt32> = [7, 8, 100, 101]
+        let frames = ETRemoteTelemetry.route(entries, chain: chain, sentMap: sentMap, sent: sent,
+                                             mirrored: all, probes: probes)
+        XCTAssertEqual(frames.map(\.sequence), [1, 2, 4, 5])
+        XCTAssertEqual(frames.map(\.tapId), [100, 101, 7, 8])
+
+        // 映していない tap へは差し込まない（Mirror Analyzers を切った・PC が overlays を持たない）。
+        let analyzersOnly = ETRemoteTelemetry.route(entries, chain: chain, sentMap: sentMap, sent: sent,
+                                                    mirrored: [8], probes: probes)
+        XCTAssertEqual(analyzersOnly.map(\.sequence), [5])
+
+        // 手元で段を足して、まだ鎖を送っていない。
+        XCTAssertTrue(ETRemoteTelemetry.route(entries, chain: chain + [sa], sentMap: sentMap, sent: sent,
+                                              mirrored: all, probes: probes).isEmpty)
     }
 
     func testTelemetryInverseSkipsDroppedStages() {

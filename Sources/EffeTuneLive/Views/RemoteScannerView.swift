@@ -237,6 +237,26 @@ extension View {
     }
 }
 
+/// PEQ の図に重ねるスペクトラム（と After ⇄ Compare の札）を包む。PC の鎖を編集しているあいだは
+/// PC の前後の枠を映している tap（RemoteMirror.mirroredTaps）だけ描く。手元の音は PC の音と関係ない。
+/// 手元で使っているときは素通し。RemoteMirror を観測するのはここ（図の本体は観測しない）。
+struct ETRemoteOverlayGate<Content: View>: View {
+    let tap: UInt32
+    let content: () -> Content
+    @ObservedObject private var mirror = RemoteMirror.shared
+
+    init(tap: UInt32, @ViewBuilder content: @escaping () -> Content) {
+        self.tap = tap
+        self.content = content
+    }
+
+    var body: some View {
+        if !mirror.isRemote || mirror.mirroredTaps.contains(tap) {
+            content()
+        }
+    }
+}
+
 /// カードに掛ける。Analyzer のカードで、PC の鎖を編集しているあいだ、PC の測定値を
 /// 映していない段にだけ印を立てる。RemoteMirror を観測するのはここ（カードの本体は観測しない）。
 struct ETRemoteMeasurementDim: ViewModifier {

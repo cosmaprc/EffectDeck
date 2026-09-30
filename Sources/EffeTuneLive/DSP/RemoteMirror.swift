@@ -26,6 +26,7 @@
 //    listPresets / getPreset / savePreset   つないだ直後のプリセットの足し合わせ
 //    listIRs / getIR / putIR               同じく IR。512 KiB ずつ base64 で
 //    telemetry   PC のアナライザの測定値を受ける入切（Mirror Analyzers）。受けた枠は Telemetry へ差し込む
+//                PC が overlays を持てば PEQ の重ね表示の前後も受け、手元の探りの tap へ差し込む
 //
 //  **返事は seq で待つ**（request）。データの返事（presets・preset・state）は ack の後に同じ seq で来る。
 //  getIR だけは塊（irChunk）が先で ack が最後。
@@ -166,6 +167,8 @@ final class RemoteMirror: ObservableObject {
 
     /// PC が hello の features に "telemetry" を出した。
     private var serverTelemetry = false
+    /// PC が hello の features に "overlays" を出した（PEQ の重ね表示の前後の枠を送れる）。
+    private var serverOverlays = false
     /// 最後に送った telemetry の入切。
     private var telemetryWanted = false
     /// 最後に送った telemetry の seq。古い ack の ok:false で今の入切を倒さない。
@@ -309,7 +312,9 @@ final class RemoteMirror: ObservableObject {
             self.status = .connected
             self.tokenRejected = false
             self.backoff = 1
-            self.serverTelemetry = (state["features"] as? [String])?.contains("telemetry") == true
+            let features = state["features"] as? [String] ?? []
+            self.serverTelemetry = features.contains("telemetry")
+            self.serverOverlays = features.contains("overlays")
             self.enterRemote(state)
         }
     }
@@ -339,6 +344,7 @@ final class RemoteMirror: ObservableObject {
         // 接続ごと消えたので PC へは送らない（送れない）。映していた段は手元の枠へ戻す。
         // 退避を戻す（leaveRemote）より先に外す。戻した鎖で refreshMirrored が走らないように。
         serverTelemetry = false
+        serverOverlays = false
         telemetryWanted = false
         telemetrySeq = nil
         chainSink = nil
@@ -708,9 +714,13 @@ final class RemoteMirror: ObservableObject {
         if want {
             if chainSink == nil {
                 // $chain は書き換わる前に流れる。書き換わった後の鎖で決め直すため、一度メインへ回す。
-                chainSink = EffeTuneDSP.shared.$chain.sink { [weak self] _ in
-                    Task { @MainActor [weak self] in self?.refreshMirrored() }
-                }
+                // 探り（重ね表示の tap）は publish() で作るので $chain より後になりうる。探りの足し引きも見る。
+                let dsp = EffeTuneDSP.shared
+                chainSink = dsp.$chain.map { _ in () }
+                    .merge(with: dsp.$probeRevision.map { _ in () })
+                    .sink { [weak self] _ in
+                        Task { @MainActor [weak self] in self?.refreshMirrored() }
+                    }
             }
             refreshMirrored()
         } else {
@@ -720,7 +730,10 @@ final class RemoteMirror: ObservableObject {
     }
 
     private func sendTelemetry(_ on: Bool) {
-        let n = send(["op": "telemetry", "on": on, "fps": Self.telemetryFPS]) { [weak self] reply in
+        var message: [String: Any] = ["op": "telemetry", "on": on, "fps": Self.telemetryFPS]
+        // PEQ の重ね表示の前後も受ける。古い PC は overlays を知らないので送らない。
+        if on && serverOverlays { message["overlays"] = true }
+        let n = send(message) { [weak self] reply in
             guard let reply else { return true }
             guard reply["op"] as? String == "ack" else { return false }
             if reply["ok"] as? Bool == false {
@@ -742,6 +755,7 @@ final class RemoteMirror: ObservableObject {
     }
 
     /// PC の番号が付いている Analyzer の段を映す。外部の段（PC へ渡らない）は番号が無い。
+    /// PC が重ね表示を送れるなら、PEQ の探りの tap も映す（ETRemoteOverlayGate はここに入った tap だけ描く）。
     private func refreshMirrored() {
         guard telemetryWanted, isRemote else {
             setMirrored([])
@@ -753,7 +767,25 @@ final class RemoteMirror: ObservableObject {
             && sentMap.indices.contains(i) && sentMap[i] != nil {
             taps.insert(chain[i].tapId)
         }
+        if serverOverlays {
+            for i in chain.indices where sentMap.indices.contains(i) && sentMap[i] != nil {
+                let t = overlayTaps(at: i)
+                if let before = t.before { taps.insert(before) }
+                if let after = t.after { taps.insert(after) }
+            }
+        }
         setMirrored(taps)
+    }
+
+    /// 手元の番号 i の段が重ね表示の枠を受ける tap。
+    private func overlayTaps(at i: Int) -> ETRemoteTelemetry.OverlayTaps {
+        let dsp = EffeTuneDSP.shared
+        guard dsp.chain.indices.contains(i) else { return ETRemoteTelemetry.OverlayTaps() }
+        return ETRemoteTelemetry.overlayTaps(dsp.chain[i], probes: Self.probeTuple(dsp.probeTaps(at: i)))
+    }
+
+    private static func probeTuple(_ t: EffeTuneDSP.ProbeTaps?) -> (before: UInt32, after: UInt32)? {
+        t.map { (before: $0.before, after: $0.after) }
     }
 
     private func setMirrored(_ taps: Set<UInt32>) {
@@ -768,23 +800,15 @@ final class RemoteMirror: ObservableObject {
     /// スペアナを見るのがこの機能の使いどころで、busy で捨てると動かしているあいだ図が止まる。
     /// **名前も比べる。**PC で鎖が変わってから手元が追う（follow の 150 ms）までは、
     /// 同じ番号に別の段がいる。同じ種類のアナライザ 2 本の入れ替えだけは 1 回ぶん取り違えうる（PoC では受ける）。
+    /// 重ね表示の枠（role 付き）は、その段の探りの tap（FIR PEQ は after だけ段の tapId）へ差し込む。
+    /// 振り分けは ETRemoteTelemetry.route（段の本数の門 = flushParams と同じ、名前の照合も中）。
     private func receiveTelemetry(_ message: [String: Any]) {
         guard telemetryWanted, isRemote, !chainSettling else { return }
         let entries = ETRemoteTelemetry.parse(message)
         guard !entries.isEmpty, let sent = sentForm else { return }
-        let chain = EffeTuneDSP.shared.chain
-        // 段を足し引きして、まだ鎖を送っていない（flushParams と同じ門）。
-        guard chain.count == sentMap.count else { return }
-        let local = ETRemoteTelemetry.inverse(sentMap)
-        var frames: [ETFrame] = []
-        for entry in entries {
-            guard let i = local[entry.index], chain.indices.contains(i),
-                  sent.indices.contains(entry.index),
-                  sent[entry.index]["nm"] as? String == entry.nm else { continue }
-            let node = chain[i]
-            guard node.spec.isAnalyzer, mirroredTaps.contains(node.tapId) else { continue }
-            frames.append(ETRemoteTelemetry.frame(entry, tap: node.tapId))
-        }
+        let dsp = EffeTuneDSP.shared
+        let frames = ETRemoteTelemetry.route(entries, chain: dsp.chain, sentMap: sentMap, sent: sent,
+                                             mirrored: mirroredTaps) { Self.probeTuple(dsp.probeTaps(at: $0)) }
         if !frames.isEmpty { Telemetry.shared.inject(frames) }
     }
 

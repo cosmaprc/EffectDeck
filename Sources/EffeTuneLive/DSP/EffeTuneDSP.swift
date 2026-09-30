@@ -1171,6 +1171,10 @@ final class EffeTuneDSP: ObservableObject {
     /// 段の id → 探り。
     private var probes: [UUID: ProbePair] = [:]
 
+    /// 探りを足した・外したら 1 進む。探りは publish() で作るので、$chain の後になることがある。
+    /// PoC: RemoteMirror が PC の重ね表示を映す tap を決め直すのに見る。
+    @Published private(set) var probeRevision = 0
+
     /// 図に音を重ねる段の型。上流の対応表（plugins/spectrum-overlay.js:17-37）から、
     /// こちらに専用の図があるものだけ。
     private static let probedTypes: Set<String> = ["FiveBandPEQPlugin", "FifteenBandPEQPlugin"]
@@ -1221,9 +1225,12 @@ final class EffeTuneDSP: ObservableObject {
         let want = Set(candidates.prefix(budget))
 
         var doomed: [UInt32] = []
+        var changed = false
+        defer { if changed { probeRevision &+= 1 } }
         for id in Array(probes.keys) where !want.contains(id) {
             if let pair = probes[id] { doomed += [pair.before.instance, pair.after.instance] }
             probes[id] = nil
+            changed = true
         }
 
         guard let spec = ETCatalog.first(where: { $0.type == Self.probeType }) else { return doomed }
@@ -1239,6 +1246,7 @@ final class EffeTuneDSP: ObservableObject {
                 continue
             }
             probes[id] = ProbePair(before: before, after: after)
+            changed = true
         }
         return doomed
     }
