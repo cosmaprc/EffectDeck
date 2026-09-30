@@ -1865,11 +1865,16 @@ private struct PipelineToolbar: ToolbarContent {
         ToolbarItem(placement: .principal) {
             // 帯を 1 行使うのをやめて、ナビゲーションの中に入れた。
             // 観測するのはこのビューだけ。
-            LiveStatusStrip(io: io)
+            // PoC: リモート中は Remote Control の札に替わる（RemoteStatusSlot）。
+            RemoteStatusSlot(io: io) { present(.remote) }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             // PoC: PC の EffeTune を操る設定を開くアイコン。入切はシートの中（RemoteToolbarButton）。
-            RemoteToolbarButton { present(.remote) }
+            // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
+            // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは Settings から開く。
+            if pickerAsPopover {
+                RemoteToolbarButton { present(.remote) }
+            }
             Button("Presets", systemImage: "square.stack") { present(.presets) }
             if pickerAsPopover {
                 // **+から出す。**選ぶたびに閉じる。つまんで運ぶと自分で閉じ、

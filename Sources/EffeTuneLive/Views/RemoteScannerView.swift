@@ -54,6 +54,38 @@ struct RemoteToolbarButton: View {
     }
 }
 
+/// ナビゲーションバー中央の枠。ふだんは LiveStatusStrip、PC の鎖を編集しているあいだは
+/// 「Remote Control」の札にして、押すとリモートのシートを開く。
+/// リモート中にこの端末の遅れと CPU を出しても、鳴っているのは PC なので意味が無い。
+/// iPhone ではツールバーにリモートのアイコンを置けない（幅が足りない）ので、ここが入口になる。
+struct RemoteStatusSlot: View {
+    @ObservedObject private var mirror = RemoteMirror.shared
+    let io: AudioIO
+    let open: () -> Void
+
+    init(io: AudioIO, open: @escaping () -> Void) {
+        self.io = io
+        self.open = open
+    }
+
+    var body: some View {
+        if mirror.isRemote {
+            Button(action: open) {
+                Label("Remote Control", systemImage: "dot.radiowaves.left.and.right")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(mirror.statusText)
+        } else {
+            LiveStatusStrip(io: io)
+        }
+    }
+}
+
 // MARK: - 設定のシート
 
 /// アイコンから開くシート。行は Settings の Remote Control 節と同じ RemoteRows。
