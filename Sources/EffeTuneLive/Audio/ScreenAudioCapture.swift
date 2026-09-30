@@ -178,6 +178,9 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
 
     func contentSharingPicker(_ picker: SCContentSharingPicker,
                               didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
+        // ピッカーを出している間に Media Device へ戻していたら始めない
+        // （止める口が設定から消えていて、鳴らないストリームを握り続ける）。
+        guard ETCaptureRing.shared.useCapture else { return }
         startStream(filter: filter)
     }
 
@@ -212,6 +215,12 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
         guard type == .audio, sampleBuffer.isValid else { return }
+        // **外したストリームの残りは積まない。**選び直しの直後は前のストリームの
+        // stopCapture が終わるまで同じキューへ届き続け、新しい方と交互に輪へ入る。
+        lock.lock()
+        let live = (current === stream)
+        lock.unlock()
+        guard live else { return }
         guard let asbd = sampleBuffer.formatDescription?.audioStreamBasicDescription else { return }
         let frames = sampleBuffer.numSamples
         guard frames > 0 else { return }

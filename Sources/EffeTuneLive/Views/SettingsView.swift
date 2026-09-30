@@ -99,7 +99,9 @@ struct SettingsView: View {
                 ScreenCaptureRow()
             }
         } header: {
-            Text("Input")
+            // 「Input」にしない。すぐ下の Processing に Input（48 kHz · 32-bit float）の行があり、
+            // 同じ字が 2 つの意味で並ぶ。
+            Text("Source")
         }
     }
 
