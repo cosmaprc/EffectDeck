@@ -127,14 +127,13 @@ final class Telemetry: ObservableObject {
             let frameBytes = (16 + payloadBytes + 3) & ~3
             guard frameBytes >= 16, offset + frameBytes <= bytes else { break }
 
-            let start = offset + 16
-            let payload = Array(buffer[start..<(start + payloadBytes)])
-
-            let frame = ETFrame(type: type, version: version, tapId: tap, sequence: seq,
-                                dropped: flags & 1 != 0, payload: payload)
-            // PC の測定値を映している段の枠は捨てる。読み進めるのは止めない。
+            // PC の測定値を映している段の枠は捨てる（写しも作らない）。読み進めるのは止めない。
             if !mirrored.contains(tap) {
-                found[UInt64(tap) << 16 | UInt64(type)] = frame
+                let start = offset + 16
+                let payload = Array(buffer[start..<(start + payloadBytes)])
+                found[UInt64(tap) << 16 | UInt64(type)] = ETFrame(
+                    type: type, version: version, tapId: tap, sequence: seq,
+                    dropped: flags & 1 != 0, payload: payload)
             }
 
             offset += frameBytes

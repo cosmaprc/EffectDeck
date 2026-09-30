@@ -2120,7 +2120,7 @@ private struct RemoteBanner: View {
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.bordered)
-                .accessibilityLabel("Remote settings")
+                .accessibilityLabel("Remote Control Settings")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)

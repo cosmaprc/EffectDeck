@@ -709,7 +709,7 @@ final class RemoteMirror: ObservableObject {
             if chainSink == nil {
                 // $chain は書き換わる前に流れる。書き換わった後の鎖で決め直すため、一度メインへ回す。
                 chainSink = EffeTuneDSP.shared.$chain.sink { [weak self] _ in
-                    Task { @MainActor in self?.refreshMirrored() }
+                    Task { @MainActor [weak self] in self?.refreshMirrored() }
                 }
             }
             refreshMirrored()
