@@ -51,8 +51,8 @@ struct PipelineView: View {
     /// ツールバーを別の型へ出したので、その型からも見えるところに置く。
     enum Sheet: String, Identifiable, Equatable {
         case picker, settings, routing, presets, ir, tips
-        /// PC の EffeTune の QR を読む（PoC。RemoteScannerView.swift）。
-        case scanner
+        /// PC の EffeTune を操る設定（PoC。ツールバーのアイコンから。RemoteScannerView.swift）。
+        case remote
         var id: String { rawValue }
     }
 
@@ -253,11 +253,8 @@ struct PipelineView: View {
                 PresetsView(dsp: dsp)
             case .ir:
                 IRLibraryView()
-            case .scanner:
-                RemoteScannerView { url in
-                    sheet = nil
-                    RemoteMirror.shared.pair(url)
-                }
+            case .remote:
+                RemotePanelView()
             // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
             case .tips:
                 NavigationStack {
@@ -1859,8 +1856,8 @@ private struct PipelineToolbar: ToolbarContent {
             LiveStatusStrip(io: io)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            // PoC: PC の EffeTune を操る入切。控えが無ければ QR を読む（RemoteToolbarToggle）。
-            RemoteToolbarToggle { present(.scanner) }
+            // PoC: PC の EffeTune を操る設定を開くアイコン。入切はシートの中（RemoteToolbarButton）。
+            RemoteToolbarButton { present(.remote) }
             Button("Presets", systemImage: "square.stack") { present(.presets) }
             if pickerAsPopover {
                 // **+から出す。**選ぶたびに閉じる。つまんで運ぶと自分で閉じ、

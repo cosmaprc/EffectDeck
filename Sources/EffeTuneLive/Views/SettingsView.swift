@@ -59,8 +59,8 @@ struct SettingsView: View {
                     graphs
                     plugins
                     // **StatusSection の中に置かない。**あちらは 3.3Hz で作り直されるので、
-                    // TextField が打っている最中に focus を失う。
-                    RemoteSection(prefs: prefs)
+                    // 行が作り直されて、開いている QR の読み取りが閉じる。
+                    RemoteSection()
                     // **音の数字は Audio に置く。**レート・バッファ・遅延の内訳・
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
@@ -403,25 +403,11 @@ private struct ETReportView: View {
 // MARK: - いま何が起きているか
 
 /// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
-/// 状態（Off / Connecting / Connected / Syncing / Error）を読むのは RemoteMirror だけ。
-/// 入切はツールバーのボタンが主で、ここは控えたつなぎ先を見る・直す・消す所。
+/// 行はツールバーのアイコンから開くシートと同じ RemoteRows。
 private struct RemoteSection: View {
-    @ObservedObject var prefs: Preferences
-    @ObservedObject private var mirror = RemoteMirror.shared
-
     var body: some View {
         Section {
-            Toggle("Remote Control", isOn: $prefs.remoteEnabled)
-            TextField("Address", text: $prefs.remoteAddress, prompt: Text("host:port/token"))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-            LabeledContent("Status") {
-                Text(mirror.statusText)
-                    .foregroundStyle(.secondary)
-            }
-            Button("Forget", role: .destructive) { mirror.forget() }
-                .disabled(prefs.remoteAddress.isEmpty)
+            RemoteRows()
         } header: {
             Text("Remote")
         }

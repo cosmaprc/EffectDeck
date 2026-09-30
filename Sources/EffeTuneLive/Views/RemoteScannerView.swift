@@ -1,7 +1,10 @@
 //  RemoteScannerView.swift
 //  PC の EffeTune を LAN から操る PoC の画面側（DSP/RemoteMirror.swift）。
 //
-//    - RemoteToolbarToggle     鎖の画面のツールバーの入切。控えが無ければ QR の読み取りを開く
+//    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
+//                              入切はここでしない。状態（入・つなぎ中・つながった）だけを絵で見せる
+//    - RemotePanelView         アイコンから開くシート。行は RemoteRows（Settings の Remote 節と同じもの）
+//    - RemoteRows              Remote Control の入切・Status・つなぎ先・QR の読み取り・Forget
 //    - RemoteScannerView       PC の画面の QR（effectdeck://remote?h=…&t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
 //    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、Analyzer の図を沈める
@@ -17,33 +20,93 @@ import VisionKit
 
 // MARK: - ツールバー
 
-/// 入切。**観測するのはこのビューだけ**にして、PipelineToolbar 自体は RemoteMirror を見ない
+/// アイコン。**観測するのはこのビューだけ**にして、PipelineToolbar 自体は RemoteMirror を見ない
 /// （あちらは提示の途中の Menu を作り直さないよう、渡す値を絞ってある）。
-struct RemoteToolbarToggle: View {
+/// 押しても入切はしない。開くのは設定のシートで、入切もつなぎ先の変更もそちらでする。
+struct RemoteToolbarButton: View {
     @ObservedObject private var prefs = Preferences.shared
     @ObservedObject private var mirror = RemoteMirror.shared
-    let scan: () -> Void
+    let open: () -> Void
 
-    init(scan: @escaping () -> Void) {
-        self.scan = scan
+    init(open: @escaping () -> Void) {
+        self.open = open
     }
 
     var body: some View {
-        Toggle(isOn: Binding(
+        Button("Remote Control", systemImage: "dot.radiowaves.left.and.right", action: open)
+            // 入れてあるあいだは色を付ける。切っているあいだは他のアイコンと同じ色のまま。
+            .foregroundStyle(prefs.remoteEnabled ? Color.accentColor : Color.primary)
+            // 入れてあるのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
+            .symbolEffect(.pulse, isActive: prefs.remoteEnabled && mirror.status != .connected)
+            .accessibilityValue(mirror.statusText)
+    }
+}
+
+// MARK: - 設定のシート
+
+/// アイコンから開くシート。行は Settings の Remote 節と同じ RemoteRows。
+struct RemotePanelView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    RemoteRows()
+                }
+            }
+            .navigationTitle("Remote")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        // 行が 5 本しかないので、画面の半分も要らない。上へ引けば広がるように .large も残す（RoutingView と同じ）。
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// Remote の行。シートと Settings が同じものを並べる（食い違わないよう 1 か所に置く）。
+/// List / Form の中に置く前提。QR の読み取りは自分で出す（親のシートの上に重なる）。
+struct RemoteRows: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @ObservedObject private var mirror = RemoteMirror.shared
+    @State private var scanning = false
+
+    init() {}
+
+    var body: some View {
+        Toggle("Remote Control", isOn: Binding(
             get: { prefs.remoteEnabled },
             set: { on in
+                // 控えが無いまま入れても、つなぐ先が無い。QR を読ませる。
                 if on && !mirror.hasPairing {
-                    scan()
+                    scanning = true
                 } else {
                     prefs.remoteEnabled = on
                 }
-            })) {
-            Label("Remote Control", systemImage: "dot.radiowaves.left.and.right")
+            }))
+        LabeledContent("Status") {
+            Text(mirror.statusText)
+                .foregroundStyle(.secondary)
         }
-        .toggleStyle(.button)
-        // 入れてあるのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
-        .symbolEffect(.pulse, isActive: prefs.remoteEnabled && mirror.status != .connected)
-        .accessibilityValue(mirror.statusText)
+        // トークンは出さない。host:port だけ。
+        if let address = ETRemoteAddress.parse(prefs.remoteAddress) {
+            LabeledContent("Address") {
+                Text("\(address.host):\(address.port)")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        Button("Scan QR Code") { scanning = true }
+            .sheet(isPresented: $scanning) {
+                RemoteScannerView { url in
+                    scanning = false
+                    mirror.pair(url)
+                }
+            }
+        if !prefs.remoteAddress.isEmpty {
+            Button("Forget", role: .destructive) { mirror.forget() }
+        }
     }
 }
 
