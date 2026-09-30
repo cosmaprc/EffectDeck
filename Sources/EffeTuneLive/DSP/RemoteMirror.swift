@@ -25,6 +25,7 @@
 //    bypass      全体のバイパス
 //    listPresets / getPreset / savePreset   つないだ直後のプリセットの足し合わせ
 //    listIRs / getIR / putIR               同じく IR。512 KiB ずつ base64 で
+//    telemetry   PC のアナライザの測定値を受ける入切（Mirror Analyzers）。受けた枠は Telemetry へ差し込む
 //
 //  **返事は seq で待つ**（request）。データの返事（presets・preset・state）は ack の後に同じ seq で来る。
 //  getIR だけは塊（irChunk）が先で ack が最後。
@@ -44,10 +45,18 @@
 //  だけで、足すこと自体は止めない。段の番号がずれるので、params は最後に送った鎖の対応表で
 //  PC の番号へ直して送る。
 //
+//  **PC のアナライザの測定値を映す（telemetry。PC が hello の features に "telemetry" を出すときだけ）。**
+//  編集しているあいだ鳴っているのは PC なので、Analyzer の図は PC の枠で描く。
+//  PC は段ごと・種類ごとに最新の枠だけを 15 fps で送ってくる（index は PC の鎖の番号）。
+//  sentMap を裏返して手元の段を引き、名前が合う Analyzer の段だけ tapId を付け替えて
+//  Telemetry.inject へ入れる。映している tap は Telemetry.setMirrored で知らせ、手元の枠は捨てる。
+//  背景に回ったら止める（setAppActive）。PC は誰も受けていなければ枠を作らない。
+//
 //  音のスレッドには触らない。ここは全部メインで、通信は URLSession が別のスレッドで持つ。
 //  IR のファイルの読み書きと鍵の計算はメインの外（Task.detached）。
 //  ---------------------------------------------------------------------------
 
+import Combine
 import Foundation
 import os
 
@@ -91,6 +100,8 @@ final class RemoteMirror: ObservableObject {
     }
     /// 最後のつなぎで 4401 を受けた。読み直す（pair）か、つながれば戻す。
     @Published private(set) var tokenRejected = false
+    /// PC の測定値を映している段の tapId。ETRemoteMeasurementDim はここに入った段を沈めない。
+    @Published private(set) var mirroredTaps: Set<UInt32> = []
 
     private let log = Logger(subsystem: "ai.nemut.effetune", category: "remote")
     private let session = URLSession(configuration: .default)
@@ -129,6 +140,12 @@ final class RemoteMirror: ObservableObject {
     private var waitingForAck: Bool {
         inFlight.values.contains { $0.timeIntervalSinceNow > -2 }
     }
+    /// chain（段の並びを変えるコマンド）のうち、まだ ack が来ていないもの。inFlight と同じく 2 秒で見なくなる。
+    /// PC の測定値の番号が手元の番号と食い違いうるのはこのあいだだけ（params と bypass では番号は動かない）。
+    private var chainInFlight: [Int: Date] = [:]
+    private var chainSettling: Bool {
+        chainInFlight.values.contains { $0.timeIntervalSinceNow > -2 }
+    }
     /// 手元の変更がまだ PC に着いていない（送る前のつまみ・ack 待ち）。PC の形を入れると値が戻る。
     private var busy: Bool { waitingForAck || !pendingParams.isEmpty }
     /// busy のあいだに PC の変更を捨てた。ack が出揃ったら get で今の形を取り直す。
@@ -144,6 +161,20 @@ final class RemoteMirror: ObservableObject {
     /// 起動したときに退避が残っていた。restore() が済んだら戻す。
     private var pendingRestore = false
     private var syncTask: Task<Void, Never>?
+
+    // MARK: PC のアナライザの測定値
+
+    /// PC が hello の features に "telemetry" を出した。
+    private var serverTelemetry = false
+    /// 最後に送った telemetry の入切。
+    private var telemetryWanted = false
+    /// 最後に送った telemetry の seq。古い ack の ok:false で今の入切を倒さない。
+    private var telemetrySeq: Int?
+    /// 前にいるか。背景（.background）では PC に枠を作らせない。
+    private var appActive = true
+    /// 鎖の組み直し（tapId が変わる）を拾って映す段を決め直す。
+    private var chainSink: AnyCancellable?
+    private static let telemetryFPS = 15
 
     private static let stashKey = "remote.stash"
     private static let stashBypassKey = "remote.stashBypass"
@@ -278,6 +309,7 @@ final class RemoteMirror: ObservableObject {
             self.status = .connected
             self.tokenRejected = false
             self.backoff = 1
+            self.serverTelemetry = (state["features"] as? [String])?.contains("telemetry") == true
             self.enterRemote(state)
         }
     }
@@ -301,8 +333,16 @@ final class RemoteMirror: ObservableObject {
         pendingHello = nil
         ours.removeAll()
         inFlight.removeAll()
+        chainInFlight.removeAll()
         resyncWanted = false
         progress = nil
+        // 接続ごと消えたので PC へは送らない（送れない）。映していた段は手元の枠へ戻す。
+        // 退避を戻す（leaveRemote）より先に外す。戻した鎖で refreshMirrored が走らないように。
+        serverTelemetry = false
+        telemetryWanted = false
+        telemetrySeq = nil
+        chainSink = nil
+        setMirrored([])
         // 待っている request を全部終わらせる（nil で返る）。
         let pending = waiters
         waiters.removeAll()
@@ -386,6 +426,7 @@ final class RemoteMirror: ObservableObject {
         syncTask = Task { @MainActor [weak self] in
             await self?.syncAll(generation: gen)
         }
+        updateTelemetry()
     }
 
     /// 切った・切れた。退避した鎖を戻す。
@@ -460,6 +501,7 @@ final class RemoteMirror: ObservableObject {
         let projected = ETRemoteProjection.project(dsp.chain)
         sentForm = projected.pipeline
         sentMap = projected.remoteIndex
+        refreshMirrored()
     }
 
     /// PC で起きた変更。150 ms まとめて入れる。手元のコマンドの返事を待っているあいだは入れない。
@@ -516,8 +558,9 @@ final class RemoteMirror: ObservableObject {
     }
 
     /// 鎖を変えるコマンド。自分の結果の state を見分けるために seq を控える。
-    private func sendEdit(_ message: [String: Any]) {
-        guard let n = send(message) else { return }
+    @discardableResult
+    private func sendEdit(_ message: [String: Any]) -> Int? {
+        guard let n = send(message) else { return nil }
         ours.insert(n)
         // ack が落ちたものは 2 秒で見なくなる（waitingForAck）。ここで捨てて溜めない。
         inFlight = inFlight.filter { $0.value.timeIntervalSinceNow > -2 }
@@ -526,6 +569,7 @@ final class RemoteMirror: ObservableObject {
             let floor = n - 2048
             ours = ours.filter { $0 > floor }
         }
+        return n
     }
 
     /// 返事を待つ。reply が "ack" なら ok の ack を、ほかは同じ seq のその op を返す。
@@ -569,9 +613,14 @@ final class RemoteMirror: ObservableObject {
     private func sendChain(_ chain: [ETChainNode]) {
         let projected = ETRemoteProjection.project(chain)
         sentMap = projected.remoteIndex
+        // 外部の段を足し引きすると、PC の番号の無い段が変わる。
+        refreshMirrored()
         if let sent = sentForm, (sent as NSArray).isEqual(to: projected.pipeline) { return }
         sentForm = projected.pipeline
-        sendEdit(["op": "chain", "pipeline": projected.pipeline])
+        if let n = sendEdit(["op": "chain", "pipeline": projected.pipeline]) {
+            chainInFlight = chainInFlight.filter { $0.value.timeIntervalSinceNow > -2 }
+            chainInFlight[n] = Date()
+        }
     }
 
     private func flushParams() {
@@ -607,6 +656,7 @@ final class RemoteMirror: ObservableObject {
         let n = object["seq"] as? Int
 
         if op == "ack", let n {
+            chainInFlight.removeValue(forKey: n)
             if inFlight.removeValue(forKey: n) != nil { resyncIfSettled() }
             if object["ok"] as? Bool == false {
                 let why = object["error"] as? String ?? ""
@@ -618,6 +668,10 @@ final class RemoteMirror: ObservableObject {
             if waiter(object) { waiters.removeValue(forKey: n) }
             return
         }
+        if op == "telemetry" {
+            receiveTelemetry(object)
+            return
+        }
         guard op == "state", isRemote else { return }
         guard ETRemoteStateFilter.follows(origin: object["origin"] as? String, seq: n, ours: ours) else { return }
         // 手元のコマンドが PC に着く前の形かもしれない。着いた後の state（自分の seq）は上で捨てる。
@@ -627,6 +681,111 @@ final class RemoteMirror: ObservableObject {
             return
         }
         follow(object)
+    }
+
+    // MARK: - PC のアナライザの測定値
+
+    /// Mirror Analyzers の入切が変わった（Preferences の didSet）。
+    func telemetryPreferenceChanged() {
+        updateTelemetry()
+    }
+
+    /// 前に出た・背景に回った。PipelineView の scenePhase から
+    /// （.background だけを背景とする。ETDisplayPump を止める条件と同じ）。
+    func setAppActive(_ on: Bool) {
+        guard appActive != on else { return }
+        appActive = on
+        updateTelemetry()
+    }
+
+    /// 受けるかを決め直し、変わったら PC へ送る。受けるあいだは鎖の組み直しを見張る。
+    private func updateTelemetry() {
+        let want = isRemote && serverTelemetry && Preferences.shared.remoteMirrorAnalyzers && appActive
+        if want != telemetryWanted {
+            telemetryWanted = want
+            sendTelemetry(want)
+        }
+        if want {
+            if chainSink == nil {
+                // $chain は書き換わる前に流れる。書き換わった後の鎖で決め直すため、一度メインへ回す。
+                chainSink = EffeTuneDSP.shared.$chain.sink { [weak self] _ in
+                    Task { @MainActor in self?.refreshMirrored() }
+                }
+            }
+            refreshMirrored()
+        } else {
+            chainSink = nil
+            setMirrored([])
+        }
+    }
+
+    private func sendTelemetry(_ on: Bool) {
+        let n = send(["op": "telemetry", "on": on, "fps": Self.telemetryFPS]) { [weak self] reply in
+            guard let reply else { return true }
+            guard reply["op"] as? String == "ack" else { return false }
+            if reply["ok"] as? Bool == false {
+                self?.telemetryRejected(seq: reply["seq"] as? Int)
+            }
+            return true
+        }
+        telemetrySeq = n
+        if let n { armTimeout(n, seconds: 10) }
+    }
+
+    /// 断られた。切ったものとして扱う（次に入切が変われば送り直す）。
+    private func telemetryRejected(seq n: Int?) {
+        guard let n, n == telemetrySeq, telemetryWanted else { return }
+        log.notice("remote: telemetry を断られた seq=\(n)")
+        telemetryWanted = false
+        chainSink = nil
+        setMirrored([])
+    }
+
+    /// PC の番号が付いている Analyzer の段を映す。外部の段（PC へ渡らない）は番号が無い。
+    private func refreshMirrored() {
+        guard telemetryWanted, isRemote else {
+            setMirrored([])
+            return
+        }
+        let chain = EffeTuneDSP.shared.chain
+        var taps = Set<UInt32>()
+        for i in chain.indices where chain[i].spec.isAnalyzer && chain[i].tapId != 0
+            && sentMap.indices.contains(i) && sentMap[i] != nil {
+            taps.insert(chain[i].tapId)
+        }
+        setMirrored(taps)
+    }
+
+    private func setMirrored(_ taps: Set<UInt32>) {
+        if mirroredTaps != taps { mirroredTaps = taps }
+        Telemetry.shared.setMirrored(taps)
+    }
+
+    /// PC の枠を手元の段へ付け替えて差し込む。
+    ///
+    /// **手元の鎖の変更（chain）が PC に着く前は捨てる。**PC の番号と手元の番号が食い違いうる。
+    /// つまみ（params）の ack 待ちでは捨てない。番号は動かないうえ、つまみを動かしながら
+    /// スペアナを見るのがこの機能の使いどころで、busy で捨てると動かしているあいだ図が止まる。
+    /// **名前も比べる。**PC で鎖が変わってから手元が追う（follow の 150 ms）までは、
+    /// 同じ番号に別の段がいる。同じ種類のアナライザ 2 本の入れ替えだけは 1 回ぶん取り違えうる（PoC では受ける）。
+    private func receiveTelemetry(_ message: [String: Any]) {
+        guard telemetryWanted, isRemote, !chainSettling else { return }
+        let entries = ETRemoteTelemetry.parse(message)
+        guard !entries.isEmpty, let sent = sentForm else { return }
+        let chain = EffeTuneDSP.shared.chain
+        // 段を足し引きして、まだ鎖を送っていない（flushParams と同じ門）。
+        guard chain.count == sentMap.count else { return }
+        let local = ETRemoteTelemetry.inverse(sentMap)
+        var frames: [ETFrame] = []
+        for entry in entries {
+            guard let i = local[entry.index], chain.indices.contains(i),
+                  sent.indices.contains(entry.index),
+                  sent[entry.index]["nm"] as? String == entry.nm else { continue }
+            let node = chain[i]
+            guard node.spec.isAnalyzer, mirroredTaps.contains(node.tapId) else { continue }
+            frames.append(ETRemoteTelemetry.frame(entry, tap: node.tapId))
+        }
+        if !frames.isEmpty { Telemetry.shared.inject(frames) }
     }
 
     /// ショート形式の配列を段の並びへ。読めない値は寄せ、知らない段は落ちる（ETShareLink.parse）。

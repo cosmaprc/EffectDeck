@@ -8,6 +8,7 @@
 //    - 画面で打たれた接続先の読み方（host:port/token・ws:// の URL）と、PC の QR のリンク
 //    - v2: state の出どころ（origin / seq）で追うか捨てるか、プリセットと IR の足し合わせの決まり、
 //      PC の変更を値だけで当てられるか（ETRemoteFollow）
+//    - telemetry: PC のアナライザの枠を読み、手元の段の tapId に付け替える（ETRemoteTelemetry）
 //
 //  ---------------------------------------------------------------------------
 //  **外部の段（AU / JSFX）は、符号化する前に振り分ける。**
@@ -362,5 +363,69 @@ enum ETRemoteFollow {
                   x.values.count == y.values.count else { return false }
         }
         return true
+    }
+}
+
+/// PC のアナライザの測定値（remote-v1 の telemetry）。**枠は両側で 1 バイトも違わない**ので、
+/// PC が送ってきた 16 バイトのヘッダつきの枠をそのまま ETFrame へ戻す。
+/// 違うのは tapId だけ（PC は plugin.id、手元は node.tapId）で、差し込む前に手元の値へ書き換える。
+///
+/// push の形（PC の remote-control-host.cjs の flushTelemetry）:
+///     {"op":"telemetry","frames":[{"index":3,"nm":"Spectrum Analyzer","type":4,"data":"<base64>"}, …]}
+/// `index` は PC の鎖の番号（params の index と同じ）。`type` はヘッダの写しで、見るのはヘッダのほう。
+/// `data` は 16 + payloadBytes バイトちょうど（4 の倍数への切り上げは無い）。
+enum ETRemoteTelemetry {
+
+    struct Entry {
+        /// PC の鎖の番号。
+        let index: Int
+        /// PC の段の名前（state.pipeline[index].nm と同じ）。
+        let nm: String
+        /// frame.tapId は PC の plugin.id のまま。差し込む前に frame(_:tap:) で書き換える。
+        let frame: ETFrame
+    }
+
+    /// 読めない項目は落とす（番号・名前が無い・base64 が解けない・長さがヘッダと合わない）。
+    static func parse(_ message: [String: Any]) -> [Entry] {
+        guard let list = message["frames"] as? [[String: Any]] else { return [] }
+        var out: [Entry] = []
+        out.reserveCapacity(list.count)
+        for item in list {
+            guard let index = item["index"] as? Int,
+                  let nm = item["nm"] as? String,
+                  let text = item["data"] as? String,
+                  let data = Data(base64Encoded: text) else { continue }
+            let bytes = [UInt8](data)
+            guard bytes.count >= 16, bytes.count == 16 + Int(u16(bytes, 12)) else { continue }
+            let frame = ETFrame(type: u16(bytes, 0), version: u16(bytes, 2), tapId: u32(bytes, 4),
+                                sequence: u32(bytes, 8), dropped: u16(bytes, 14) & 1 != 0,
+                                payload: Array(bytes[16...]))
+            out.append(Entry(index: index, nm: nm, frame: frame))
+        }
+        return out
+    }
+
+    /// `remoteIndex[手元の番号]` = PC の番号（RemoteMirror の sentMap）を裏返す。PC の番号 → 手元の番号。
+    static func inverse(_ remoteIndex: [Int?]) -> [Int: Int] {
+        var out: [Int: Int] = [:]
+        for (local, remote) in remoteIndex.enumerated() {
+            if let remote { out[remote] = local }
+        }
+        return out
+    }
+
+    /// tapId だけ手元の段の値に替えた枠。
+    static func frame(_ entry: Entry, tap: UInt32) -> ETFrame {
+        let f = entry.frame
+        return ETFrame(type: f.type, version: f.version, tapId: tap, sequence: f.sequence,
+                       dropped: f.dropped, payload: f.payload)
+    }
+
+    private static func u16(_ b: [UInt8], _ o: Int) -> UInt16 {
+        UInt16(b[o]) | UInt16(b[o + 1]) << 8
+    }
+
+    private static func u32(_ b: [UInt8], _ o: Int) -> UInt32 {
+        UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24
     }
 }

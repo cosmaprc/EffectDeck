@@ -28,6 +28,10 @@ final class Telemetry: ObservableObject {
     /// tap ごと・種類ごとの最新の枠。描く側はここを見る。
     @Published private(set) var latest: [UInt64: ETFrame] = [:]
     @Published private(set) var droppedFrames: UInt32 = 0
+    /// PC の測定値を映している tap（RemoteMirror.refreshMirrored が決める）。
+    /// ここに入った tap は手元の枠を捨て、inject で来る PC の枠だけを latest へ入れる。
+    /// 変わるのは入切と鎖の組み直しのときだけなので、図はこれを見て履歴を捨てられる。
+    @Published private(set) var mirrored: Set<UInt32> = []
 
     /// 取り込み用。毎回確保しないよう持っておく。
     ///
@@ -55,6 +59,41 @@ final class Telemetry: ObservableObject {
         latest.removeAll()
         droppedFrames = 0
         pending.removeAll()
+    }
+
+    /// PC の測定値を映す tap を入れ替える。
+    ///
+    /// **増えた tap も減った tap も、溜めてある枠を捨てる。**始めた直後に手元の古い枠が、
+    /// やめた直後に PC の古い枠が図に残らないように。pending（Sync visuals の遅れ待ち）からも捨てる。
+    func setMirrored(_ taps: Set<UInt32>) {
+        guard taps != mirrored else { return }
+        let changed = taps.symmetricDifference(mirrored)
+        let stale = latest.keys.filter { changed.contains(UInt32(truncatingIfNeeded: $0 >> 16)) }
+        if !stale.isEmpty {
+            var next = latest
+            for key in stale { next.removeValue(forKey: key) }
+            latest = next
+        }
+        for i in pending.indices {
+            pending[i].frames = pending[i].frames.filter {
+                !changed.contains(UInt32(truncatingIfNeeded: $0.key >> 16))
+            }
+        }
+        mirrored = taps
+    }
+
+    /// PC から来た枠を入れる。tapId は手元の段の値に付け替え済み（ETRemoteTelemetry.frame）。
+    ///
+    /// **pending と displayDelay を通さない。**PC は自分の出力の遅れ（visual-sync）を済ませてから
+    /// 送ってくる（telemetry-hub.js の _dispatch の後で拾っている）。手元の出力の遅れは PC の音に関係ない。
+    /// 書き換えは 1 回にまとめる（latest を観測している図が 1 回だけ描き直す）。
+    func inject(_ frames: [ETFrame]) {
+        var found: [UInt64: ETFrame] = [:]
+        for frame in frames where mirrored.contains(frame.tapId) {
+            found[UInt64(frame.tapId) << 16 | UInt64(frame.type)] = frame
+        }
+        guard !found.isEmpty else { return }
+        latest.merge(found) { _, new in new }
     }
 
     /// 溜まっているぶんを読み出して、種類ごとに最新だけ残す。
@@ -93,7 +132,10 @@ final class Telemetry: ObservableObject {
 
             let frame = ETFrame(type: type, version: version, tapId: tap, sequence: seq,
                                 dropped: flags & 1 != 0, payload: payload)
-            found[UInt64(tap) << 16 | UInt64(type)] = frame
+            // PC の測定値を映している段の枠は捨てる。読み進めるのは止めない。
+            if !mirrored.contains(tap) {
+                found[UInt64(tap) << 16 | UInt64(type)] = frame
+            }
 
             offset += frameBytes
         }

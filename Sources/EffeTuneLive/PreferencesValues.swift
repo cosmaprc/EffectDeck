@@ -133,6 +133,7 @@ enum PreferencesValues {
         static let jsfxCanvasMode = "pref.jsfxCanvasMode"
         static let remoteEnabled = "pref.remoteEnabled"
         static let remoteAddress = "pref.remoteAddress"
+        static let remoteMirrorAnalyzers = "pref.remoteMirrorAnalyzers"
     }
 
     /// 無音と見なす大きさの範囲。EffeTune の power-policy.js が持っている

@@ -3,16 +3,19 @@
 //
 //    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
 //                              入切はここでしない。状態（入・つなぎ中・つながった）だけを絵で見せる
-//    - RemotePanelView         アイコンから開くシート。行は RemoteRows（Settings の Remote 節と同じもの）
-//    - RemoteRows              Remote Control の入切・Status・つなぎ先・QR の読み取り・Forget
+//    - RemotePanelView         アイコンから開くシート。行は RemoteRows（Settings の Remote Control 節と同じもの）
+//    - RemoteRows              Remote Control の入切・Status・つなぎ先・Mirror Analyzers・QR の読み取り・Forget
 //    - RemoteScannerView       PC の画面の QR（ws://host:port/?t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
-//    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、Analyzer の図を沈める
+//    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、PC の測定値を映していない Analyzer の図を沈める
 //
 //  **Analyzer の図を沈める訳。**編集しているあいだ鳴っているのは PC で、Analyzer の図が描くのは
 //  この端末の音（Telemetry）。PC の音の図ではないので、読めない形にして押せなくする。
 //  沈めるのは GraphCanvas（ほぼ全部の図の土台）と Pitch Meter の図だけで、つまみは PC へ送れるので残す。
 //  EQ の曲線のような設計の図も GraphCanvas を使うが、印はカードが Analyzer のときしか立てない。
+//  **Mirror Analyzers を入れて PC が telemetry を持っていれば沈めない。**図は PC の枠で描く
+//  （RemoteMirror.mirroredTaps）。映す段に入った時点で手元の枠は捨ててあるので、
+//  PC の枠が来るまでは Waiting のまま。PC の番号が無い段・PC が古い版・切のときは沈めたまま。
 
 import AVFoundation
 import SwiftUI
@@ -53,7 +56,7 @@ struct RemoteToolbarButton: View {
 
 // MARK: - 設定のシート
 
-/// アイコンから開くシート。行は Settings の Remote 節と同じ RemoteRows。
+/// アイコンから開くシート。行は Settings の Remote Control 節と同じ RemoteRows。
 struct RemotePanelView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -75,7 +78,7 @@ struct RemotePanelView: View {
     }
 }
 
-/// Remote の行。シートと Settings が同じものを並べる（食い違わないよう 1 か所に置く）。
+/// Remote Control の行。シートと Settings が同じものを並べる（食い違わないよう 1 か所に置く）。
 /// List / Form の中に置く前提。QR の読み取りは自分で出す（親のシートの上に重なる）。
 struct RemoteRows: View {
     @ObservedObject private var prefs = Preferences.shared
@@ -106,6 +109,8 @@ struct RemoteRows: View {
                     .foregroundStyle(.secondary)
             }
         }
+        // 保存する設定なので、つながっていなくても出して触れるようにしておく。
+        Toggle("Mirror Analyzers", isOn: $prefs.remoteMirrorAnalyzers)
         Button("Scan QR Code") { scanning = true }
             .sheet(isPresented: $scanning) {
                 RemoteScannerView { url in
@@ -232,17 +237,20 @@ extension View {
     }
 }
 
-/// カードに掛ける。Analyzer のカードで、PC の鎖を編集しているあいだだけ印を立てる。
-/// RemoteMirror を観測するのはここ（カードの本体は観測しない）。
+/// カードに掛ける。Analyzer のカードで、PC の鎖を編集しているあいだ、PC の測定値を
+/// 映していない段にだけ印を立てる。RemoteMirror を観測するのはここ（カードの本体は観測しない）。
 struct ETRemoteMeasurementDim: ViewModifier {
     let applies: Bool
+    let tap: UInt32
     @ObservedObject private var mirror = RemoteMirror.shared
 
-    init(applies: Bool) {
+    init(applies: Bool, tap: UInt32) {
         self.applies = applies
+        self.tap = tap
     }
 
     func body(content: Content) -> some View {
-        content.environment(\.etMeasurementDimmed, applies && mirror.isRemote)
+        content.environment(\.etMeasurementDimmed,
+                            applies && mirror.isRemote && !mirror.mirroredTaps.contains(tap))
     }
 }

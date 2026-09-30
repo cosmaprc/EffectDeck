@@ -58,6 +58,13 @@ final class Preferences: ObservableObject {
     @Published var remoteAddress: String {
         didSet { save(remoteAddress, Key.remoteAddress); RemoteMirror.shared.addressChanged() }
     }
+    /// PC の鎖を編集しているあいだ、Analyzer の図を PC の測定値で描く。既定は切。
+    @Published var remoteMirrorAnalyzers: Bool {
+        didSet {
+            save(remoteMirrorAnalyzers, Key.remoteMirrorAnalyzers)
+            RemoteMirror.shared.telemetryPreferenceChanged()
+        }
+    }
 
     /// しきい値だけが変わったときに呼ばれる。組み直さずに値を差し替える。
     var onSilenceThresholdChange: (() -> Void)?
@@ -84,6 +91,7 @@ final class Preferences: ObservableObject {
         jsfxCanvasMode = PreferencesValues.jsfxCanvasMode(d.string(forKey: Key.jsfxCanvasMode))
         remoteEnabled = d.bool(forKey: Key.remoteEnabled)
         remoteAddress = d.string(forKey: Key.remoteAddress) ?? ""
+        remoteMirrorAnalyzers = d.bool(forKey: Key.remoteMirrorAnalyzers)
 
         // **init の代入では didSet が走らない。**
         // そのため、保存値が true でも起動直後だけ画面が落ちていた。

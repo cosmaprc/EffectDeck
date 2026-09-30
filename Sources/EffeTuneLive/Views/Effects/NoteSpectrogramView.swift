@@ -616,6 +616,8 @@ private struct NoteSpectrogramGraph: View {
             .onChange(of: snapshot?.frameIndex) { _, _ in
                 if let latest = snapshot { band.push(latest) }
             }
+            // 手元と PC で時計が違う。入れ替わったら溜めた列を捨てる（残すと Time Span の列数が狂う）。
+            .onChange(of: telemetry.mirrored.contains(tapId)) { _, _ in band.reset() }
             .onChange(of: display) { _, now in band.display = now }
     }
 
@@ -1029,6 +1031,22 @@ final class ETNoteBand: ObservableObject {
         head = (head + 1) % Self.columns
         if count < Self.columns { count += 1 }
         image = makeImage()
+        revision &+= 1
+    }
+
+    /// 溜めた列を全部捨てる。枠の出どころ（手元・PC）が替わったとき。音量の目盛りも既定へ戻す。
+    func reset() {
+        head = 0
+        count = 0
+        lastIndex = nil
+        lastTime = nil
+        levelReference = ETLevelReference()
+        for i in fine.indices { fine[i] = 0 }
+        for i in levels.indices { levels[i] = -240 }
+        for i in loudness.indices { loudness[i] = 0 }
+        for i in times.indices { times[i] = .nan }
+        for i in pixels.indices { pixels[i] = 0 }
+        image = nil
         revision &+= 1
     }
 

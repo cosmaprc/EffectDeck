@@ -10,6 +10,7 @@
 //    - v2: QR のリンク（ws://host:port/?t=token）、state の origin / seq の振り分け、
 //      プリセットの足し合わせ（名前の付け足し・2 回目は何もしない・PC の字と手元の保存が同じ中身）、
 //      IR の塊の切り方と継ぎ方、PC の変更を値だけで当てられるか
+//    - telemetry: PC の枠のヘッダの読み方・壊れた項目を落とす・tapId の付け替え・番号の対応表の裏返し
 
 import XCTest
 
@@ -294,5 +295,82 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertFalse(ETRemoteFollow.sameShape(a, [a[0]]))
         XCTAssertFalse(ETRemoteFollow.sameShape([external(inputBus: 0, outputBus: 0)],
                                                 [external(inputBus: 0, outputBus: 0)]))
+    }
+
+    // MARK: - telemetry: PC のアナライザの枠
+
+    /// dsp/core/telemetry.cpp:109-117 と同じ 16 バイトのヘッダ（リトルエンディアン）＋ペイロード。
+    private func wire(type: UInt16, version: UInt16, tap: UInt32, sequence: UInt32,
+                      flags: UInt16, payload: [UInt8], payloadBytes: UInt16? = nil) -> String {
+        var b: [UInt8] = []
+        func put16(_ v: UInt16) { b += [UInt8(v & 0xff), UInt8(v >> 8)] }
+        func put32(_ v: UInt32) { for s in stride(from: 0, to: 32, by: 8) { b.append(UInt8((v >> UInt32(s)) & 0xff)) } }
+        put16(type); put16(version); put32(tap); put32(sequence)
+        put16(payloadBytes ?? UInt16(payload.count)); put16(flags)
+        b += payload
+        return Data(b).base64EncodedString()
+    }
+
+    func testTelemetryParseReadsHeaderAndPayload() {
+        let message: [String: Any] = ["op": "telemetry", "frames": [
+            ["index": 3, "nm": "Spectrum Analyzer", "type": 4,
+             "data": wire(type: 4, version: 2, tap: 0x01020304, sequence: 0xA0B0C0D0,
+                          flags: 1, payload: [9, 8, 7, 6, 5])],
+        ]]
+        let entries = ETRemoteTelemetry.parse(message)
+        XCTAssertEqual(entries.count, 1)
+        guard let e = entries.first else { return }
+        XCTAssertEqual(e.index, 3)
+        XCTAssertEqual(e.nm, "Spectrum Analyzer")
+        XCTAssertEqual(e.frame.type, 4)
+        XCTAssertEqual(e.frame.version, 2)
+        XCTAssertEqual(e.frame.tapId, 0x01020304)
+        XCTAssertEqual(e.frame.sequence, 0xA0B0C0D0)
+        XCTAssertTrue(e.frame.dropped)
+        XCTAssertEqual(e.frame.payload, [9, 8, 7, 6, 5])
+
+        let local = ETRemoteTelemetry.frame(e, tap: 42)
+        XCTAssertEqual(local.tapId, 42)
+        XCTAssertEqual(local.type, 4)
+        XCTAssertEqual(local.version, 2)
+        XCTAssertEqual(local.sequence, 0xA0B0C0D0)
+        XCTAssertTrue(local.dropped)
+        XCTAssertEqual(local.payload, [9, 8, 7, 6, 5])
+    }
+
+    func testTelemetryParseDropsBrokenEntries() {
+        let good = wire(type: 1, version: 1, tap: 1, sequence: 1, flags: 0, payload: [1, 2, 3, 4])
+        let message: [String: Any] = ["op": "telemetry", "frames": [
+            ["nm": "Level Meter", "type": 1, "data": good],                       // index が無い
+            ["index": 0, "type": 1, "data": good],                                // nm が無い
+            ["index": 0, "nm": "Level Meter", "type": 1, "data": "%%%"],          // base64 でない
+            ["index": 0, "nm": "Level Meter", "type": 1,
+             "data": Data([1, 0, 1, 0]).base64EncodedString()],                   // 16 バイトに満たない
+            ["index": 0, "nm": "Level Meter", "type": 1,
+             "data": wire(type: 1, version: 1, tap: 1, sequence: 1, flags: 0,
+                          payload: [1, 2, 3, 4], payloadBytes: 8)],               // 長さがヘッダと合わない
+            ["index": 0, "nm": "Level Meter", "type": 1,
+             "data": wire(type: 1, version: 1, tap: 1, sequence: 1, flags: 0,
+                          payload: [1, 2, 3, 4, 0, 0, 0, 0], payloadBytes: 4)],   // 余りがある
+            ["index": 5, "nm": "Level Meter", "type": 1, "data": good],
+        ]]
+        let entries = ETRemoteTelemetry.parse(message)
+        XCTAssertEqual(entries.map(\.index), [5])
+        XCTAssertFalse(entries[0].frame.dropped)
+        XCTAssertTrue(ETRemoteTelemetry.parse(["op": "telemetry"]).isEmpty)
+    }
+
+    func testTelemetryParseAcceptsEmptyPayload() {
+        let message: [String: Any] = ["frames": [
+            ["index": 0, "nm": "Level Meter", "type": 1,
+             "data": wire(type: 1, version: 1, tap: 1, sequence: 7, flags: 0, payload: [])],
+        ]]
+        XCTAssertEqual(ETRemoteTelemetry.parse(message).first?.frame.payload, [])
+    }
+
+    func testTelemetryInverseSkipsDroppedStages() {
+        // 手元 0 → PC 0、手元 1 は外部の段で落ちた、手元 2 → PC 1。
+        XCTAssertEqual(ETRemoteTelemetry.inverse([0, nil, 1]), [0: 0, 1: 2])
+        XCTAssertEqual(ETRemoteTelemetry.inverse([]), [:])
     }
 }

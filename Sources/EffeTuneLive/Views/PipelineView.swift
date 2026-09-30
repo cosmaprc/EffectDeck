@@ -328,6 +328,8 @@ struct PipelineView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { ETDisplayPump.shared.stop() }
             else { ETDisplayPump.shared.start { io.pollTelemetry() } }
+            // 背景では PC にアナライザの枠を作らせない。同じく .background だけで切る。
+            RemoteMirror.shared.setAppActive(phase != .background)
             if phase == .active { drainShared() }
         }
         // **共有シートや「このアプリで開く」から来たファイルを受ける。**
