@@ -78,8 +78,10 @@ final class DesignParamsTests: XCTestCase {
                      "VolumePlugin", ""] {
             XCTAssertTrue(ETDesignParam.table(for: type).isEmpty, type)
         }
+        XCTAssertEqual(Set(ETDesignParam.table(for: ETDesignParam.irReverb).keys),
+                       ["dc", "co", "dt", "tr"])
         for type in [fir, ETDesignParam.groupDelayEQ, ETDesignParam.groupDelayPEQ,
-                     ETDesignParam.firCrossover] {
+                     ETDesignParam.firCrossover, ETDesignParam.irReverb] {
             let spec = try spec(type)
             let keys = Set(ETDesignParam.table(for: type).keys)
             XCTAssertTrue(keys.isDisjoint(with: spec.params.map(\.key)), type)
@@ -403,6 +405,50 @@ final class DesignParamsTests: XCTestCase {
         XCTAssertEqual(reset.frequencies, FIRCrossoverSettings().frequencies)
         XCTAssertEqual(reset.latencyModeIndex, 3)
         XCTAssertEqual(reset.bandCount, 4)
+    }
+
+    // MARK: - IR Reverb
+
+    /// dc / co / dt / trは上流の綴りと型で鎖に書き（ir_reverb.js:171-174）、読み戻せる。
+    /// effectdeck.nemut.aiのリンクで読んでも「読まなかった鍵」として出さない。
+    func testIRReverbPreparationRoundTrip() throws {
+        let item = try loaded(ETDesignParam.irReverb,
+                              design: ["dc": "false", "co": "-3.5", "dt": "250.0", "tr": "40.0"])
+        let entry = try XCTUnwrap(PipelineStore.shortForm([item]).first)
+        XCTAssertEqual(entry["dc"] as? Bool, false)
+        XCTAssertEqual(entry["co"] as? Double, -3.5)
+        XCTAssertEqual(entry["dt"] as? Double, 250)
+        XCTAssertEqual(entry["tr"] as? Double, 40)
+
+        let data = try JSONSerialization.data(withJSONObject: PipelineStore.shortForm([item]),
+                                              options: [.withoutEscapingSlashes, .sortedKeys])
+        let link = "https://effectdeck.nemut.ai/?p="
+            + data.base64EncodedString().replacingOccurrences(of: "+", with: "%2B")
+        let prepared = ETChainText.prepare(try XCTUnwrap(ETChainText.json(from: link)),
+                                           catalog: ETCatalog)
+        XCTAssertTrue(prepared.report.isEmpty, prepared.report.message)
+        let back = try XCTUnwrap(PipelineStore.parse(prepared.json, catalog: ETCatalog).first)
+        let o = ETIRPreparation.Options(designParams: back.design)
+        XCTAssertFalse(o.directCut)
+        XCTAssertEqual(o.cutOffsetMs, -3.5)
+        XCTAssertEqual(o.decayPercent, 250)
+        XCTAssertEqual(o.trimPercent, 40)
+    }
+
+    /// 鍵の無い鎖（つまみを出す前のもの）は上流の既定（ir_reverb.js:37-40）のまま。
+    /// 範囲の外は端へ寄せる（:242-244のparseFiniteNumber）。
+    func testIRReverbPreparationDefaultsAndClamp() {
+        let d = ETIRPreparation.Options(designParams: [:])
+        XCTAssertTrue(d.directCut)
+        XCTAssertEqual(d.cutOffsetMs, 0)
+        XCTAssertEqual(d.decayPercent, 100)
+        XCTAssertEqual(d.trimPercent, 100)
+
+        let c = ETIRPreparation.Options(designParams: ["co": "99", "dt": "1", "tr": "0"])
+        XCTAssertTrue(c.directCut)
+        XCTAssertEqual(c.cutOffsetMs, 50)
+        XCTAssertEqual(c.decayPercent, 10)
+        XCTAssertEqual(c.trimPercent, 1)
     }
 
     // MARK: - lt

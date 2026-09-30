@@ -83,6 +83,26 @@ final class CrosstalkStore: ObservableObject {
         }
     }
 
+    /// 既定へ戻す。上流の Reset は足した時の getParameters() を丸ごと当てるので
+    /// （pipeline-item-builder.js:392-410）、測定の割り当て（ll / lr / rl / rr）は空に、
+    /// 設計の指示は初期値に戻る（crosstalk_cancellation.js:46-55）。
+    /// 割り当てが欠けると上流は設計せず資産を外す（同 :280-287）。こちらは design が外す。
+    func reset(node: EffeTuneDSP.Node) {
+        guard sessions[node.id] != nil else { return }
+        update(node.id) { session in
+            let initial = Session()
+            session.leftEar = nil
+            session.rightEar = nil
+            session.taps = initial.taps
+            session.regularization = initial.regularization
+            session.maxGainDb = initial.maxGainDb
+            session.lowFrequency = initial.lowFrequency
+            session.highFrequency = initial.highFrequency
+            session.directWindowMs = initial.directWindowMs
+        }
+        design(node: node)
+    }
+
     // MARK: - 設計して送る
 
     /// 4 枠が揃っていれば設計して送る。

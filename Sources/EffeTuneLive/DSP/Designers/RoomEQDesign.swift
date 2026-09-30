@@ -21,7 +21,8 @@
 //          js/room-eq/group-delay-analysis.js（389 行）が丸ごと要る。
 //          design(config:sources:) に .full を渡すと .linear に落として設計し、
 //          RoomEQDesign.phaseFallback に true を立てて知らせる。黙って通さない。
-//  移していない: previews（画面に出す曲線）と diagnostics。音には効かない。
+//  移した: previews（画面に出す曲線）。計算は RoomEQPreview.swift。
+//  移していない: diagnostics。音には効かない。
 //
 //  --- 重さ ---
 //  設計は taps=32768 で FFT 65536 点を 1 チャンネルあたり 3 回（最小位相の
@@ -159,7 +160,7 @@ struct RoomEQImpulse: Sendable {
     var data: [Float]
     /// 録った時のサンプルレート。config と違えば窓付き sinc で直す。
     var sampleRate: Int
-    /// 立ち上がりの位置。min / lin では使わない（full と残響で使う）。
+    /// 立ち上がりの位置。min / lin の設計では使わない（full と残響、画面の位相・群遅延・インパルスの図で使う）。
     var onsetIndex: Int = 0
     /// 基準の大きさ。1 以外なら割ってから解析する（design-core.js:365-372）。
     var referenceScale: Double = 1
@@ -215,6 +216,8 @@ struct RoomEQDesign: Sendable {
     var qualityWarnings: [RoomEQQualityWarning]
     /// チャンネルごとの基準レベル dB（補正の狙い）。測定が無いチャンネルは nil。
     var referenceLevelDb: [Double?]
+    /// チャンネルごとの画面の曲線（design-core.js:2810-2830）。測定が無いチャンネルは nil。
+    var previews: [RoomEQPreview?] = []
 
     var sampleRate: Int { config.sampleRate }
     var taps: Int { config.taps }
@@ -278,6 +281,7 @@ enum RoomEQDesigner {
 
         var channels = [[Float]]()
         var referenceLevels = [Double?]()
+        var previews = [RoomEQPreview?]()
         var warnings = [RoomEQQualityWarning]()
         var supportsFullPhase = true
 
@@ -299,30 +303,52 @@ enum RoomEQDesigner {
             guard let source, let plan, !frequencies.isEmpty else {
                 channels.append(unitImpulse(config: config))
                 referenceLevels.append(nil)
+                previews.append(nil)
                 continue
             }
 
             let impulses = source.impulses.filter { !$0.data.isEmpty }
             var measuredDb: [Double]
+            // 画面に出す測定（design-core.js:2531, 2552）。補正には使わない。
+            let displayMeasuredDb: [Double]
+            // 位相・群遅延・インパルスの図の材料（design-core.js:2532-2533, 2553-2565）。
+            var referenceAnalysis: RoomEQImpulseAnalysis?
+            var groupDelaySources: [RoomEQImpulseAnalysis] = []
             if impulses.isEmpty {
                 // 周波数特性だけの測定。full は作れない（design-core.js:2693-2697）。
                 // 中身が空なら 0 dB が並ぶ（smoothing.js:145）。補正も 0 になる。
                 supportsFullPhase = false
                 measuredDb = interpolateLogResponse(response: source.frequencyResponse,
                                                     frequencies: frequencies)
+                displayMeasuredDb = measuredDb
             } else {
                 // design-core.js:2574-2589。電力の平均を取り、dB へ戻す。
+                // 画面の分は dB のまま平均する（:2548, :2552）。
+                let analyses = impulses.map {
+                    analyzeImpulse($0, contextRate: config.sampleRate, frequencies: frequencies)
+                }
                 var powerMean = [Double](repeating: 0, count: frequencies.count)
-                let count = Double(impulses.count)
-                for impulse in impulses {
-                    let magnitude = impulseMagnitude(impulse: impulse,
-                                                     contextRate: config.sampleRate,
-                                                     frequencies: frequencies)
+                var decibelMean = [Double](repeating: 0, count: frequencies.count)
+                let count = Double(analyses.count)
+                for analysis in analyses {
+                    let magnitude = analysis.magnitude
                     for index in 0..<powerMean.count {
                         powerMean[index] += magnitude[index] * magnitude[index] / count
+                        decibelMean[index] += decibels(fromGain: magnitude[index]) / count
                     }
                 }
                 measuredDb = powerMean.map { decibels(fromGain: $0.squareRoot()) }
+                displayMeasuredDb = decibelMean
+                // design-core.js:2553-2565。referencePoint が 0 なら全部の点の合意、
+                // 1 以上ならその点だけ。点の番号は並びの位置（pointId を持たないので :2556 の index）。
+                if config.referencePoint > 0 && config.referencePoint <= analyses.count {
+                    let requested = analyses[config.referencePoint - 1]
+                    referenceAnalysis = requested
+                    groupDelaySources = [requested]
+                } else {
+                    referenceAnalysis = alignedAverageAnalysis(analyses, config: config)
+                    groupDelaySources = analyses
+                }
             }
 
             // design-core.js:2700-2706。平滑化前の値は補正の計算に使うので残す。
@@ -330,6 +356,12 @@ enum RoomEQDesigner {
             measuredDb = smoothFrequencyResponse(frequencies: frequencies,
                                                  magnitudes: measuredDb,
                                                  sigma: config.smoothing)
+            // design-core.js:2675-2680。周波数特性だけの測定は補正に使ったものと同じ。
+            let displaySmoothed = impulses.isEmpty
+                ? measuredDb
+                : smoothFrequencyResponse(frequencies: frequencies,
+                                          magnitudes: displayMeasuredDb,
+                                          sigma: config.smoothing)
 
             let effectiveHigh = min(config.highFrequency, Double(config.sampleRate) * 0.45)
 
@@ -359,8 +391,10 @@ enum RoomEQDesigner {
 
             // design-core.js:2736-2745。
             var correctionDb = [Double](repeating: 0, count: frequencies.count)
+            var baseCorrectionDb = [Double](repeating: 0, count: frequencies.count)
             for index in 0..<frequencies.count {
-                correctionDb[index] = smoothedAutomatic[index] * config.correctionAmount + eqDb[index]
+                baseCorrectionDb[index] = smoothedAutomatic[index] * config.correctionAmount
+                correctionDb[index] = baseCorrectionDb[index] + eqDb[index]
             }
 
             let synthesis = synthesizeFilter(correctionDb: correctionDb, config: config, plan: plan)
@@ -370,6 +404,17 @@ enum RoomEQDesigner {
             }
             channels.append(synthesis.taps)
             referenceLevels.append(levelDb)
+            previews.append(preview(channel: previews.count,
+                                    config: config,
+                                    frequencies: frequencies,
+                                    levelDb: levelDb,
+                                    displayMeasuredDb: displayMeasuredDb,
+                                    displaySmoothed: displaySmoothed,
+                                    baseCorrectionDb: baseCorrectionDb,
+                                    equalizerDb: eqDb,
+                                    taps: synthesis.taps,
+                                    referenceAnalysis: referenceAnalysis,
+                                    groupDelaySources: groupDelaySources))
         }
 
         if requestedConfig.phase == .full && !supportsFullPhase {
@@ -386,7 +431,8 @@ enum RoomEQDesigner {
             resolutionHz: Double(config.sampleRate) / Double(config.taps),
             supportsFullPhase: supportsFullPhase,
             qualityWarnings: warnings,
-            referenceLevelDb: referenceLevels
+            referenceLevelDb: referenceLevels,
+            previews: previews
         )
     }
 
@@ -430,7 +476,8 @@ enum RoomEQDesigner {
 
 // MARK: - 合成
 
-private extension RoomEQDesigner {
+// ここから下の 4 つは図の計算（RoomEQPreview.swift）も使うので private にしない。
+extension RoomEQDesigner {
 
     /// design-core.js:196-245 の getSynthesisPlan。
     struct SynthesisPlan {
@@ -660,13 +707,12 @@ private extension RoomEQDesigner {
 
 // MARK: - 測定を読む
 
-private extension RoomEQDesigner {
+extension RoomEQDesigner {
 
-    /// design-core.js:341-388 の analyzeImpulse のうち、対数格子の振幅だけ。
-    /// onsetIndex と時間波形は full / 残響でしか使わないので持ち回らない。
-    static func impulseMagnitude(impulse: RoomEQImpulse,
-                                 contextRate: Int,
-                                 frequencies: [Double]) -> [Double] {
+    /// design-core.js:304-351 の analyzeImpulse。対数格子の振幅と、図に使う時間波形・立ち上がり。
+    static func analyzeImpulse(_ impulse: RoomEQImpulse,
+                               contextRate: Int,
+                               frequencies: [Double]) -> RoomEQImpulseAnalysis {
         var samples: [Float]
         if impulse.sampleRate == contextRate {
             samples = impulse.data
@@ -684,20 +730,26 @@ private extension RoomEQDesigner {
                 samples[index] = Float(Double(samples[index]) / referenceScale)
             }
         }
+        // design-core.js:323。立ち上がりも処理レートへ写す。
+        let onsetIndex = impulse.sampleRate > 0
+            ? jsRound(Double(impulse.onsetIndex) * Double(contextRate) / Double(impulse.sampleRate))
+            : impulse.onsetIndex
         // FFT は 4 点以上の 2 の冪でないと作れないので、そこだけ下限を置いている
         // （JS は FFT(1) を作ろうとして壊れる。測定として意味の無い長さ）。
         let fftSize = max(4, FIRDesign.nextPowerOfTwo(samples.count))
         guard let fft = FIRDesign.fft(size: fftSize) else {
-            return [Double](repeating: 0, count: frequencies.count)
+            return RoomEQImpulseAnalysis(samples: samples, onsetIndex: onsetIndex,
+                                         magnitude: [Double](repeating: 0, count: frequencies.count))
         }
         var input = [Double](repeating: 0, count: fftSize)
         for index in 0..<min(samples.count, fftSize) { input[index] = Double(samples[index]) }
         let spectrum = fft.realTransform(input)
-        return reduceSpectrumToLogGrid(real: spectrum.real,
-                                       imag: spectrum.imag,
-                                       sampleRate: contextRate,
-                                       fftSize: fftSize,
-                                       frequencies: frequencies)
+        let magnitude = reduceSpectrumToLogGrid(real: spectrum.real,
+                                                imag: spectrum.imag,
+                                                sampleRate: contextRate,
+                                                fftSize: fftSize,
+                                                frequencies: frequencies)
+        return RoomEQImpulseAnalysis(samples: samples, onsetIndex: onsetIndex, magnitude: magnitude)
     }
 
     /// design-core.js:268-292 の reduceSpectrumToLogGrid。
@@ -846,7 +898,7 @@ private extension RoomEQDesigner {
 
 // MARK: - 周波数の軸と平滑化
 
-private extension RoomEQDesigner {
+extension RoomEQDesigner {
 
     /// utils/measurement-dsp/smoothing.js:137-142 の createLogFrequencyGrid。
     static func createLogFrequencyGrid(low: Double, high: Double, spacingOctaves: Double) -> [Double] {
@@ -989,7 +1041,7 @@ private extension RoomEQDesigner {
 
 // MARK: - Additional EQ と小道具
 
-private extension RoomEQDesigner {
+extension RoomEQDesigner {
 
     /// design-core.js:639-655 の equalizerDb。バンドの振幅特性を dB で足し合わせる。
     static func equalizerDecibels(config: RoomEQConfig, frequencies: [Double]) -> [Double] {

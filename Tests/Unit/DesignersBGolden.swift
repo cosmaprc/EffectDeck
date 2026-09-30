@@ -277,12 +277,35 @@ struct DesignersBGolden: Decodable {
             let supportsFullPhase: Bool
             let qualityWarnings: [String]
             let referenceLevelDb: [Double?]
+            let previews: [RoomPreview?]
             let config: RoomConfig
         }
         let name: String
         let config: RoomConfig
         let sources: [RoomSource?]
         let expected: Expected
+    }
+
+    /// 画面の曲線（design-core.js の previews）。
+    struct RoomPreview: Decodable {
+        struct Curves: Decodable {
+            let before: Numbers
+            let after: Numbers
+        }
+        struct Impulse: Decodable {
+            let startMs: Double
+            let durationMs: Double
+            let before: Numbers
+            let after: Numbers
+        }
+        let frequencyCount: Int
+        let measuredDb: Numbers
+        let baseCorrectionDb: Numbers
+        let predictedBaseDb: Numbers
+        let phase: Curves?
+        let minimumGroupDelay: Curves?
+        let excessGroupDelay: Curves?
+        let impulse: Impulse?
     }
 
     struct RoomEQSet: Decodable {

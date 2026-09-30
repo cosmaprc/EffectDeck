@@ -201,6 +201,9 @@ struct FrequencyResponseGraph: View {
                     // 重ねるスペクトラム。**曲線の上**に出る。
                     // 上流も PEQ の曲線の上に 0.85 で重ねている
                     // （spectrum-overlay.css:15 の z-index: 2）。
+                    // **常に出す。上流とは意図して違えてある。**上流は図の隅の札で
+                    // Off → After → Compare と切り替える（spectrum-overlay.js:242-246）。
+                    // こちらは切り替えを持たない（2026-09-30 に決めた）。
                     // Telemetry を観測するのはこの層の中だけ。ここより外で観測すると
                     // 30Hz で body が回り、掴んでいる印と下のつまみが固まる。
                     if let spectrumTap {

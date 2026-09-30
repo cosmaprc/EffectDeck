@@ -86,6 +86,7 @@ struct EffectCardView: View {
                     // 高さが要るのは図がそれだけの情報を持っているからで、
                     // 畳んだ状態でも見たいものはそこにある。
                     ETEffectViews.view(index: index, node: node, dsp: dsp)
+                        .id(node.resetCount)
                         .environment(\.etGraphOnly, true)
                         .environment(\.etGraphMaxHeight, Self.collapsedGraphHeight)
                         .padding(.horizontal, ETMetrics.cardPadding)
@@ -102,8 +103,14 @@ struct EffectCardView: View {
                                                   isProcessing: !node.isMuted && !dsp.bypass)
                         } else if ETEffectViews.has(node.spec.type) {
                             // 専用の画面を持つものは、そちらがパラメータまで面倒を見る。
+                            // Reset Parameters で作り直す。表示の設定は現れたときにしか
+                            // 読まないので、id を変えないと画面だけ前の見せ方のまま残る。
                             ETEffectViews.view(index: index, node: node, dsp: dsp)
+                                .id(node.resetCount)
                                 .environment(\.etGraphOnly, false)
+                        } else if let tabs = ETParamTabs.tabs(for: node.spec.type) {
+                            // 上流がタブに分けているもの（AM Radio・TV Audio・Vinyl）。
+                            TabbedParameterList(index: index, node: node, dsp: dsp, tabs: tabs)
                         } else {
                             VStack(alignment: .leading, spacing: 12) {
                                 ForEach(node.spec.params) { param in
@@ -145,6 +152,7 @@ struct EffectCardView: View {
             // 他の analyzer（図が縦に伸びるもの）は下に置く。
             if inlinesGraph {
                 ETEffectViews.view(index: index, node: node, dsp: dsp)
+                    .id(node.resetCount)
                     .environment(\.etGraphOnly, true)
                     .allowsHitTesting(false)
                     .accessibilityLabel(node.spec.name)

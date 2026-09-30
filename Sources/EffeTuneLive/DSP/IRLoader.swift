@@ -49,7 +49,8 @@ enum ETIRLoader {
                        routedChannels: Int,
                        channelMode: String,
                        latency: String,
-                       convolutionRate: String) -> String? {
+                       convolutionRate: String,
+                       options: ETIRPreparation.Options) -> String? {
         guard !irId.isEmpty,
               let entry = IRLibrary.shared.entries.first(where: { $0.id == irId })
         else { return nil }
@@ -60,7 +61,8 @@ enum ETIRLoader {
                          routedChannels: routedChannels,
                          channelMode: channelMode,
                          latency: latency,
-                         convolutionRate: convolutionRate)
+                         convolutionRate: convolutionRate,
+                         options: options)
     }
 
     /// 読み込んだ IR。面ごとに分かれた float と、その素材のレート（IRDecode.swift）。
@@ -84,6 +86,8 @@ enum ETIRLoader {
     /// 入れ替わりうるので、重い伸縮は面ごとに別のコアへ散らすだけにしてある
     /// （ETIRPreparation.resampleChannels）。
     ///
+    /// - Parameter options: 下ごしらえのつまみ（dc / co / dt / tr）。段のNode.designから引く
+    ///   （ETIRPreparation.Options(designParams:)）。
     /// - Returns: UI へ出す 1 行。「4ch True Stereo / 48000 Hz / 1.2 s」の形。
     @MainActor
     @discardableResult
@@ -94,7 +98,8 @@ enum ETIRLoader {
                      routedChannels: Int,
                      channelMode: String,
                      latency: String,
-                     convolutionRate: String) throws -> String {
+                     convolutionRate: String,
+                     options: ETIRPreparation.Options) throws -> String {
         let decoded = try decode(url)
         let resolved = try ETIRPreparation.resolve(sampleRate: processingRate,
                                                    channelCount: decoded.channels.count,
@@ -114,7 +119,8 @@ enum ETIRLoader {
         // 正規化はfcで測るので、wetの大きさは素材のレートにもdividerにも依らない。
         let staged = try ETIRPreparation.stage(decoded.channels,
                                                sourceRate: decoded.sampleRate,
-                                               resolved: resolved)
+                                               resolved: resolved,
+                                               options: options)
 
         // カーネルの32MiBに収まる長さへ切る（ir_reverb.js:530-548のmaximumIrFramesForKernel）。
         // 192kHzではフレーム数が倍になるので、48k/96kで入る長いIRでもここで切ることがある。

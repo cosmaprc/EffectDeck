@@ -218,6 +218,83 @@ final class RoomEQDesignTests: XCTestCase {
         print("RoomEQ golden: worst channel diff \(worst) of peak")
     }
 
+    // MARK: - 画面の曲線
+
+    /// 周波数特性・位相・群遅延・インパルスの曲線が上流の previews と同じ（RoomEQPreview.swift）。
+    /// 上流は Float32Array に入れて返すので、許す差はその丸めに合わせる。
+    /// 位相は ±180 に畳んだ角度なので、差も畳んでから測る。
+    func testPreviewsMatchUpstream() throws {
+        let golden = try DesignersBGolden.load()
+        var worst: [String: Double] = [:]
+        func note(_ key: String, _ value: Double) { worst[key] = max(worst[key] ?? 0, value) }
+
+        for entry in golden.roomEq.designs {
+            let design = RoomEQDesigner.design(config: try config(entry.config),
+                                               sources: entry.sources.map(source))
+            let expected = entry.expected.previews
+            XCTAssertEqual(design.previews.count, expected.count, entry.name)
+            for (channel, (got, want)) in zip(design.previews, expected).enumerated() {
+                let label = "\(entry.name) ch\(channel)"
+                XCTAssertEqual(got == nil, want == nil, label)
+                guard let got, let want else { continue }
+                XCTAssertEqual(got.channel, channel, label)
+                XCTAssertEqual(got.frequencies.count, want.frequencyCount, label)
+
+                for (name, a, b) in [("measuredDb", got.measuredDb, want.measuredDb),
+                                     ("baseCorrectionDb", got.baseCorrectionDb, want.baseCorrectionDb),
+                                     ("predictedBaseDb", got.predictedBaseDb, want.predictedBaseDb)] {
+                    let diff = DesignersBGolden.maxAbsDiff(a, b.doubles)
+                    note(name, diff)
+                    XCTAssertLessThanOrEqual(diff, 1e-3, "\(label) \(name)")
+                }
+
+                XCTAssertEqual(got.phase == nil, want.phase == nil, label)
+                if let phase = got.phase, let wanted = want.phase {
+                    for (name, a, b) in [("phase.before", phase.before, wanted.before.doubles),
+                                         ("phase.after", phase.after, wanted.after.doubles)] {
+                        XCTAssertEqual(a.count, b.count, "\(label) \(name)")
+                        var diff = 0.0
+                        for (x, y) in zip(a, b) {
+                            var d = (x - y).truncatingRemainder(dividingBy: 360)
+                            if d > 180 { d -= 360 } else if d < -180 { d += 360 }
+                            diff = max(diff, abs(d))
+                        }
+                        note(name, diff)
+                        XCTAssertLessThanOrEqual(diff, 0.05, "\(label) \(name)")
+                    }
+                }
+
+                for (name, a, b) in [("minimumGroupDelay", got.minimumGroupDelay, want.minimumGroupDelay),
+                                     ("excessGroupDelay", got.excessGroupDelay, want.excessGroupDelay)] {
+                    XCTAssertEqual(a == nil, b == nil, "\(label) \(name)")
+                    guard let a, let b else { continue }
+                    for (part, x, y) in [("before", a.before, b.before.doubles),
+                                         ("after", a.after, b.after.doubles)] {
+                        let diff = DesignersBGolden.maxAbsDiff(x, y)
+                        note("\(name).\(part)", diff)
+                        XCTAssertLessThanOrEqual(diff, 1e-3, "\(label) \(name).\(part)")
+                    }
+                }
+
+                XCTAssertEqual(got.impulse == nil, want.impulse == nil, label)
+                if let impulse = got.impulse, let wanted = want.impulse {
+                    XCTAssertEqual(impulse.startMs, wanted.startMs, accuracy: 1e-12, label)
+                    XCTAssertEqual(impulse.durationMs, wanted.durationMs, accuracy: 1e-12, label)
+                    for (name, a, b) in [("impulse.before", impulse.before, wanted.before.floats),
+                                         ("impulse.after", impulse.after, wanted.after.floats)] {
+                        XCTAssertEqual(a.count, b.count, "\(label) \(name)")
+                        let peak = b.reduce(Float(0)) { max($0, abs($1)) }
+                        XCTAssertGreaterThan(peak, 0, "\(label) \(name)")
+                        let diff = DesignersBGolden.maxAbsDiff(a, b) / Double(max(peak, 1e-12))
+                        note(name, diff)
+                        XCTAssertLessThanOrEqual(diff, 1e-5, "\(label) \(name)")
+                    }
+                }
+            }
+        }
+        print("RoomEQ previews golden: worst \(worst.sorted { $0.key < $1.key })")
+    }
+
     // MARK: - 移していない所
 
     /// full は lin で設計し、phaseFallback と fullPhaseNotPorted で知らせる。

@@ -280,6 +280,8 @@ targets:
       - path: Sources/EffeTuneLive/DSP/ETRemoteFile.swift
       # 15Band PEQ の Import（AutoEQ の ParametricEQ.txt など）。Foundation だけ（PEQTextImportTests）。
       - path: Sources/EffeTuneLive/DSP/ETPEQTextImport.swift
+      # 専用の画面を持たないエフェクトを上流と同じタブに分ける表。Foundationだけ（ParamTabsTests）。
+      - path: Sources/EffeTuneLive/DSP/ETParamTabs.swift
       # IR Reverbの下ごしらえ（伸縮・頭の無音・Direct Cut・正規化・切り詰め）と解決規則。
       # Foundationだけ（IRPreparationTests）。見本は上流のprepareIrが吐いたもので、
       # Tools/ir_prepare_golden.mjsで作り直せる。
@@ -386,6 +388,7 @@ targets:
       - path: Sources/EffeTuneLive/DSP/Designers/GroupDelayPEQDesign.swift
       - path: Sources/EffeTuneLive/DSP/Designers/CrosstalkDesign.swift
       - path: Sources/EffeTuneLive/DSP/Designers/RoomEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/RoomEQPreview.swift
       - path: Sources/EffeTuneLive/DSP/CrosstalkMeasurementCore.swift
       - path: Tests/Fixtures/Designers/designers-a-golden.json
         buildPhase: resources

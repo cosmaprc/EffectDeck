@@ -234,14 +234,36 @@ final class EffeTuneDSP: ObservableObject {
     private func applyAddDefaults(_ node: inout Node) {
         switch node.spec.type {
         case BassManagementDesigners.type:
-            // bass_management.js:23, 42-45。Ch は All、処理幅ぶんの Role を Managed に。
-            // su は 0 のままなので、Sub を選ぶまでカーネルは素通し（kernel.cpp:455-462）。
+            // bass_management.js:23。Ch は All。Reset では触らない
+            // （上流は defaultParameters から channel を外す。plugin-manager.js:47）。
             node.channelSpec = -2
+        default:
+            break
+        }
+        applyConstructorValues(&node)
+    }
+
+    /// 上流の constructor が params.json の既定から外している**値**。
+    /// 足すときと Reset のときの両方に掛ける。上流の Reset は生成時に控えた
+    /// getParameters()（constructor の値）へ戻すため（plugin-manager.js:41,
+    /// pipeline-item-builder.js:398-401）、足した直後と同じ姿に戻る。
+    private func applyConstructorValues(_ node: inout Node) {
+        switch node.spec.type {
+        case BassManagementDesigners.type:
+            // bass_management.js:42-45。処理幅ぶんの Role を Managed に。
+            // su は 0 のままなので、Sub を選ぶまでカーネルは素通し（kernel.cpp:455-462）。
             guard let roles = node.spec.params.first(where: { $0.key == "ro" }) else { return }
             for ch in 0..<min(roles.count, Int(maxChannels))
             where node.values.indices.contains(roles.offset + ch) {
                 node.values[roles.offset + ch] = 1
             }
+        case "RoomEqPlugin":
+            // 既定はレイテンシ最小（pm='min'）で、fd は 0 を送る
+            // （room_eq.js:883, :1061）。params.json の 16384 は使わない。
+            // 設計が走れば RoomEQStore が正しい値で上書きする。
+            guard let fd = node.spec.params.first(where: { $0.key == "fd" }),
+                  node.values.indices.contains(fd.offset) else { return }
+            node.values[fd.offset] = 0
         default:
             break
         }
@@ -544,7 +566,8 @@ final class EffeTuneDSP: ObservableObject {
                                      routedChannels: width,
                                      channelMode: Self.choice("cm", of: node),
                                      latency: Self.choice("lt", of: node),
-                                     convolutionRate: Self.choice("cr", of: node))
+                                     convolutionRate: Self.choice("cr", of: node),
+                                     options: ETIRPreparation.Options(designParams: node.design))
         let shown = ETChainEditing.assetLineAfterReload(sent: line,
                                                         previous: assetInfo[node.id],
                                                         processedWidth: width)
@@ -855,6 +878,31 @@ final class EffeTuneDSP: ObservableObject {
         persistSoon()
     }
 
+    /// IR Reverb の下ごしらえのつまみ（dc / co / dt / tr）を 1 つ変える。
+    ///
+    /// カーネルのパラメータではない。IR を送る前にホストでかける処理の設定で
+    /// （ETIRPreparation.Options）、変えたら下ごしらえからやり直して送り直す。
+    /// 上流も 150ms 待ってからやり直す（ir_reverb.js:273-279 の `_queuePreparation('host', 150)`）。
+    /// つまみを引きずっている間は来るたびに前の待ちを捨てるので、送り直すのは止めた後の 1 回だけ。
+    func setIRPreparation(_ raw: String, key: String, at index: Int) {
+        guard chain.indices.contains(index), chain[index].design[key] != raw else { return }
+        chain[index].design[key] = raw
+        persistSoon()
+        let id = chain[index].id
+        pendingIRPreparation[id]?.cancel()
+        pendingIRPreparation[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingIRPreparation[id] = nil
+            // 待っている間に並べ替え・削除があっても、id で引き直す。
+            guard let i = self.chain.firstIndex(where: { $0.id == id }) else { return }
+            self.reloadAsset(at: i)
+        }
+    }
+
+    /// 待っている IR の下ごしらえのやり直し。段の id ごとに 1 本。
+    private var pendingIRPreparation: [UUID: Task<Void, Never>] = [:]
+
     /// パラメータを 1 つ変える。offset は ETParam.offset（配列なら +i）。
     func setValue(_ value: Float, at index: Int, offset: Int) {
         guard chain.indices.contains(index),
@@ -884,7 +932,7 @@ final class EffeTuneDSP: ObservableObject {
     /// **後始末は setValue / resetParams と同じにする。**以前はここだけ何もしなかった。
     ///   - 遅延: os の入ったプリセット（歪み系 6 種、0 → 64）や Bass Management の
     ///     Phase / Linear Quality で変わる。組み直さないと帯の Fx と並列の段の位置合わせが古いまま。
-    ///   - IR Reverb: cm / lt / cr が変わったら送り直す（settleAfterParams と同じ）。
+    ///   - IR Reverb: cm / lt / cr と、材料の dc / co / dt / tr が変わったら送り直す（settleAfterParams と同じ）。
     ///   - designer で作る型: 値から材料を引き直させる（ETAssetReattach.paramsChanged）。
     ///     FIR Crossover は lt / bc を、Bass Management は全部を params から読む。
     ///     カードを畳んだまま当てるとビューが無いので、ここで呼ばないと誰も呼ばない。
@@ -912,8 +960,11 @@ final class EffeTuneDSP: ObservableObject {
         chain[index].values = values
         if redesign { chain[index].design = design }
         pushParams(chain[index])
-        if !changed.isEmpty {
-            if !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
+        // IR Reverb の下ごしらえ（dc / co / dt / tr）は材料の側にあるので、変われば送り直す。
+        let preparationChanged = redesign && chain[index].spec.type == ETDesignParam.irReverb
+        if !changed.isEmpty || preparationChanged {
+            if preparationChanged
+                || !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
                 // 送り直すと ETIRLoader.load の中で組み直される。
                 reloadAsset(at: index)
             } else if instanceLatency(of: chain[index]) != before {
@@ -933,16 +984,46 @@ final class EffeTuneDSP: ObservableObject {
         guard chain.indices.contains(index) else { return }
         let before = instanceLatency(of: chain[index])
         chain[index].values = chain[index].spec.defaults
+        // 上流の Reset は constructor の値へ戻すので、足した直後と同じ既定を掛ける。
+        applyConstructorValues(&chain[index])
         // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
         // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
         chain[index].design = [:]
+        // 待っている IR の下ごしらえのやり直しも捨てる（下で IR ごと外す）。
+        pendingIRPreparation[chain[index].id]?.cancel()
+        pendingIRPreparation[chain[index].id] = nil
+        // 表示の設定も同じ既定に入っている（plugin-manager.js:41-48 は getParameters() から
+        // type / id / enabled / バスだけを除く）。空にすれば各画面は自分の既定で描く。
+        // 画面は .etSaved で現れたときにしか読まないので、作り直させる（Node.resetCount）。
+        chain[index].display = [:]
+        chain[index].resetCount &+= 1
         pushParams(chain[index])
-        // 既定へ戻すと選択肢も戻る。資産の解決に使う値がその中にあるので、
-        // 1 つ変えたときと同じ後始末をする。
-        if !chain[index].irId.isEmpty {
-            reloadAsset(at: index)
-        } else if instanceLatency(of: chain[index]) != before {
-            republish(reason: "遅延が変わった")
+        // IR Reverb は ir も既定（''、ir_reverb.js:28）へ戻るので、素材を外して素通しにする。
+        // 入れ直すと Reset の後も同じ IR が鳴り続ける。
+        let unloaded = !chain[index].irId.isEmpty
+        if unloaded {
+            chain[index].irId = ""
+            assetInfo[chain[index].id] = nil
+            AssetUpload.clear(engine: engine, instance: chain[index].instance)
+        }
+        // 経路と測定は鎖の外の置き場にある。上流はどちらも既定に入っているので戻す。
+        switch chain[index].spec.type {
+        case "MatrixPlugin":
+            // mx は足した時の対角（matrix.js:105-111）。
+            MatrixRouting.shared.reset(chain[index], engine: engine)
+        case "CrosstalkCancellationPlugin":
+            // ll / lr / rl / rr は空、設計の指示は初期値（crosstalk_cancellation.js:46-55）。
+            CrosstalkStore.shared.reset(node: chain[index])
+        case "RoomEqPlugin":
+            // 測定の割り当て（ms0-15）は空、設計の設定は初期値（room_eq.js:880-914）。
+            RoomEQStore.shared.reset(node: chain[index])
+        default:
+            break
+        }
+        // 素材を外すとカーネルがその段を有効と数えなくなるので組み直す
+        // （入れたときも ETIRLoader.load が組み直している）。
+        if unloaded || instanceLatency(of: chain[index]) != before {
+            republish(reason: unloaded ? "IRを外した" : "遅延が変わった")
         }
         // setValues と同じ。値から材料を引く designer に、戻した値を読ませる。
         ETAssetReattach.paramsChanged(chain[index])

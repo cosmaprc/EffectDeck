@@ -32,6 +32,12 @@
 //  ParameterRow はそれを Text にそのまま出す。上流は表示名を別に持っている
 //  （ir_reverb.js:1995-2001 / 2010-2016 / 2017-2022）ので、ここで引き当てて出す。
 //  切り替えは Menu ではなく直のボタン。
+//
+//  --- 下ごしらえのつまみ ---
+//  Direct Cut / Cut Offset / Decay / Trim（dc / co / dt / tr）は上流と同じ並びで
+//  Pre Delay の後に置く（ir_reverb.js:2035-2038）。カタログ（params.json）に席が無いので
+//  ParameterRow は使えず、値は Node.design に持つ（DSP/DesignParams.swift）。
+//  変えたら EffeTuneDSP.setIRPreparation が少し待ってから下ごしらえをやり直して送り直す。
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -67,10 +73,15 @@ struct IRReverbView: View {
                                  values: node.values, dsp: dsp)
                 }
             }
+
+            preparationControls
         }
         .sheet(isPresented: $browsing) {
             IRLibraryView { entry in apply(entry.url, id: entry.id) }
         }
+        // 下ごしらえや cm / lt / cr で DSP が入れ直すと、新しい 1 行は assetInfo に入る。
+        // この画面で入れたときの `loaded` が残っていると前の 1 行を出し続けるので捨てる。
+        .onChange(of: dsp.assetInfo[node.id]) { _, _ in loaded = nil }
     }
 
     // MARK: IR を取り込む
@@ -194,7 +205,8 @@ struct IRReverbView: View {
                                          routedChannels: routedChannels,
                                          channelMode: choice("cm"),
                                          latency: choice("lt"),
-                                         convolutionRate: choice("cr"))
+                                         convolutionRate: choice("cr"),
+                                         options: preparation)
             // 鍵は取り込んだときの戻り値か、ライブラリから選んだ entry の id。
             // どちらも無ければ、いま置いた中身から引き直す。
             let key = id ?? IRLibrary.shared.entries
@@ -206,6 +218,66 @@ struct IRReverbView: View {
             failure = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
+    }
+
+    // MARK: 下ごしらえ
+
+    /// いまの dc / co / dt / tr。鍵が無ければ上流の既定（ir_reverb.js:37-40）。
+    private var preparation: ETIRPreparation.Options {
+        ETIRPreparation.Options(designParams: node.design)
+    }
+
+    /// 範囲・刻み・名前・単位は上流の行のまま（ir_reverb.js:2035-2038）。
+    @ViewBuilder
+    private var preparationControls: some View {
+        let o = preparation
+        Toggle(isOn: Binding(get: { o.directCut },
+                             set: { setPreparation(ETDesignParam.flag($0), key: "dc") })) {
+            Text("Direct Cut").font(.system(size: 14))
+        }
+        .padding(.vertical, 2)
+        preparationSlider("Cut Offset", unit: "ms", key: "co", value: o.cutOffsetMs,
+                          range: -20...50, step: 0.1)
+        preparationSlider("Decay", unit: "%", key: "dt", value: o.decayPercent,
+                          range: 10...400, step: 1)
+        preparationSlider("Trim", unit: "%", key: "tr", value: o.trimPercent,
+                          range: 1...100, step: 1)
+    }
+
+    /// ParameterRow と同じ 2 段（名前と数が上、つまみが下）。
+    /// あちらは ETParam と鎖の値に繋がっているので、ここは同じ形を素で書く
+    /// （CrosstalkCancellationView.controlRow と同じ）。
+    private func preparationSlider(_ label: String, unit: String, key: String, value: Double,
+                                   range: ClosedRange<Double>, step: Double) -> some View {
+        let title = "\(label) (\(unit))"
+        let text = ETNumberText.stepped(value, step: step)
+        // 刻みの格子へ寄せてから書く。0.1 刻みを掛け算で戻すと 0.30000000000000004 が残るので、
+        // 刻みが 1 より細かいときは割り算で戻す（1 / 0.1 は 10 ちょうど）。
+        let store: (Double) -> Void = { v in
+            let clamped = min(max(v, range.lowerBound), range.upperBound)
+            let n = (clamped / step).rounded()
+            let snapped = step < 1 ? n / (1 / step).rounded() : n * step
+            setPreparation(ETDesignParam.format(snapped), key: key)
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.system(size: 14))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                ETValueField(text: text, label: title,
+                             editText: { ETNumberText.draft(value) },
+                             commit: store)
+            }
+            Slider(value: Binding(get: { value }, set: store), in: range, step: step)
+                .accessibilityValue(text)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func setPreparation(_ raw: String, key: String) {
+        dsp.setIRPreparation(raw, key: key, at: index)
     }
 
     private func actionButton(_ title: String,

@@ -33,6 +33,10 @@ struct ETChainNode: Identifiable {
     /// displayと同じでfloatに載らないのでここに持つ。綴りも値も上流のまま。
     /// DSP/DesignParams.swiftを読むこと。
     var design: [String: String] = [:]
+    /// 既定へ戻した回数（EffeTuneDSP.resetParams）。**保存しない。**
+    /// 専用の画面は表示の設定（display）を現れたときにしか読まない（.etSaved）ので、
+    /// カードはこれを画面の id に使い、戻したら作り直させる。
+    var resetCount: Int = 0
 
     /// Native EffeTune nodeではない外部processor。instanceは持たず、
     /// publish時にexternal callback nodeへ変換する。
