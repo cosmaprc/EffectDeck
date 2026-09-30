@@ -32,6 +32,7 @@
 //  **PC から来た state は origin で振る**（ETRemoteStateFilter）。自分のコマンドの結果（origin
 //  "remote" で seq が自分のもの）は捨てる。手元のコマンドが ack を待っているあいだの "local" も捨てる
 //  （そのコマンドより前の PC の形かもしれず、入れるとつまみが 1 つ前の値へ戻る）。
+//  捨てたら、ack が出揃ったところで get で今の形を取り直す（resyncIfSettled）。
 //
 //  **鎖は persist() の入口で受ける**（EffeTuneDSP.persist）。鎖を触る経路は全部ここへ来る。
 //
@@ -84,7 +85,12 @@ final class RemoteMirror: ObservableObject {
     }
 
     /// つなぎ先を控えてあるか。無ければツールバーのボタンは QR の読み取りを開く。
-    var hasPairing: Bool { ETRemoteAddress.parse(Preferences.shared.remoteAddress) != nil }
+    /// トークンを断られた（4401）控えも無いのと同じ扱い。同じ字でつなぎ直しても通らない。
+    var hasPairing: Bool {
+        !tokenRejected && ETRemoteAddress.parse(Preferences.shared.remoteAddress) != nil
+    }
+    /// 最後のつなぎで 4401 を受けた。読み直す（pair）か、つながれば戻す。
+    @Published private(set) var tokenRejected = false
 
     private let log = Logger(subsystem: "ai.nemut.effetune", category: "remote")
     private let session = URLSession(configuration: .default)
@@ -123,6 +129,10 @@ final class RemoteMirror: ObservableObject {
     private var waitingForAck: Bool {
         inFlight.values.contains { $0.timeIntervalSinceNow > -2 }
     }
+    /// 手元の変更がまだ PC に着いていない（送る前のつまみ・ack 待ち）。PC の形を入れると値が戻る。
+    private var busy: Bool { waitingForAck || !pendingParams.isEmpty }
+    /// busy のあいだに PC の変更を捨てた。ack が出揃ったら get で今の形を取り直す。
+    private var resyncWanted = false
 
     // MARK: 追う・退避
 
@@ -173,6 +183,7 @@ final class RemoteMirror: ObservableObject {
     @discardableResult
     func pair(_ url: URL) -> Bool {
         guard let address = ETRemoteAddress.pairingLink(url) else { return false }
+        tokenRejected = false
         let prefs = Preferences.shared
         prefs.remoteAddress = address.text
         // 同じ値でも didSet は走る。enabledChanged が上の addressChanged の待ちを消してつなぎ直す。
@@ -251,6 +262,8 @@ final class RemoteMirror: ObservableObject {
         generation += 1
         let gen = generation
         let t = session.webSocketTask(with: url)
+        // 既定は 1 MiB。PC の枠の上限（4 MB）に合わせる。irChunk は base64 で 700 KB 弱。
+        t.maximumMessageSize = 4 * 1024 * 1024
         task = t
         t.resume()
         listen(t, generation: gen)
@@ -263,6 +276,7 @@ final class RemoteMirror: ObservableObject {
                                            reply: "state", timeout: 20)
             guard gen == self.generation, let state else { return }
             self.status = .connected
+            self.tokenRejected = false
             self.backoff = 1
             self.enterRemote(state)
         }
@@ -287,6 +301,7 @@ final class RemoteMirror: ObservableObject {
         pendingHello = nil
         ours.removeAll()
         inFlight.removeAll()
+        resyncWanted = false
         progress = nil
         // 待っている request を全部終わらせる（nil で返る）。
         let pending = waiters
@@ -318,6 +333,7 @@ final class RemoteMirror: ObservableObject {
         if code == 4401 {
             // トークンが違う。同じ字で繰り返しても通らないので、つなぎ直さない。
             status = .error("Wrong token")
+            tokenRejected = true
             log.notice("remote: 4401 トークンが違う")
             return
         }
@@ -454,9 +470,27 @@ final class RemoteMirror: ObservableObject {
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled else { return }
             self.followTask = nil
-            guard self.isRemote, !self.waitingForAck, let state = self.pendingFollow else { return }
+            guard self.isRemote, let state = self.pendingFollow else { return }
             self.pendingFollow = nil
+            // 待つあいだに手元が動いた。この state はその前の形かもしれない。済んでから取り直す。
+            guard !self.busy else {
+                self.resyncWanted = true
+                return
+            }
             self.adopt(state, rebuild: false)
+        }
+    }
+
+    /// 捨てた PC の変更を取り直す。手元の変更が全部 PC に着いてから（ack が出揃ってから）。
+    private func resyncIfSettled() {
+        guard resyncWanted, isRemote, !busy else { return }
+        resyncWanted = false
+        let gen = generation
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let state = await self.request(["op": "get"], reply: "state", timeout: 10)
+            guard gen == self.generation, self.isRemote, let state else { return }
+            self.follow(state)
         }
     }
 
@@ -485,6 +519,8 @@ final class RemoteMirror: ObservableObject {
     private func sendEdit(_ message: [String: Any]) {
         guard let n = send(message) else { return }
         ours.insert(n)
+        // ack が落ちたものは 2 秒で見なくなる（waitingForAck）。ここで捨てて溜めない。
+        inFlight = inFlight.filter { $0.value.timeIntervalSinceNow > -2 }
         inFlight[n] = Date()
         if ours.count > 4096 {
             let floor = n - 2048
@@ -571,7 +607,7 @@ final class RemoteMirror: ObservableObject {
         let n = object["seq"] as? Int
 
         if op == "ack", let n {
-            inFlight.removeValue(forKey: n)
+            if inFlight.removeValue(forKey: n) != nil { resyncIfSettled() }
             if object["ok"] as? Bool == false {
                 let why = object["error"] as? String ?? ""
                 log.notice("remote: 拒否 seq=\(n) \(why, privacy: .public)")
@@ -585,7 +621,11 @@ final class RemoteMirror: ObservableObject {
         guard op == "state", isRemote else { return }
         guard ETRemoteStateFilter.follows(origin: object["origin"] as? String, seq: n, ours: ours) else { return }
         // 手元のコマンドが PC に着く前の形かもしれない。着いた後の state（自分の seq）は上で捨てる。
-        guard !waitingForAck else { return }
+        // 捨てた分は、ack が出揃ったところで get で取り直す（resyncIfSettled）。
+        guard !busy else {
+            resyncWanted = true
+            return
+        }
         follow(object)
     }
 
