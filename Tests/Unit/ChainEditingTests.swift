@@ -345,6 +345,32 @@ final class ChainEditingTests: XCTestCase {
         XCTAssertTrue(ETChainEditing.descriptors(chain: [], probes: [:]).isEmpty)
     }
 
+    /// 出口の探りは相手の直後・出口の bus・enabled 2。入口の探りと挟む形になる。
+    /// 作れなかった段（instance 0）の探りは相手ごと落ちる。
+    func testAfterProbesFollowTheirNode() throws {
+        let volume = try spec("VolumePlugin")
+        let peq = try spec("FiveBandPEQPlugin")
+        let chain = [
+            node(volume, instance: 11),
+            node(peq, instance: 12) { $0.inputBus = 1; $0.outputBus = 1; $0.channelSpec = 3 },
+            node(peq, instance: 0),
+            node(volume, instance: 13),
+        ]
+        let before: [UUID: UInt32] = [chain[1].id: 101, chain[2].id: 102]
+        let after: [UUID: UInt32] = [chain[1].id: 201, chain[2].id: 202]
+
+        let got = ETChainEditing.descriptors(chain: chain, probes: before, afterProbes: after)
+        XCTAssertEqual(got.map(\.instance), [11, 101, 12, 201, 13])
+        XCTAssertEqual(got.map(\.enabled), [1, 2, 1, 2, 1])
+        XCTAssertEqual([got[3].inputBus, got[3].outputBus], [1, 1], "出口の探りは出口の bus に置く")
+        XCTAssertEqual(got[3].channelSpec, 3)
+        XCTAssertEqual(got[3].kind, .native)
+
+        // 出口の探りを渡さなければ、前と同じ並び。
+        XCTAssertEqual(ETChainEditing.descriptors(chain: chain, probes: before),
+                       legacyDescriptors(chain, probes: before))
+    }
+
     // MARK: - 鎖の段から渡す形へ
 
     /// Node → Loaded の写しで落とすものが無い。

@@ -33,7 +33,7 @@ final class ETDisplayPump: NSObject {
     /// 汲み始める。二度呼んでも 1 本しか作らない（中身だけ差し替わる）。
     ///
     /// **出す側も一緒に起こす。** 誰も汲んでいないあいだカーネルが枠を
-    /// 書き続けると、輪（256KB）が溢れて `droppedFrames` が増える。
+    /// 書き続けると、輪（EffeTuneDSP.telemetryRingBytes）が溢れて `droppedFrames` が増える。
     /// 画面に何も描いていないのだから、出す必要が無い。
     @MainActor
     func start(_ body: @escaping () -> Void) {

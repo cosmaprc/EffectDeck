@@ -221,10 +221,15 @@ enum ETChainEditing {
     /// - 探り（`probes`、段のid → 探りのinstance）は相手の**直前**に置く。engine.cpp:917は
     ///   descriptorの順に回すので、直前の段が見ている音 = その段に入る音。入口のbusに置き、
     ///   enabled 2（人が置いた段ではないので「動いている数」に入れない）
+    /// - 出口の探り（`afterProbes`）は相手の**直後**に置く。直後の段が見ている音 = その段から
+    ///   出た音。上流のオーバーレイが段の前後で横取りするのと同じ位置
+    ///   （plugins/audio-processor.js:5142-5157 が入口、:5275-5307 が出口）。出口のbusに置き、
+    ///   enabled 2。探りを付けるのは入口と出口が同じbusの段だけ（EffeTuneDSP.syncProbes）
     /// - 上流が受けないChの段は切で渡す（isChannelBypassed）
-    static func descriptors(chain: [ETChainNode], probes: [UUID: UInt32]) -> [Descriptor] {
+    static func descriptors(chain: [ETChainNode], probes: [UUID: UInt32],
+                            afterProbes: [UUID: UInt32] = [:]) -> [Descriptor] {
         var out: [Descriptor] = []
-        out.reserveCapacity(chain.count * 2)
+        out.reserveCapacity(chain.count * 3)
         for n in chain where n.instance != 0 || n.isExternal {
             if let probe = probes[n.id] {
                 out.append(Descriptor(instance: probe,
@@ -245,6 +250,16 @@ enum ETChainEditing {
                                   sectionGate: n.sectionGate,
                                   kind: n.isExternal ? .external : .native,
                                   externalIndex: n.externalIndex))
+            if let probe = afterProbes[n.id] {
+                out.append(Descriptor(instance: probe,
+                                      enabled: 2,
+                                      inputBus: n.outputBus,
+                                      outputBus: n.outputBus,
+                                      channelSpec: n.channelSpec,
+                                      sectionGate: n.sectionGate,
+                                      kind: .native,
+                                      externalIndex: 0))
+            }
         }
         return out
     }

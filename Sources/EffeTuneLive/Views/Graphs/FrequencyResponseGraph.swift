@@ -123,9 +123,14 @@ struct FrequencyResponseGraph: View {
     ///
     /// 上流はホストのループが段の前後で音を横取りして描いている
     /// （plugins/audio-processor.js:5142,5275）。その口が dsp/include/effetune/abi.h に
-    /// 無いので、こちらは隣に置かれた Spectrum Analyzer の tap を借りる。
-    /// 探し方は ETSpectrumOverlayFinder、描くのは SpectrumOverlayLayer。
+    /// 無いので、こちらは段の前後に置いた探り（Spectrum Analyzer）の tap を借りる。
+    /// 置くのは EffeTuneDSP.syncProbes、描くのは SpectrumOverlayLayer。
+    /// **これは段から出た音**（After の線）。
     var spectrumTap: UInt32?
+    /// 段に入る音の tap。spectrumMode と両方あるときだけ After ⇄ Compare の札を出す。
+    var spectrumBeforeTap: UInt32?
+    /// After / Compare。持ち主は呼ぶ側（段ごとにメモリだけで覚える、SpectrumOverlayLayer の頭）。
+    var spectrumMode: Binding<ETSpectrumOverlayMode>?
     /// 印を動かしたとき。(印の id, 周波数, dB)。両方が同時に動く。
     var onMarkerChanged: ((Int, Double, Double) -> Void)?
     var onMarkerSelected: ((Int) -> Void)?
@@ -146,6 +151,8 @@ struct FrequencyResponseGraph: View {
          height: CGFloat = ETGraphMetrics.height,
          caption: String? = nil,
          spectrumTap: UInt32? = nil,
+         spectrumBeforeTap: UInt32? = nil,
+         spectrumMode: Binding<ETSpectrumOverlayMode>? = nil,
          onMarkerChanged: ((Int, Double, Double) -> Void)? = nil,
          onMarkerSelected: ((Int) -> Void)? = nil,
          onMarkerReleased: ((Int) -> Void)? = nil) {
@@ -157,6 +164,8 @@ struct FrequencyResponseGraph: View {
         self.height = height
         self.caption = caption
         self.spectrumTap = spectrumTap
+        self.spectrumBeforeTap = spectrumBeforeTap
+        self.spectrumMode = spectrumMode
         self.onMarkerChanged = onMarkerChanged
         self.onMarkerSelected = onMarkerSelected
         self.onMarkerReleased = onMarkerReleased
@@ -169,6 +178,7 @@ struct FrequencyResponseGraph: View {
             height: height,
             readout: readout,
             caption: caption,
+            accessory: spectrumToggle,
             clipsContent: true,
             draw: { context, plot in
                 // 掴んでいる間の目印。指の下に細い十字を出しておく。
@@ -201,13 +211,18 @@ struct FrequencyResponseGraph: View {
                     // 重ねるスペクトラム。**曲線の上**に出る。
                     // 上流も PEQ の曲線の上に 0.85 で重ねている
                     // （spectrum-overlay.css:15 の z-index: 2）。
-                    // **常に出す。上流とは意図して違えてある。**上流は図の隅の札で
-                    // Off → After → Compare と切り替える（spectrum-overlay.js:242-246）。
-                    // こちらは切り替えを持たない（2026-09-30 に決めた）。
+                    // **常に出す（Off が無い）。そこだけ上流と違えてある**（2026-09-30 に決めた）。
+                    // 上流の札は Off → After → Compare を回す（spectrum-overlay.js:242-246）。
+                    // こちらは After（段から出た音、既定）と Compare（入る音と出た音）の 2 つを
+                    // 読み値の行の札で切り替える（spectrumToggle）。描き方は上流の写し
+                    // （SpectrumOverlayLayer の頭）。
                     // Telemetry を観測するのはこの層の中だけ。ここより外で観測すると
                     // 30Hz で body が回り、掴んでいる印と下のつまみが固まる。
                     if let spectrumTap {
-                        SpectrumOverlayLayer(tapId: spectrumTap, plot: plot)
+                        SpectrumOverlayLayer(tapId: spectrumTap,
+                                             beforeTapId: spectrumBeforeTap,
+                                             mode: spectrumMode?.wrappedValue ?? .after,
+                                             plot: plot)
                     }
 
                     // 指を受ける面。印より下に置く（印は当たり判定を持たない）。
@@ -227,6 +242,14 @@ struct FrequencyResponseGraph: View {
                     }
                 }
             })
+    }
+
+    /// After ⇄ Compare の札。**畳んだ図には出さない**（押せない図に押せそうな札を残さない）。
+    /// 入口の探りが無い図（FIR PEQ など）も比べる相手が無いので出さない。
+    private var spectrumToggle: AnyView? {
+        guard !graphOnly, spectrumTap != nil, spectrumBeforeTap != nil,
+              let spectrumMode else { return nil }
+        return AnyView(SpectrumOverlayToggle(mode: spectrumMode))
     }
 
     // MARK: 掴む

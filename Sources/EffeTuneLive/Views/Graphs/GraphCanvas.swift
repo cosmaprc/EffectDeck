@@ -40,6 +40,13 @@ enum ETGraphShading {
     /// アクセント色の 55%（effetune-theme.css:95）。canvas 側の 0.85
     /// （spectrum-overlay.css:16）は描く側が context.opacity で掛ける。
     static var overlay: GraphicsContext.Shading { .style(AnyShapeStyle(.tint).opacity(0.55)) }
+    /// Compare のときの出口の線。上流の --et-graph-overlay-compare は
+    /// 文字色の 90%（effetune-theme.css:96）。
+    static var overlayCompare: GraphicsContext.Shading { .style(AnyShapeStyle(.primary).opacity(0.9)) }
+    /// Compare で出口が入口より上の所の塗り。上流の --et-graph-overlay-positive は
+    /// 警告色の 55%（effetune-theme.css:97）。下の所は overlay（アクセント色の 55%）で塗る
+    /// （spectrum-overlay.js:579）。
+    static var overlayPositive: GraphicsContext.Shading { .style(Color.orange.opacity(0.55)) }
 }
 
 // MARK: - 上に出す値
@@ -75,6 +82,9 @@ struct GraphCanvas<Overlay: View>: View {
     var caption: String?
     /// 読み値の行の**右端**に出す札。印を出したいときだけ。
     var badge: String?
+    /// 読み値の行の右端（札の左）に置く部品。PEQ の重ね表示の切り替え
+    /// （FrequencyResponseGraph）。図の面は印を掴むのに使っているので、面の上には置かない。
+    var accessory: AnyView?
     /// 中身を枠で切るか。PEQ の曲線のように外へ出したいものは false。
     var clipsContent: Bool
     /// なぞった周波数をプレビュー音で鳴らすか。**解析の図だけが立てる。**
@@ -91,6 +101,7 @@ struct GraphCanvas<Overlay: View>: View {
          readout: [ETReadoutItem] = [],
          caption: String? = nil,
          badge: String? = nil,
+         accessory: AnyView? = nil,
          clipsContent: Bool = true,
          previewsFrequency: Bool = false,
          draw: @escaping (inout GraphicsContext, ETPlot) -> Void,
@@ -102,6 +113,7 @@ struct GraphCanvas<Overlay: View>: View {
         self.readout = readout
         self.caption = caption
         self.badge = badge
+        self.accessory = accessory
         self.clipsContent = clipsContent
         self.previewsFrequency = previewsFrequency
         self.draw = draw
@@ -185,6 +197,9 @@ struct GraphCanvas<Overlay: View>: View {
                 }
             }
             Spacer(minLength: 0)
+            if let accessory {
+                accessory.fixedSize()
+            }
             // 右端の札。行の高さは下で固定してあるので、出ても位置は動かない。
             if let badge {
                 Text(badge)

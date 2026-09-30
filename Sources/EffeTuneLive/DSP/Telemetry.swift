@@ -33,9 +33,10 @@ final class Telemetry: ObservableObject {
     ///
     /// **輪と同じ大きさにする。** 64KB だと 1 回の poll で汲み切れず、
     /// 残りは次の poll まで輪に積まれたままになる。スペアナの枠は 1 本で
-    /// 16KB あり（FFT 4096 → bin 2049 → `12 + 2049*8`）、それが 60Hz で出る。
-    /// 図を持つ段が数枚並ぶと 1 回ぶんで 64KB を越えるので、汲み残しが
-    /// 次の枠に上書きされて `droppedFrames` が増える。
+    /// 16KB あり（FFT 4096 → bin 2049 → `12 + 2049*8`）、新しい解析ができるたびに
+    /// 出る（FFT 4096 なら 2048 サンプルごと、kernel.cpp:359-368）。
+    /// 図を持つ段と PEQ の探り（段 1 つに 2 台）が並ぶと 1 回ぶんで 64KB を越えるので、
+    /// 汲み残しが次の枠に上書きされて `droppedFrames` が増える。
     private var buffer = [UInt8](repeating: 0, count: Int(EffeTuneDSP.telemetryRingBytes))
 
     private init() {}

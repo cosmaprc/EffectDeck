@@ -178,9 +178,9 @@ enum ETScreenshotSeed {
         case "saturation": return ["SaturationPlugin"]
         case "meter":      return ["LevelMeterPlugin"]
         case "spectrum":   return ["SpectrumAnalyzerPlugin"]
-        // PEQ の図に重ねるスペクトラム。Analyzer を **PEQ の前**に置くと入口側になる
-        // （ETSpectrumOverlayFinder.source が入口を先に見る）。
-        // 波形のボタンを押すまで重ならないので、撮るときは 1 度押す。
+        // PEQ の図に重ねるスペクトラム。PEQ の図には探り（EffeTuneDSP.syncProbes）が
+        // いつも重なる。Analyzer は PEQ に入る音を並べて見せるために置く。
+        // 図の札を押すと Compare（入る音と出た音）になる。
         case "peq-spectrum": return ["SpectrumAnalyzerPlugin", "FiveBandPEQPlugin"]
         case "chain":      return ["VolumePlugin", "ToneControlPlugin",
                                    "CompressorPlugin", "RSReverbPlugin"]
