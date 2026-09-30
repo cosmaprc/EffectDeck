@@ -536,7 +536,8 @@ final class EffeTuneDSP: ObservableObject {
                                      routedChannels: width,
                                      channelMode: Self.choice("cm", of: node),
                                      latency: Self.choice("lt", of: node),
-                                     convolutionRate: Self.choice("cr", of: node))
+                                     convolutionRate: Self.choice("cr", of: node),
+                                     options: ETIRPreparation.Options(designParams: node.design))
         let shown = ETChainEditing.assetLineAfterReload(sent: line,
                                                         previous: assetInfo[node.id],
                                                         processedWidth: width)
@@ -847,6 +848,31 @@ final class EffeTuneDSP: ObservableObject {
         persistSoon()
     }
 
+    /// IR Reverb の下ごしらえのつまみ（dc / co / dt / tr）を 1 つ変える。
+    ///
+    /// カーネルのパラメータではない。IR を送る前にホストでかける処理の設定で
+    /// （ETIRPreparation.Options）、変えたら下ごしらえからやり直して送り直す。
+    /// 上流も 150ms 待ってからやり直す（ir_reverb.js:273-279 の `_queuePreparation('host', 150)`）。
+    /// つまみを引きずっている間は来るたびに前の待ちを捨てるので、送り直すのは止めた後の 1 回だけ。
+    func setIRPreparation(_ raw: String, key: String, at index: Int) {
+        guard chain.indices.contains(index), chain[index].design[key] != raw else { return }
+        chain[index].design[key] = raw
+        persistSoon()
+        let id = chain[index].id
+        pendingIRPreparation[id]?.cancel()
+        pendingIRPreparation[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingIRPreparation[id] = nil
+            // 待っている間に並べ替え・削除があっても、id で引き直す。
+            guard let i = self.chain.firstIndex(where: { $0.id == id }) else { return }
+            self.reloadAsset(at: i)
+        }
+    }
+
+    /// 待っている IR の下ごしらえのやり直し。段の id ごとに 1 本。
+    private var pendingIRPreparation: [UUID: Task<Void, Never>] = [:]
+
     /// パラメータを 1 つ変える。offset は ETParam.offset（配列なら +i）。
     func setValue(_ value: Float, at index: Int, offset: Int) {
         guard chain.indices.contains(index),
@@ -875,7 +901,7 @@ final class EffeTuneDSP: ObservableObject {
     /// **後始末は setValue / resetParams と同じにする。**以前はここだけ何もしなかった。
     ///   - 遅延: os の入ったプリセット（歪み系 6 種、0 → 64）や Bass Management の
     ///     Phase / Linear Quality で変わる。組み直さないと帯の Fx と並列の段の位置合わせが古いまま。
-    ///   - IR Reverb: cm / lt / cr が変わったら送り直す（settleAfterParams と同じ）。
+    ///   - IR Reverb: cm / lt / cr と、材料の dc / co / dt / tr が変わったら送り直す（settleAfterParams と同じ）。
     ///   - designer で作る型: 値から材料を引き直させる（ETAssetReattach.paramsChanged）。
     ///     FIR Crossover は lt / bc を、Bass Management は全部を params から読む。
     ///     カードを畳んだまま当てるとビューが無いので、ここで呼ばないと誰も呼ばない。
@@ -903,8 +929,11 @@ final class EffeTuneDSP: ObservableObject {
         chain[index].values = values
         if redesign { chain[index].design = design }
         pushParams(chain[index])
-        if !changed.isEmpty {
-            if !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
+        // IR Reverb の下ごしらえ（dc / co / dt / tr）は材料の側にあるので、変われば送り直す。
+        let preparationChanged = redesign && chain[index].spec.type == ETDesignParam.irReverb
+        if !changed.isEmpty || preparationChanged {
+            if preparationChanged
+                || !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
                 // 送り直すと ETIRLoader.load の中で組み直される。
                 reloadAsset(at: index)
             } else if instanceLatency(of: chain[index]) != before {
@@ -928,6 +957,9 @@ final class EffeTuneDSP: ObservableObject {
         // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
         // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
         chain[index].design = [:]
+        // 待っている IR の下ごしらえのやり直しも捨てる（下で IR ごと外す）。
+        pendingIRPreparation[chain[index].id]?.cancel()
+        pendingIRPreparation[chain[index].id] = nil
         // 表示の設定も同じ既定に入っている（plugin-manager.js:41-48 は getParameters() から
         // type / id / enabled / バスだけを除く）。空にすれば各画面は自分の既定で描く。
         // 画面は .etSaved で現れたときにしか読まないので、作り直させる（Node.resetCount）。

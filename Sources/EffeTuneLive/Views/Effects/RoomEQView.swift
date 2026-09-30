@@ -5,12 +5,12 @@
 //  設計は RoomEQDesigner（DSP/Designers/RoomEQDesigner.swift）が持っていて、
 //  ここはその呼び手。測定と設定は RoomEQStore（DSP/RoomEQStore.swift）に置く。
 //
-//  --- 図は出していない ---
-//  上流の図は「測った周波数特性」と「それを打ち消す補正」を重ねたもので、
-//  材料は測定ストアと designer の previews から来る
-//  （plugins/eq/room_eq.js:1619-1620）。previews は移していない
-//  （RoomEQDesigner.swift の頭「移していない: previews」）ので、曲線は描けない。
-//  出せるのは入った内容の 1 行と状態。
+//  --- 図 ---
+//  上流は設定の下に Graph の選択肢・Preview channel と応答の図を置く
+//  （plugins/eq/room_eq.js:3406-3410）。材料は設計の previews
+//  （DSP/Designers/RoomEQPreview.swift）、描くのは RoomEQResponseGraph。
+//  選んだ図とチャンネルは上流が鎖に書かない（getParameters() に無い）ので、
+//  ETCardSelection にだけ覚える（畳んでも消えないが、アプリを終うと既定へ戻る）。
 //
 //  --- DSP へ行くのは 4 つだけ ---
 //  ETEffect.params は lt / fd / dy / gn（Generated/EffectCatalog.swift:599-612、
@@ -47,6 +47,9 @@ struct RoomEQView: View {
     @State private var picking = false
     /// 読み込みで落ちた理由。設計と送り込みの失敗は correction.state に出る。
     @State private var failure: String?
+    /// 図の選択。既定は上流と同じ Frequency とチャンネル 0（room_eq.js:954-956）。
+    @State private var responseView: RoomEQResponseView = .frequency
+    @State private var previewChannel = 0
 
     private var session: RoomEQStore.Session { store.session(for: node.id) }
 
@@ -64,7 +67,10 @@ struct RoomEQView: View {
                     }
                 }
             }
+            responseGraph
         }
+        .etRemembers($responseView, key: "roomEQ.graph", node: node.id)
+        .etRemembers($previewChannel, key: "roomEQ.previewChannel", node: node.id)
         // instance が作り直されると資産は消える（EffeTuneDSP.swift:577-586）。
         .onChange(of: node.instance) { _, _ in resend() }
         // independent は channels == processingChannels が条件なので、
@@ -132,11 +138,15 @@ struct RoomEQView: View {
             for url in urls {
                 let decoded = try ETIRLoader.decode(url)
                 // **伸縮しない。** config とレートが違えば designer 側の
-                // 窓付き sinc が直す（RoomEQDesigner の impulseMagnitude）。
+                // 窓付き sinc が直す（RoomEQDesigner.analyzeImpulse）。
                 let sampleRate = Int(decoded.sampleRate.rounded())
                 for plane in decoded.channels {
+                    // 立ち上がりは上流の測定と同じ決め方（onset.js:25-30 の detectOnset）。
+                    // 補正の設計（min / lin）は使わず、位相・群遅延・インパルスの図の基準になる。
                     sources.append(RoomEQSource(impulses: [
-                        RoomEQImpulse(data: plane, sampleRate: sampleRate)
+                        RoomEQImpulse(data: plane, sampleRate: sampleRate,
+                                      onsetIndex: ETCrosstalkLoader.detectOnset(plane,
+                                                                                sampleRate: sampleRate))
                     ]))
                 }
                 names.append(url.lastPathComponent)
@@ -274,6 +284,65 @@ struct RoomEQView: View {
                 return "Full phase correction is not available here. The filter was built with linear phase."
             }
         }
+    }
+
+    // MARK: 図
+
+    /// 上流の Graph の選択肢・Preview channel・応答の図（room_eq.js:2419-2628）。
+    /// 設計が済むまでは材料が無いので出さない。畳んだカード（図だけ）では選択肢を隠す。
+    @ViewBuilder
+    private var responseGraph: some View {
+        if let design = session.correction.design, !design.previews.isEmpty {
+            let previews = design.previews
+            // 上流もチャンネルが減ったら 0 へ戻す（:2400）。
+            let channel = previews.indices.contains(previewChannel) ? previewChannel : 0
+            VStack(alignment: .leading, spacing: 12) {
+                if !graphOnly {
+                    graphRow
+                    // 2 本以上のときだけ出す（:2401）。
+                    if previews.count > 1 { previewChannelRow(count: previews.count, selected: channel) }
+                }
+                if let preview = previews[channel] {
+                    RoomEQResponseGraph(view: responseView, preview: preview, config: design.config)
+                }
+            }
+        }
+    }
+
+    private var graphRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Graph").font(.system(size: 14))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)],
+                      alignment: .leading, spacing: 6) {
+                ForEach(RoomEQResponseView.allCases) { view in
+                    choice(view.label, selected: responseView == view) { responseView = view }
+                }
+            }
+        }
+    }
+
+    /// チャンネルの名前は段の Ch の先頭から数える（room_eq.js:1318-1331 の _channelStartIndex）。
+    private func previewChannelRow(count: Int, selected: Int) -> some View {
+        HStack {
+            Text("Preview Channel").font(.system(size: 14))
+            Spacer(minLength: 8)
+            Picker("Preview Channel", selection: Binding(get: { selected },
+                                                         set: { previewChannel = $0 })) {
+                ForEach(0..<count, id: \.self) { i in
+                    Text("Ch \(channelStart + i)").tag(i)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+    }
+
+    /// 段の Ch の先頭（1 から）。対（"34" など）はその先頭、1 本はその番号、Stereo と All は 1。
+    private var channelStart: Int {
+        let spec = Int(node.channelSpec)
+        if spec >= 16 { return (spec - 16) * 2 + 1 }
+        if spec >= 0 { return spec + 1 }
+        return 1
     }
 
     // MARK: 設計の設定

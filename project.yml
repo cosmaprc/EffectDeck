@@ -384,6 +384,7 @@ targets:
       - path: Sources/EffeTuneLive/DSP/Designers/GroupDelayPEQDesign.swift
       - path: Sources/EffeTuneLive/DSP/Designers/CrosstalkDesign.swift
       - path: Sources/EffeTuneLive/DSP/Designers/RoomEQDesign.swift
+      - path: Sources/EffeTuneLive/DSP/Designers/RoomEQPreview.swift
       - path: Sources/EffeTuneLive/DSP/CrosstalkMeasurementCore.swift
       - path: Tests/Fixtures/Designers/designers-a-golden.json
         buildPhase: resources

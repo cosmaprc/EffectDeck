@@ -206,8 +206,8 @@ enum ETIRPreparation {
     // MARK: - 下ごしらえの設定
 
     /// 上流のホスト側の4つのつまみ（ir_reverb.js:37-40）。既定は上流と同じ。
-    /// EffectDeckはまだ出していないので、いまは常に既定で回る。
-    /// Webのプリセットが持つdc / co / dt / trを通すときはここへ入れる。
+    /// 値は段のNode.designに上流の綴り（dc / co / dt / tr）で持ち、
+    /// ETIRPreparation.Options(designParams:)（DesignParams.swift）でここへ入れる。
     struct Options {
         /// dc。直接音を落とす。
         var directCut = true

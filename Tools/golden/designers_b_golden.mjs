@@ -573,6 +573,32 @@ const roomEqDesigns = [
             supportsFullPhase: result.supportsFullPhase,
             qualityWarnings: [...new Set(result.qualityWarnings)],
             referenceLevelDb: result.previews.map(preview => preview ? preview.referenceLevelDb : null),
+            // 画面の曲線（Sources/EffeTuneLive/DSP/Designers/RoomEQPreview.swift が写したもの）。
+            // 格子は Swift 側でも同じ式で作るので、長さだけ照らす（frequencyCount）。
+            previews: result.previews.map(preview => preview ? {
+                frequencyCount: preview.frequencies.length,
+                measuredDb: f32(preview.measuredDb),
+                baseCorrectionDb: f32(preview.baseCorrectionDb),
+                predictedBaseDb: f32(preview.predictedBaseDb),
+                phase: preview.phaseResponse ? {
+                    before: f32(preview.phaseResponse.before),
+                    after: f32(preview.phaseResponse.after)
+                } : null,
+                minimumGroupDelay: preview.groupDelayResponse ? {
+                    before: f32(preview.groupDelayResponse.minimum.before),
+                    after: f32(preview.groupDelayResponse.minimum.after)
+                } : null,
+                excessGroupDelay: preview.groupDelayResponse ? {
+                    before: f32(preview.groupDelayResponse.excess.before),
+                    after: f32(preview.groupDelayResponse.excess.after)
+                } : null,
+                impulse: preview.impulseResponse ? {
+                    startMs: preview.impulseResponse.startMs,
+                    durationMs: preview.impulseResponse.durationMs,
+                    before: f32(preview.impulseResponse.before),
+                    after: f32(preview.impulseResponse.after)
+                } : null
+            } : null),
             config: {
                 sampleRate: result.config.sampleRate,
                 taps: result.config.taps,

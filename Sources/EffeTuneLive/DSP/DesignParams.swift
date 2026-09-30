@@ -14,6 +14,7 @@
 //      group_delay_eq.js:118-139      tp / d0-14
 //      group_delay_peq.js:169-196     tp / t0-4 / f0-4 / d0-4 / q0-4 / e0-4
 //      fir_crossover.js:96-121        pm / tp / f1-3 / s1-3
+//      ir_reverb.js:171-174           dc / co / dt / tr（IRを送る前の下ごしらえ。IRPreparation.swift）
 //  Sectionの名前（`cm`）・IRの鍵（`ir`）・表示の設定（DisplayParams.swift）と同じ立場なので、
 //  同じようにNode側へ文字列で持ち、保存形式では**上流と同じ綴り**で書く。
 //
@@ -35,6 +36,7 @@ enum ETDesignParam {
     static let groupDelayEQ = "GroupDelayEqPlugin"
     static let groupDelayPEQ = "GroupDelayPEQPlugin"
     static let firCrossover = "FIRCrossoverPlugin"
+    static let irReverb = "IRReverbPlugin"
 
     /// その型が持つ設計の材料。持たないものは空。
     static func table(for type: String) -> [String: Kind] {
@@ -55,6 +57,8 @@ enum ETDesignParam {
         case firCrossover:
             return indexed(["f", "s"], 1..<4, .number)
                 .merging(["pm": .text, "tp": .number]) { a, _ in a }
+        case irReverb:
+            return ["dc": .flag, "co": .number, "dt": .number, "tr": .number]
         default:
             return [:]
         }
@@ -335,5 +339,22 @@ extension FIRCrossoverSettings {
             }
         }
         return s
+    }
+}
+
+// MARK: - IR Reverb
+
+extension ETIRPreparation.Options {
+
+    /// 段が持っている材料から。ir_reverb.js:241-244のsetParametersと同じ寄せ方で、
+    /// 鍵が無ければ既定（:37-40）、範囲の外は端へ寄せる。**材料が空なら上流の既定**なので、
+    /// 鍵を書いていなかった頃の鎖は前と同じ下ごしらえで鳴る。
+    init(designParams d: [String: String]) {
+        var o = ETIRPreparation.Options.upstreamDefaults
+        if let dc = ETDesignParam.flag(d, "dc") { o.directCut = dc }
+        o.cutOffsetMs = ETDesignParam.finite(d, "co", -20, 50, previous: o.cutOffsetMs)
+        o.decayPercent = ETDesignParam.finite(d, "dt", 10, 400, previous: o.decayPercent)
+        o.trimPercent = ETDesignParam.finite(d, "tr", 1, 100, previous: o.trimPercent)
+        self = o
     }
 }
