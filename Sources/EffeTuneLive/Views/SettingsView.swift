@@ -402,8 +402,6 @@ private struct ETReportView: View {
 
 // MARK: - いま何が起きているか
 
-/// io を観測する 1 つ目の閉じ込め先。
-/// 3.3Hz で作り直されるが、中は文字だけなので提示の途中のものが無い。
 /// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
 /// 状態（Off / Connecting / Connected / Error）を読むのは RemoteMirror だけ。
 private struct RemoteSection: View {
@@ -431,6 +429,8 @@ private struct RemoteSection: View {
     }
 }
 
+/// io を観測する 1 つ目の閉じ込め先。
+/// 3.3Hz で作り直されるが、中は文字だけなので提示の途中のものが無い。
 private struct StatusSection: View {
     @ObservedObject var io: AudioIO
     /// bypass だけ読む。SettingsView 側が観測しているので、ここでは観測しない。

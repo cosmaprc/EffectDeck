@@ -97,6 +97,17 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(params["en"])
     }
 
+    /// float に載らない鍵（IR の素材）も params に入る。落とすと控えの鎖だけが進み、PC へ届かない。
+    func testParamsCarryKeysOutsideTheFloats() throws {
+        var ir = try effect("IRReverbPlugin")
+        ir.irId = "user:hall"
+        ir.inputBus = 1
+        let params = try XCTUnwrap(ETRemoteProjection.params(for: ir))
+        XCTAssertEqual(params["ir"] as? String, "user:hall")
+        XCTAssertNil(params["ib"])
+        XCTAssertNil(params["nm"])
+    }
+
     func testParamsAreNilForStagesWithoutParameters() throws {
         XCTAssertNil(ETRemoteProjection.params(for: section("A")))
         XCTAssertNil(ETRemoteProjection.params(for: external(inputBus: 0, outputBus: 0)))
@@ -128,5 +139,6 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:99999/tok"))      // ポートが範囲の外
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:abc/tok"))
         XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:47300/?t=x"))
+        XCTAssertNil(ETRemoteAddress.parse("wss://192.168.1.10:47300/?t=x"))  // ws しか作らない
     }
 }

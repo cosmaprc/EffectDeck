@@ -78,6 +78,8 @@ final class RemoteMirror: ObservableObject {
     /// Pull で受けた鎖を入れているあいだ。入れた結果の persist() を PC へ送り返さない。
     private var applyingRemote = false
     private var pullRequested = false
+    /// persist() が 1 度でも来たか（= restore() が済んだ）。済む前の空の鎖は送らない。
+    private var localChainReady = false
     /// Import で返事を待っているプリセットの名前。
     private var presetsPending: Set<String> = []
 
@@ -120,6 +122,8 @@ final class RemoteMirror: ObservableObject {
 
     /// 鎖の並び・入切・バス・中身が変わったとき。persist() の入口から。
     func chainChanged(_ chain: [ETChainNode]) {
+        // 1 度でも来たら restore() は済んでいる。それ以降の空の鎖は人が空にしたもの。
+        localChainReady = true
         guard task != nil, !applyingRemote else { return }
         sendChain(chain, force: false)
     }
@@ -260,8 +264,8 @@ final class RemoteMirror: ObservableObject {
 
     private func sendChain(_ chain: [ETChainNode], force: Bool) {
         // 起動直後は鎖がまだ空（restore() の前）。空で送ると PC の鎖が消える。
-        // restore() が並べ終えれば persist() から来る。
-        guard !chain.isEmpty else { return }
+        // restore() が並べ終えれば persist() から来る。済んだ後に人が空にした鎖は送る。
+        guard !chain.isEmpty || localChainReady else { return }
         let projected = ETRemoteProjection.project(chain)
         sentMap = projected.remoteIndex
         if !force, let sent = sentForm, (sent as NSArray).isEqual(to: projected.pipeline) { return }
@@ -338,6 +342,10 @@ final class RemoteMirror: ObservableObject {
     private func applyPulled(_ pipeline: Any?) {
         let loaded = items(from: pipeline)
         guard !loaded.isEmpty else { return }
+        // 前の鎖の番号で積んだ params は、入れ替えた後の鎖では別の段を指す。
+        flushTask?.cancel()
+        flushTask = nil
+        pendingParams.removeAll()
         applyingRemote = true
         EffeTuneDSP.shared.replaceChain(with: loaded)
         applyingRemote = false

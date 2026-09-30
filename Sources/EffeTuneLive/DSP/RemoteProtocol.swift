@@ -74,13 +74,21 @@ enum ETRemoteProjection {
         return PipelineStore.upstreamEntry(entry)
     }
 
-    /// params メッセージの `params` に入れるもの。**パラメータのショートキーだけ**
-    /// （`nm` / `en` / バスは入れない）。動かせるパラメータが無い段（Section・終端・外部）は nil。
+    /// params メッセージの `params` に入れるもの。**段のショート形式から段の鍵を抜いたもの**
+    /// （`nm` / `en` / バス / `ch` は入れない）。動かせるパラメータが無い段（Section・終端・外部）は nil。
+    ///
+    /// **float の値だけでなく、IR の鍵（`ir`）・図の見せ方・designer の材料（`pm` / `tp` など）も入れる。**
+    /// params を送るたびに RemoteMirror は控えの鎖のその段を entry(for:) で書き換えるので、
+    /// ここで材料を落とすと、材料だけ変わった段は後の persist() でも「もう送った」と見なされ、
+    /// PC へ一度も届かない。
     static func params(for item: PipelineStore.Loaded) -> [String: Any]? {
-        guard item.externalID.isEmpty, !item.isRootReset, !ETSection.isSection(item.spec) else {
+        guard item.externalID.isEmpty, !item.isRootReset, !ETSection.isSection(item.spec),
+              var o = PipelineStore.shortForm([item]).first else {
             return nil
         }
-        let o = ETParamCoding.encode(params: item.spec.params, values: item.values)
+        for key in ["nm", "en", "ib", "ob", "ch", ETSection.rootResetKey] {
+            o.removeValue(forKey: key)
+        }
         return o.isEmpty ? nil : o
     }
 
@@ -123,7 +131,8 @@ struct ETRemoteAddress: Equatable {
         // 完全な URL。scheme を見て、無ければ下の素の形へ回す。
         if let range = s.range(of: "://") {
             let scheme = s[s.startIndex..<range.lowerBound].lowercased()
-            guard scheme == "ws" || scheme == "wss",
+            // wss は受けない。url は ws しか作らないので、受けると暗号なしへ黙って落ちる。
+            guard scheme == "ws",
                   let c = URLComponents(string: s), let host = c.host, !host.isEmpty else { return nil }
             let token = c.queryItems?.first(where: { $0.name == "t" })?.value
                 ?? c.path.split(separator: "/").last.map(String.init) ?? ""
