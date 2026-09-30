@@ -301,7 +301,7 @@ struct PipelineView: View {
             }
             // 写した値の初期合わせ。購読の初回配信に頼らない。
             running = io.running
-            hasPeer = io.hasPeer
+            hasPeer = io.hasPeer || RemoteMirror.shared.isRemote
             processingRate = io.processingRate
         }
         .onReceive(slow) { _ in io.tick() }
@@ -363,7 +363,11 @@ struct PipelineView: View {
         }
         // io を丸ごと観測せず、要る値だけを写す。
         .onReceive(io.$running) { running = $0 }
-        .onReceive(io.$hasPeer) { hasPeer = $0 }
+        // PC の鎖を編集しているあいだは、この端末に音が来ていなくても「繋がっている」扱いにする。
+        // 鳴っているのは PC で、No audio yet の帯や電源の沈みはこの端末の話でしかない。
+        .onReceive(io.$hasPeer.combineLatest(RemoteMirror.shared.$isRemote)) { peer, remote in
+            hasPeer = peer || remote
+        }
         .onReceive(io.$processingRate) { processingRate = $0 }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
