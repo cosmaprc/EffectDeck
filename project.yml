@@ -328,6 +328,8 @@ targets:
       # 鎖に並ぶ1個（元はEffeTuneDSP.Node）。EffeTuneDSPはosとet_*に触るので外へ出してある。
       # 下のChainEditing・ETShareLink・EffectPresetStoreCoreが引く。
       - path: Sources/EffeTuneLive/DSP/ETChainNode.swift
+      # PC の EffeTune を LAN から操る PoC の、通信に触らない部分（RemoteProtocolTests）。Foundationだけ。
+      - path: Sources/EffeTuneLive/DSP/RemoteProtocol.swift
       # 鎖をいじるときの決まり（プリセットの足し方・外部の段の付け直し・選択肢をoffsetで読む・
       # descriptorの中身）。Foundationだけ（ChainEditingTests）。
       - path: Sources/EffeTuneLive/DSP/ChainEditing.swift

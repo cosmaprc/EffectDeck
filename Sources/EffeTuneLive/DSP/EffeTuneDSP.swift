@@ -54,7 +54,12 @@ final class EffeTuneDSP: ObservableObject {
     /// restore() の最中だけ true。読み込みで入れた値を書き戻さないため。
     private var restoring = false
     @Published private(set) var ready = false
-    @Published var bypass = false { didSet { ETPipeline_SetBypass(bypass ? 1 : 0) } }
+    @Published var bypass = false {
+        didSet {
+            ETPipeline_SetBypass(bypass ? 1 : 0)
+            RemoteMirror.shared.bypassChanged(bypass)   // PoC: PC の EffeTune へ写す
+        }
+    }
 
     /// テレメトリを読むのに要るので外へ出す。
     private(set) var engine: UInt32 = 0
@@ -352,6 +357,10 @@ final class EffeTuneDSP: ObservableObject {
         // まとめ待ちを潰してから書く。待っていた内容はいまの chain に入っている。
         pendingPersist?.cancel()
         pendingPersist = nil
+
+        // PoC: PC の EffeTune へ写す（DSP/RemoteMirror.swift）。下の門は端末へ残すかの話で、
+        // 起動直後の既定の鎖も PC へは送るので、門より前に呼ぶ。
+        RemoteMirror.shared.chainChanged(chain)
 
         // **restore() が置いた既定の 1 本は残さない**（ETChainEditing.shouldPersist）。
         // 書くと iCloud 側の鎖が Level Meter 1 本で上書きされ、遅れて降りてくる鎖を
@@ -833,6 +842,7 @@ final class EffeTuneDSP: ObservableObject {
         let before = instanceLatency(of: chain[index])
         pushParams(chain[index])
         settleAfterParams(at: index, changed: offset, before: before)
+        RemoteMirror.shared.paramsChanged(at: index)
         // publish() は通さない。descriptor に載るのは並びと入切と鎖の形だけで、
         // 値は pushParams が instance へ直に渡している。
         // ただし端末には残す。残さないと、次に鎖を足す/消す/動かすまで
@@ -893,6 +903,7 @@ final class EffeTuneDSP: ObservableObject {
         if !changed.isEmpty || redesign {
             ETAssetReattach.paramsChanged(chain[index])
         }
+        RemoteMirror.shared.paramsChanged(at: index)
         // setValue と同じ理由で publish() は通さず、端末にだけ残す。
         persistSoon()
     }
@@ -914,6 +925,7 @@ final class EffeTuneDSP: ObservableObject {
         }
         // setValues と同じ。値から材料を引く designer に、戻した値を読ませる。
         ETAssetReattach.paramsChanged(chain[index])
+        RemoteMirror.shared.paramsChanged(at: index)
         persistSoon()
     }
 

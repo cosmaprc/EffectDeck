@@ -50,6 +50,15 @@ final class Preferences: ObservableObject {
         didSet { save(jsfxCanvasMode.rawValue, Key.jsfxCanvasMode) }
     }
 
+    /// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
+    @Published var remoteEnabled: Bool {
+        didSet { save(remoteEnabled, Key.remoteEnabled); RemoteMirror.shared.enabledChanged() }
+    }
+    /// `host:port/token`。打っている最中も書き換わるので、つなぎ直しは RemoteMirror が間を置く。
+    @Published var remoteAddress: String {
+        didSet { save(remoteAddress, Key.remoteAddress); RemoteMirror.shared.addressChanged() }
+    }
+
     /// しきい値だけが変わったときに呼ばれる。組み直さずに値を差し替える。
     var onSilenceThresholdChange: (() -> Void)?
 
@@ -73,6 +82,8 @@ final class Preferences: ObservableObject {
         syncVisualsToAudio = d.bool(forKey: Key.syncVisualsToAudio)
         // 既定は Adaptive（PreferencesValues.jsfxCanvasMode の注記）。
         jsfxCanvasMode = PreferencesValues.jsfxCanvasMode(d.string(forKey: Key.jsfxCanvasMode))
+        remoteEnabled = d.bool(forKey: Key.remoteEnabled)
+        remoteAddress = d.string(forKey: Key.remoteAddress) ?? ""
 
         // **init の代入では didSet が走らない。**
         // そのため、保存値が true でも起動直後だけ画面が落ちていた。

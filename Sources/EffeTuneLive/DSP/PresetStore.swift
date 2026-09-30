@@ -68,6 +68,13 @@ final class PresetStore: ObservableObject {
         reload()
     }
 
+    /// 読み込んだ段からそのまま残す（PC の EffeTune から取ったプリセット。DSP/RemoteMirror.swift）。
+    func save(_ name: String, items: [PipelineStore.Loaded]) {
+        guard !items.isEmpty else { return }
+        core.save(name, form: PipelineStore.shortForm(items))
+        reload()
+    }
+
     /// save が書く名前（空になるなら nil）。押す前の「もう在る」はこれで確かめる。
     /// save は名前を整えるので、打ったままの名前では在るものを見落とす。
     func savedName(for name: String) -> String? { core.savedName(for: name) }

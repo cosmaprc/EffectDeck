@@ -58,6 +58,9 @@ struct SettingsView: View {
                     power
                     graphs
                     plugins
+                    // **StatusSection の中に置かない。**あちらは 3.3Hz で作り直されるので、
+                    // TextField が打っている最中に focus を失う。
+                    RemoteSection(prefs: prefs)
                     // **音の数字は Audio に置く。**レート・バッファ・遅延の内訳・
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
@@ -401,6 +404,33 @@ private struct ETReportView: View {
 
 /// io を観測する 1 つ目の閉じ込め先。
 /// 3.3Hz で作り直されるが、中は文字だけなので提示の途中のものが無い。
+/// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
+/// 状態（Off / Connecting / Connected / Error）を読むのは RemoteMirror だけ。
+private struct RemoteSection: View {
+    @ObservedObject var prefs: Preferences
+    @ObservedObject private var mirror = RemoteMirror.shared
+
+    var body: some View {
+        Section {
+            Toggle("Remote Control", isOn: $prefs.remoteEnabled)
+            TextField("Address", text: $prefs.remoteAddress, prompt: Text("host:port/token"))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            LabeledContent("Status") {
+                Text(mirror.status.label)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Pull Chain from PC") { mirror.pullChain() }
+                .disabled(mirror.status != .connected)
+            Button("Import Presets from PC") { mirror.importPresets() }
+                .disabled(mirror.status != .connected)
+        } header: {
+            Text("Remote")
+        }
+    }
+}
+
 private struct StatusSection: View {
     @ObservedObject var io: AudioIO
     /// bypass だけ読む。SettingsView 側が観測しているので、ここでは観測しない。
