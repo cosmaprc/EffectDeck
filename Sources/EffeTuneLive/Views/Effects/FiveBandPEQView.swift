@@ -329,6 +329,9 @@ struct FiveBandPEQView: View {
     /// 下の一枚に出しているバンド。図を掴むとそこへ移る。
     @State private var selected = 0
 
+    /// 図に重ねるスペクトラムの出し方。上流と同じく保存しない（SpectrumOverlayLayer の頭）。
+    @State private var spectrumMode: ETSpectrumOverlayMode = .after
+
     /// 生成されたカタログは配列の既定値を拾えていない
     /// （Tools/gen_catalog.py:101 で list を float に直せず 0 になる）。
     /// 全部 0Hz のままだと印が左端に重なるので、web 版の初期値
@@ -347,9 +350,13 @@ struct FiveBandPEQView: View {
                 bandPanel
             }
         }
+        // 畳むとこの View ごと消えるので、After / Compare は外に覚えておく。アプリを終うと消える。
+        .etRemembers($spectrumMode, key: "spectrum", node: node.id)
     }
 
     // MARK: 図
+
+    private var probeTaps: EffeTuneDSP.ProbeTaps? { dsp.probeTaps(at: index) }
 
     private var graph: some View {
         FrequencyResponseGraph(
@@ -359,7 +366,11 @@ struct FiveBandPEQView: View {
             decibelRange: -20...20,
             decibelStep: 6,
             height: ETGraphMetrics.height,
-            spectrumTap: dsp.probeTap(at: index),
+            // 段の前後に置いた探り（EffeTuneDSP.probeTaps）。線は段から出た音、
+            // Compare のときだけ入る音も読む。
+            spectrumTap: probeTaps?.after,
+            spectrumBeforeTap: probeTaps?.before,
+            spectrumMode: $spectrumMode,
             onMarkerChanged: { id, hz, db in move(id, hz: hz, db: db) },
             onMarkerSelected: { selected = $0 })
     }

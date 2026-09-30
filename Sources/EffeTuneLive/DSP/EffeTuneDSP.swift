@@ -77,7 +77,13 @@ final class EffeTuneDSP: ObservableObject {
 
     /// 可視化の値を貯める輪の大きさと、1 秒あたりに出す回数。
     /// Telemetry の読み取りバッファも同じ大きさにしてある（Telemetry.swift）。
-    static let telemetryRingBytes: UInt32 = 256 * 1024
+    ///
+    /// 1MB。PEQ の図に重ねる探り（段 1 つに 2 台、FFT 4096 点で枠 16.4KB）が
+    /// 増えても、汲む側が少し止まったくらいでは溢れないように（syncProbes の上の
+    /// probePoints に見積もりがある）。arena は輪と同じ大きさの staging も取る
+    /// （dsp/core/arena.cpp:33-37 の `telemetry_bytes * 2u`）ので、DSP 側で 2MB、
+    /// 読み取りバッファを足して 3MB になる。
+    static let telemetryRingBytes: UInt32 = 1024 * 1024
     static let telemetryHz: Float = 60
 
     /// 何も無いときに置く 1 本。型名は ETChainEditing.defaultType だけに書く。
@@ -136,7 +142,7 @@ final class EffeTuneDSP: ObservableObject {
 
     /// 可視化の枠を出す速さ。**0 にすると書かなくなる**（engine.cpp:552）。
     ///
-    /// 誰も汲んでいないあいだ書き続けると輪（256KB）が溢れて
+    /// 誰も汲んでいないあいだ書き続けると輪（telemetryRingBytes）が溢れて
     /// `Telemetry.droppedFrames` が増える。画面に描いていないなら要らないので、
     /// 汲む側（ETDisplayPump）の出入りに合わせて止める。
     func setTelemetryRate(_ hz: Float) {
@@ -1133,32 +1139,60 @@ final class EffeTuneDSP: ObservableObject {
 
     // MARK: - 図に重ねるための探り
 
-    /// 図にスペクトラムを重ねるためだけに置く Spectrum Analyzer。
+    /// 図にスペクトラムを重ねるためだけに置く Spectrum Analyzer。段 1 つに 2 台
+    /// （入口と出口）。上流のオーバーレイが段の前後で音を横取りするのと同じ位置
+    /// （plugins/audio-processor.js:5142-5157 が入口、:5275-5307 が出口）。
     ///
     /// **chain には入れない。** PipelineStore は chain をそのまま保存形式へ落とす
-    /// ので、入れるとプリセットと共有リンクに上流に無い段が 1 本生える。
-    /// descriptor（publish / republish）にだけ足す。
+    /// ので、入れるとプリセットと共有リンクに上流に無い段が生える。
+    /// descriptor（publish / republish）にだけ足す（ETChainEditing.descriptors）。
     ///
     /// Spectrum Analyzer のカーネルは音を素通しする
-    /// （dsp/plugins/analyzer/spectrum_analyzer/kernel.cpp:173-209 の process は
+    /// （dsp/plugins/analyzer/spectrum_analyzer/kernel.cpp:190-239 の process は
     ///   audio を読むだけで一度も書かない）ので、間に挟んでも音は変わらない。
     private struct Probe {
         var instance: UInt32
         var tapId: UInt32
     }
 
+    private struct ProbePair {
+        /// 段に入る音（相手の直前）。
+        var before: Probe
+        /// 段から出た音（相手の直後）。
+        var after: Probe
+    }
+
+    /// 図に重ねる音の tap。before = 段に入る音、after = 段から出た音。
+    struct ProbeTaps: Equatable {
+        var before: UInt32
+        var after: UInt32
+    }
+
     /// 段の id → 探り。
-    private var probes: [UUID: Probe] = [:]
+    private var probes: [UUID: ProbePair] = [:]
 
     /// 図に音を重ねる段の型。上流の対応表（plugins/spectrum-overlay.js:17-37）から、
     /// こちらに専用の図があるものだけ。
     private static let probedTypes: Set<String> = ["FiveBandPEQPlugin", "FifteenBandPEQPlugin"]
     private static let probeType = "SpectrumAnalyzerPlugin"
 
+    /// 探りの Points。上流のオーバーレイは FFT 4096 点固定
+    /// （spectrum-overlay.js:2-3 の `FFT_POINTS = 12`、`FFT_SIZE = 1 << FFT_POINTS`）。
+    ///
+    /// 前は 10（1024 点）に落としていた。枠 16KB が 60Hz で出てテレメトリの輪が溢れる、
+    /// という見立てだったが、**出る回数はそれより少ない。**カーネルは新しい解析が
+    /// できた回だけ書き（kernel.cpp:241-254 の frame_generation_）、解析の間隔は
+    /// FFT の半分と 1/30 秒の長い方（同 :359-368、:48 の kMaximumFrameRateHz = 30）。
+    /// 12 なら 2048 サンプルごと＝48kHz で 23.4 回/秒 × 16.4KB ≒ 384KB/秒 が 1 台ぶん。
+    /// PEQ 1 枚に 2 台で 768KB/秒、画面の 1 回（60Hz）あたり約 13KB。
+    /// 輪は 1MB にした（telemetryRingBytes）ので、PEQ を 4 枚並べても
+    /// 汲む側が 0.3 秒止まるまでは溢れない。
+    private static let probePoints: Float = 12
+
     /// その段の図に重ねる音の tap。まだ無ければ nil。
-    func probeTap(at index: Int) -> UInt32? {
-        guard chain.indices.contains(index) else { return nil }
-        return probes[chain[index].id]?.tapId
+    func probeTaps(at index: Int) -> ProbeTaps? {
+        guard chain.indices.contains(index), let pair = probes[chain[index].id] else { return nil }
+        return ProbeTaps(before: pair.before.tapId, after: pair.after.tapId)
     }
 
     /// 要る探りを作り、要らなくなったものを外す。publish のたびに呼ぶ。
@@ -1172,52 +1206,65 @@ final class EffeTuneDSP: ObservableObject {
         guard engine != 0, ready else { return [] }
 
         // バスを分けている段は、engine.cpp:978-990 が出口で足し込む＝他の音と混ざる。
-        // 「その段に入る音」と呼べるのは入口と出口が同じバスのときだけ。
-        let want = Set(chain.filter {
+        // 「その段に入る音」「その段から出た音」と呼べるのは入口と出口が同じバスのときだけ。
+        let candidates = chain.filter {
             Self.probedTypes.contains($0.spec.type)
                 && $0.instance != 0
                 && $0.inputBus == $0.outputBus
-        }.map(\.id))
+        }.map(\.id)
+        // **人が置いた段を descriptor から押し出さない。** ETPipeline_Publish は
+        // ET_PIPE_MAX_NODES（ETPipeline.h:30、64）を越えた分を黙って切る
+        // （ETPipeline.c:299）。探りは段 1 つに 2 本足すので、残りの枠に収まる数だけ、
+        // 鎖の前から順に付ける。
+        let placed = chain.filter { $0.instance != 0 || $0.isExternal }.count
+        let budget = max(0, (Int(ET_PIPE_MAX_NODES) - placed) / 2)
+        let want = Set(candidates.prefix(budget))
 
         var doomed: [UInt32] = []
         for id in Array(probes.keys) where !want.contains(id) {
-            if let probe = probes[id] { doomed.append(probe.instance) }
+            if let pair = probes[id] { doomed += [pair.before.instance, pair.after.instance] }
             probes[id] = nil
         }
 
         guard let spec = ETCatalog.first(where: { $0.type == Self.probeType }) else { return doomed }
         for id in want where probes[id] == nil {
-            let inst = Self.probeType.withCString { et_instance_create(engine, $0) }
-            guard inst != 0 else { continue }
-            let tap = nextTap
-            nextTap &+= 1
-            guard et_instance_set_tap(engine, inst, tap) == ET_OK else {
-                // どの descriptor にも載っていないが、壊すと鎖ごと作り直される
-                // （invalidatePipeline）ので、外した探りと一緒に retire() へ回す。
-                // ここ（publish の中・メイン）で音のスレッドを待つと、JSFX の長い
-                // ブロックの間ずっと画面が止まる。
-                doomed.append(inst)
+            // 2 台そろわなければ置かない。片方だけ作れたものは、どの descriptor にも
+            // 載っていないが、壊すと鎖ごと作り直される（invalidatePipeline）ので
+            // 外した探りと一緒に retire() へ回す。次の publish でまた作り直す。
+            let before = makeProbe(spec, doomed: &doomed)
+            let after = makeProbe(spec, doomed: &doomed)
+            guard let before, let after else {
+                if let before { doomed.append(before.instance) }
+                if let after { doomed.append(after.instance) }
                 continue
             }
-            // **Points を落とす。** 既定は 12（FFT 4096）で、枠が
-            // `12 + 2049*8` = 16KB ある。それが 60Hz で出て、探りは段の数だけ
-            // 増えるので、テレメトリの輪（256KB）が溢れて枠が捨てられる
-            // （診断の Telemetry dropped が増える）。
-            // 10（FFT 1024、bin 513、枠 4KB）にする。PEQ の曲線に重ねるのは
-            // 1/12 オクターブに均した線で、20Hz〜20kHz を対数で 300pt 弱に
-            // 畳んでから描く（ETSpectrumSmoothing）。4096 本の分解能は要らない。
-            var v = spec.defaults
-            if let pt = spec.params.first(where: { $0.key == "pt" }),
-               v.indices.contains(pt.offset) {
-                v[pt.offset] = 10
-            }
-            _ = v.withUnsafeBufferPointer {
-                et_instance_set_params(engine, inst, $0.baseAddress,
-                                       UInt32(spec.floatCount), spec.paramsHash, 0)
-            }
-            probes[id] = Probe(instance: inst, tapId: tap)
+            probes[id] = ProbePair(before: before, after: after)
         }
         return doomed
+    }
+
+    /// 探りを 1 台作る。作れなければ nil（作りかけの instance は doomed へ積む）。
+    private func makeProbe(_ spec: ETEffect, doomed: inout [UInt32]) -> Probe? {
+        let inst = Self.probeType.withCString { et_instance_create(engine, $0) }
+        guard inst != 0 else { return nil }
+        let tap = nextTap
+        nextTap &+= 1
+        guard et_instance_set_tap(engine, inst, tap) == ET_OK else {
+            // ここ（publish の中・メイン）で壊すと音のスレッドを待つことになり、
+            // JSFX の長いブロックの間ずっと画面が止まる。retire() に任せる。
+            doomed.append(inst)
+            return nil
+        }
+        var v = spec.defaults
+        if let pt = spec.params.first(where: { $0.key == "pt" }),
+           v.indices.contains(pt.offset) {
+            v[pt.offset] = Self.probePoints
+        }
+        _ = v.withUnsafeBufferPointer {
+            et_instance_set_params(engine, inst, $0.baseAddress,
+                                   UInt32(spec.floatCount), spec.paramsHash, 0)
+        }
+        return Probe(instance: inst, tapId: tap)
     }
 
     private func pushParams(_ node: Node) {
@@ -1271,10 +1318,13 @@ final class EffeTuneDSP: ObservableObject {
         // ノードが混ざっている＝画面の本数だけ音が通っていない。
         // Section は必ず descriptor から外れるので、先に引いて dead と分ける。
         // 分けないと Section を 1 本置くたびに dead が 1 増えて、取りこぼしと見分けが付かない。
+        // 探り（enabled 2）は人が置いた段ではないので、どの数にも入れない
+        // （入れると PEQ 1 枚ごとに dead が 2 減り、active が 2 増える）。
+        let placed = nodes.filter { $0.enabled != 2 }
         let sections = chain.filter(\.isSection).count
-        let dead = chain.count - sections - nodes.count
-        let active = nodes.filter { $0.enabled != 0 && $0.sectionGate != 0 }.count
-        let gated = nodes.filter { $0.enabled != 0 && $0.sectionGate == 0 }.count
+        let dead = chain.count - sections - placed.count
+        let active = placed.filter { $0.enabled != 0 && $0.sectionGate != 0 }.count
+        let gated = placed.filter { $0.enabled != 0 && $0.sectionGate == 0 }.count
         let pub = "publish nodes=\(nodes.count) chain=\(chain.count) sections=\(sections) dead=\(dead) active=\(active) gated=\(gated) taps=\(chain.map { String($0.tapId) }.joined(separator: ",")) types=\(chain.map(\.spec.type).joined(separator: ","))"
         log.notice("\(pub, privacy: .public)")
         ETLogTap.record(pub)
@@ -1286,7 +1336,9 @@ final class EffeTuneDSP: ObservableObject {
     /// （探りは相手の直前・enabled 2、上流が受けない Ch の段は切）。
     /// ここは C の ETPipeNode へ写すだけで、publish と republish が同じものを出す。
     private func pipeNodes() -> [ETPipeNode] {
-        ETChainEditing.descriptors(chain: chain, probes: probes.mapValues(\.instance)).map { d in
+        ETChainEditing.descriptors(chain: chain,
+                                   probes: probes.mapValues(\.before.instance),
+                                   afterProbes: probes.mapValues(\.after.instance)).map { d in
             ETPipeNode(instance: d.instance,
                        enabled: d.enabled,
                        inputBus: d.inputBus,

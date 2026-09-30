@@ -331,6 +331,9 @@ struct FifteenBandPEQView: View {
     /// 下の一枚に出しているバンド。図を掴むとそこへ移る。
     @State private var selected = 0
 
+    /// 図に重ねるスペクトラムの出し方。上流と同じく保存しない（SpectrumOverlayLayer の頭）。
+    @State private var spectrumMode: ETSpectrumOverlayMode = .after
+
     @State private var importing = false
     @State private var importFailure: String?
 
@@ -355,9 +358,13 @@ struct FifteenBandPEQView: View {
         }
         // 畳むとこの View ごと消えるので、選んでいるバンドは外に覚えておく。
         .etRemembers($selected, key: "band", node: node.id)
+        // 畳んでも・一覧を払っても After / Compare が戻らないように。アプリを終うと消える。
+        .etRemembers($spectrumMode, key: "spectrum", node: node.id)
     }
 
     // MARK: 図
+
+    private var probeTaps: EffeTuneDSP.ProbeTaps? { dsp.probeTaps(at: index) }
 
     private var graph: some View {
         FrequencyResponseGraph(
@@ -367,7 +374,11 @@ struct FifteenBandPEQView: View {
             decibelRange: -20...20,
             decibelStep: 6,
             height: 190,
-            spectrumTap: dsp.probeTap(at: index),
+            // 段の前後に置いた探り（EffeTuneDSP.probeTaps）。線は段から出た音、
+            // Compare のときだけ入る音も読む。
+            spectrumTap: probeTaps?.after,
+            spectrumBeforeTap: probeTaps?.before,
+            spectrumMode: $spectrumMode,
             onMarkerChanged: { id, hz, db in move(id, hz: hz, db: db) },
             onMarkerSelected: { selected = $0 })
     }
