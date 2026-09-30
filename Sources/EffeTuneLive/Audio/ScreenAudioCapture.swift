@@ -25,6 +25,7 @@ import Combine
 import ScreenCaptureKit
 import CoreMedia
 import AudioToolbox
+import AVFoundation
 import os
 
 final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPickerObserver,
@@ -39,12 +40,19 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
 
     private let log = Logger(subsystem: "ai.nemut.effetune", category: "capture")
 
-    /// リンクは 48kHz 固定。この版はリサンプルしない。
-    private static let linkRate = 48000.0
+    /// 出力のレートが取れないときに頼むレート。
+    private static let fallbackRate = 48000.0
 
     // ---- 状態（ロックで守る） ----
     private let lock = NSLock()
     private var current: SCStream?
+    /// いまのストリームに頼んだレート。**取り込みは出力のレートで頼む。**
+    /// 出力（AVAudioSession のハードウェア）と同じレートで受ければ、鎖の手前で
+    /// リサンプルせずに済む。iOS ではストリームの設定を後から変えられない
+    /// （updateConfiguration が無い）ので、出力のレートが変わったら作り直す。
+    private var currentRate = 0.0
+    /// 作り直しに使う、最後にピッカーで選ばれた中身。
+    private var lastFilter: SCContentFilter?
 
     /// main だけが触る。
     private var observerAdded = false
@@ -101,6 +109,27 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
 
     // MARK: - ストリーム
 
+    /// 出力のレートが変わったら（AudioIO.start() が組み直すたびに呼ぶ）、
+    /// 取り込み中ならそのレートでストリームを作り直す。同じなら何もしない。
+    func followOutputRate(_ rate: Double) {
+        let want = Self.requestRate(rate)
+        lock.lock()
+        let running = current != nil
+        let have = currentRate
+        let filter = lastFilter
+        lock.unlock()
+        guard running, let filter, want != have else { return }
+        let line = "sck rate follow \(have) -> \(want)"
+        log.notice("\(line, privacy: .public)")
+        ETLogTap.record(line)
+        startStream(filter: filter)
+    }
+
+    /// 頼むレート。出力のレートを整数に丸めたもの。取れなければ 48k。
+    private static func requestRate(_ rate: Double) -> Double {
+        rate > 0 ? rate.rounded() : fallbackRate
+    }
+
     private func startStream(filter: SCContentFilter) {
         // 前のストリームを外す（選び直し）。
         lock.lock()
@@ -109,10 +138,11 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
         lock.unlock()
         old?.stopCapture { _ in }
 
+        let rate = Self.requestRate(AVAudioSession.sharedInstance().sampleRate)
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
-        config.sampleRate = Int(Self.linkRate)
+        config.sampleRate = Int(rate)
         config.channelCount = 2
         config.width = 2
         config.height = 2
@@ -127,6 +157,8 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
 
         lock.lock()
         current = stream
+        currentRate = rate
+        lastFilter = filter
         lock.unlock()
 
         // 統計と「最初の 1 本」の札は、この後に届くサンプルより先に戻しておく
@@ -332,9 +364,13 @@ final class ETScreenAudioCapture: NSObject, ObservableObject, SCContentSharingPi
             log.notice("\(line, privacy: .public)")
             ETLogTap.record(line)
         }
-        if !loggedRate && asbd.mSampleRate != Self.linkRate {
+        lock.lock()
+        let asked = currentRate
+        lock.unlock()
+        if !loggedRate && asbd.mSampleRate != asked {
             loggedRate = true
-            let line = "sck rate \(asbd.mSampleRate) != 48000, link is fixed at 48k (no resampling)"
+            // 頼んだレートで来なかった。出力と食い違うので音程と速さがずれる。
+            let line = "sck rate \(asbd.mSampleRate) != requested \(asked) (no resampling)"
             log.notice("\(line, privacy: .public)")
             ETLogTap.record(line)
         }

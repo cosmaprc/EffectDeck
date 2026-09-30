@@ -412,7 +412,11 @@ final class AudioIO: ObservableObject {
         // 音程と速さがずれて、受信の輪も溜まるか枯れるかする。
         // 止めると打つ手が無くなるので鳴らすが、黙って進めない
         // （status と log と Settings の Device に出る）。
-        let rateOK = ETAudioSessionRules.matchesLinkRate(sr)
+        // Screen Capture は出力のレートで取り込み直すので、リンクの 48k とは比べない
+        // （ETScreenAudioCapture.followOutputRate）。頼んだレートで来なければ向こうが書く。
+        let capture = ETCaptureRing.shared.useCapture
+        if capture { ETScreenAudioCapture.shared.followOutputRate(sr) }
+        let rateOK = capture || ETAudioSessionRules.matchesLinkRate(sr)
         if !rateOK {
             log.notice("device rate \(sr) != 48000, link is fixed at 48k")
         }
@@ -583,7 +587,8 @@ final class AudioIO: ObservableObject {
         processingRate = sr * Double(factor)
         outputChannels = channels
         resamplerLatency = Int(ETResampler_LatencySamples(state.resampler))
-        status = ETAudioSessionRules.runningStatus(sampleRate: sr)
+        status = capture ? ETAudioSessionRules.runningStatus(sampleRate: ETAudioSessionRules.linkSampleRate)
+                         : ETAudioSessionRules.runningStatus(sampleRate: sr)
         refreshRoute()
         updateNowPlaying()
         log.notice("start sr=\(sr) x\(factor) ch=\(channels) route=\(self.route, privacy: .public)")

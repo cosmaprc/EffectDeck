@@ -169,8 +169,11 @@ struct SettingsView: View {
             // **基準を最初に置く。**この節の spls がどのレートで数えた数かは、
             // 入口のレートが見えていないと決められない。届く形は決まっていて
             // 選べないので、読むだけの行にする。
+            // Screen Capture は出力のレートで取り込む（ETScreenAudioCapture.followOutputRate）。
             LabeledContent("Input") {
-                Text("48 kHz · 32-bit float")
+                Text(prefs.audioSource == .screenCapture
+                     ? String(format: "%g kHz · 32-bit float", io.sampleRate / 1000)
+                     : "48 kHz · 32-bit float")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
