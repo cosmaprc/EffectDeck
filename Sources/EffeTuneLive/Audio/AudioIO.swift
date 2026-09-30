@@ -453,8 +453,12 @@ final class AudioIO: ObservableObject {
             // 1. リンクから受ける（インターリーブ・48kHz）
             //    撮影のときはリンクの代わりに作り物を流す。シミュレータには
             //    拡張が無く、そのままだと止まった画面しか撮れないため。
+            //    設定で Screen Capture を選んでいれば、ScreenCaptureKit の輪から読む
+            //    （ETCaptureRing.useCapture。切り替えでは組み直さない）。
             if let mock = state.mock {
                 mock.fill(state.interleaved, frames: n)
+            } else if ETCaptureRing.shared.useCapture {
+                _ = ETCaptureRing.shared.readInterleaved(state.interleaved, frames: UInt32(n))
             } else {
                 _ = ETLinkReceiver.shared.readInterleaved(state.interleaved, frames: UInt32(n))
             }
@@ -646,7 +650,7 @@ final class AudioIO: ObservableObject {
             let external = (0..<ET_EXTERNAL_MAX_PROCESSORS).map {
                 "\($0):\(ETPipeline_ExternalProcessCount(UInt32($0)))/\(ETPipeline_ExternalLastStatus(UInt32($0)))"
             }.joined(separator: ",")
-            let line = "tick out=\(route) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue) ports=\(ports) ovr=\(overriding) applied=\(applied) active=\(ETPipeline_ActiveNodes()) chain=\(EffeTuneDSP.shared.chain.count) peer=\(hasPeer) recv=\(received) load=\(load) cfgStatus=\(ETPipeline_LastStatus()) proc=\(render?.pipeStatus ?? 0) ext=\(external) lat=\(ETPipeline_Latency()) rlat=\(resamplerLatency)"
+            let line = "tick out=\(route) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue) ports=\(ports) ovr=\(overriding) applied=\(applied) active=\(ETPipeline_ActiveNodes()) chain=\(EffeTuneDSP.shared.chain.count) src=\(Preferences.shared.audioSource.rawValue) peer=\(hasPeer) recv=\(received) load=\(load) cfgStatus=\(ETPipeline_LastStatus()) proc=\(render?.pipeStatus ?? 0) ext=\(external) lat=\(ETPipeline_Latency()) rlat=\(resamplerLatency)"
             log.notice("\(line, privacy: .public)")
             // **無線だとログが取れない。**
             // log stream --device はこの Xcode で無くなり、devicectl にも
@@ -683,7 +687,10 @@ final class AudioIO: ObservableObject {
 
         // 撮影のときは繋がっている扱いにする。そうしないと
         // 「No audio yet」の帯が出たままで、鳴っている画面が撮れない。
-        let nowPeer = ETLinkReceiver.shared.hasPeer || ETMockSource.enabled
+        // 取り込み元が Screen Capture のときは、繋がっている＝取り込み中。
+        let useCapture = ETCaptureRing.shared.useCapture
+        let nowPeer = (useCapture ? ETCaptureRing.shared.capturing : ETLinkReceiver.shared.hasPeer)
+            || ETMockSource.enabled
         if hasPeer != nowPeer {
             // **繋ぎ目そのものを撃つ。**
             // tick は 20 ブロックに 1 回（約 6 秒）なので、1.5 秒しか続かない
@@ -694,17 +701,20 @@ final class AudioIO: ObservableObject {
             let up = ProcessInfo.processInfo.systemUptime
             let line = String(format: "peer %@ t=%.3f recv=%llu",
                               nowPeer ? "up" : "down", up,
-                              ETLinkReceiver.shared.receivedFrames)
+                              useCapture ? ETCaptureRing.shared.receivedFrames
+                                         : ETLinkReceiver.shared.receivedFrames)
             log.notice("\(line, privacy: .public)")
             ETLogTap.record(line)
             if ETConsoleLog.on { print(line) }
             hasPeer = nowPeer
         }
 
-        let nowReceived = ETLinkReceiver.shared.receivedFrames
+        let nowReceived = useCapture ? ETCaptureRing.shared.receivedFrames
+                                     : ETLinkReceiver.shared.receivedFrames
         if received != nowReceived { received = nowReceived }
 
-        let nowBuffered = ETLinkReceiver.shared.bufferedFrames
+        let nowBuffered = useCapture ? ETCaptureRing.shared.bufferedFrames
+                                     : ETLinkReceiver.shared.bufferedFrames
         if bufferedFrames != nowBuffered { bufferedFrames = nowBuffered }
 
         let session = AVAudioSession.sharedInstance()

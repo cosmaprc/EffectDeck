@@ -50,6 +50,19 @@ final class Preferences: ObservableObject {
         didSet { save(jsfxCanvasMode.rawValue, Key.jsfxCanvasMode) }
     }
 
+    /// 他のアプリの音の取り込み元。
+    ///
+    /// **組み直さない。**音のスレッドが読む札（ETCaptureRing.useCapture）を書くだけで、
+    /// 次の枠から読み先が変わる。Media Device へ戻すときは取り込みも止める
+    /// （鳴らない ScreenCaptureKit のストリームを握り続けない）。
+    @Published var audioSource: ETAudioSource {
+        didSet {
+            save(audioSource.rawValue, Key.audioSource)
+            ETCaptureRing.shared.useCapture = (audioSource == .screenCapture)
+            if audioSource == .mediaDevice { ETScreenAudioCapture.shared.stop() }
+        }
+    }
+
     /// しきい値だけが変わったときに呼ばれる。組み直さずに値を差し替える。
     var onSilenceThresholdChange: (() -> Void)?
 
@@ -73,6 +86,9 @@ final class Preferences: ObservableObject {
         syncVisualsToAudio = d.bool(forKey: Key.syncVisualsToAudio)
         // 既定は Adaptive（PreferencesValues.jsfxCanvasMode の注記）。
         jsfxCanvasMode = PreferencesValues.jsfxCanvasMode(d.string(forKey: Key.jsfxCanvasMode))
+        audioSource = PreferencesValues.audioSource(d.string(forKey: Key.audioSource))
+        // init の代入では didSet が走らないので、札はここで立てる。
+        ETCaptureRing.shared.useCapture = (audioSource == .screenCapture)
 
         // **init の代入では didSet が走らない。**
         // そのため、保存値が true でも起動直後だけ画面が落ちていた。

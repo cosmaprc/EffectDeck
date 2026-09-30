@@ -1,5 +1,6 @@
 #import "ETNames.h"
 #import "LocalLink.h"
+#import "ETCaptureRing.h"
 #import "ETPipeline.h"
 #import "ETResample.h"
 #import "ETPreviewTone.h"

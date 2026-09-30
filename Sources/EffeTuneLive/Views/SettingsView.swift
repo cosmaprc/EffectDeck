@@ -54,6 +54,7 @@ struct SettingsView: View {
                     // 以前は Processing と Power のあいだに見た目の設定
                     // （Sync Visuals・JSFX canvas）が挟まっていて、音の話が
                     // 2 つに割れていた。種類ごとに固めて、読むだけの数字を末尾に置く。
+                    source
                     processing
                     power
                     graphs
@@ -80,6 +81,25 @@ struct SettingsView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+        }
+    }
+
+    /// **入口。**他のアプリの音をどこから受けるか。Processing の前（音の通る順）。
+    /// 切り替えても組み直さない（Preferences.audioSource）。
+    /// Screen Capture のときだけ、取り込みの開始・停止を出す。
+    private var source: some View {
+        Section {
+            ETSegmentedChoice(title: "Audio Source",
+                              values: ETAudioSource.allCases,
+                              label: \.label,
+                              selection: Binding(get: { prefs.audioSource },
+                                                 set: { if $0 != prefs.audioSource {
+                                                            prefs.audioSource = $0 } }))
+            if prefs.audioSource == .screenCapture && ETScreenAudioCapture.isAvailable {
+                ScreenCaptureRow()
+            }
+        } header: {
+            Text("Input")
         }
     }
 
@@ -442,6 +462,22 @@ private struct ProcessingTimeRow: View {
         case .normal: return AnyShapeStyle(.primary)
         case .high:   return AnyShapeStyle(.orange)
         case .over:   return AnyShapeStyle(.red)
+        }
+    }
+}
+
+/// 取り込みの開始・停止と、直近の失敗。ETScreenAudioCapture を観測するのはこの行だけ。
+private struct ScreenCaptureRow: View {
+    @ObservedObject private var capture = ETScreenAudioCapture.shared
+
+    var body: some View {
+        Button(capture.capturing ? "Stop Capture" : "Start Capture") {
+            if capture.capturing { capture.stop() } else { capture.present() }
+        }
+        if let error = capture.lastError {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 }

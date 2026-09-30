@@ -95,6 +95,25 @@ enum ETLatency: String, CaseIterable, Identifiable {
     var bufferDuration: TimeInterval { Double(frames) / 48000 }
 }
 
+/// 他のアプリの音を**どこから受けるか**。
+///
+/// 既定は Media Device（拡張から TCP で受ける従来の経路）。Screen Capture は
+/// ScreenCaptureKit のシステム音。**切り替えてもエンジンは組み直さない**
+/// （音のスレッドが ETCaptureRing.useCapture を読んで読み先を変えるだけ）。
+enum ETAudioSource: String, CaseIterable, Identifiable {
+    // **並びは既定を左に。**allCases がそのまま札の順になる。
+    case mediaDevice
+    case screenCapture
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .mediaDevice:   return "Media Device"
+        case .screenCapture: return "Screen Capture"
+        }
+    }
+}
+
 /// `@gfx` の canvas を**どう貼るか**。
 ///
 /// **描く寸法はどちらも同じ**（スクリプトが宣言した `gfx_w` / `gfx_h`）。
@@ -131,6 +150,7 @@ enum PreferencesValues {
         static let awake = "pref.awake"
         static let syncVisualsToAudio = "pref.syncVisualsToAudio"
         static let jsfxCanvasMode = "pref.jsfxCanvasMode"
+        static let audioSource = "pref.audioSource"
     }
 
     /// 無音と見なす大きさの範囲。EffeTune の power-policy.js が持っている
@@ -160,6 +180,11 @@ enum PreferencesValues {
     static func silenceThreshold(_ stored: Any?) -> Double {
         guard let db = stored as? Double, !db.isNaN else { return silenceDefault }
         return min(max(db, silenceRange.lowerBound), silenceRange.upperBound)
+    }
+
+    /// 保存した取り込み元。無い・知らない値なら Media Device。
+    static func audioSource(_ stored: Any?) -> ETAudioSource {
+        ETAudioSource(rawValue: stored as? String ?? "") ?? .mediaDevice
     }
 
     /// 保存した canvas の貼り方。無い・知らない値なら Adaptive。

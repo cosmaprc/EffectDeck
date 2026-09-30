@@ -96,6 +96,7 @@ targets:
       - sdk: AudioToolbox.framework
       - sdk: CoreAudioKit.framework
       - sdk: CoreText.framework
+      - sdk: ScreenCaptureKit.framework
       # **拡張をここに同梱する。**
       # 以前は別のアプリ（Bridge）に入れていた。
       # 拡張を同梱したアプリは AVAudioSession が '!pla' で拒否される、
@@ -195,6 +196,8 @@ targets:
           - "ETPreviewTone.*"
           - "ETJSFXHost.*"
           - "ETLICEFont.*"
+          # 取り込みは本体だけ（ScreenCaptureKit）。拡張は積まない。
+          - "ETCaptureRing.*"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.nemut.effetune.extension

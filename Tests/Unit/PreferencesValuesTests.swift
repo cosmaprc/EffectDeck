@@ -42,6 +42,16 @@ final class PreferencesValuesTests: XCTestCase {
         }
     }
 
+    func testAudioSourceDefaultsToMediaDevice() {
+        // 既定が左。従来の経路（Media Device）が変わらないこと。
+        XCTAssertEqual(ETAudioSource.allCases, [.mediaDevice, .screenCapture])
+        for source in ETAudioSource.allCases {
+            XCTAssertEqual(PreferencesValues.audioSource(source.rawValue), source)
+        }
+        XCTAssertEqual(PreferencesValues.audioSource(nil), .mediaDevice)
+        XCTAssertEqual(PreferencesValues.audioSource("airplay"), .mediaDevice)
+    }
+
     /// 保存が無い・知らない値・型が違うときは既定。
     func testUnknownStoredValuesFallBackToDefaults() {
         XCTAssertEqual(PreferencesValues.processingRate(nil), .r96)
