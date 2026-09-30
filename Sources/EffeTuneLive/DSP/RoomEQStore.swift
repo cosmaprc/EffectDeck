@@ -144,6 +144,21 @@ final class RoomEQStore: ObservableObject {
         return design(node: node)
     }
 
+    /// 既定へ戻す。上流の Reset は足した時の getParameters() を丸ごと当てる
+    /// （pipeline-item-builder.js:392-410）。そこには設計の設定（pm / tp / sm / … / bs）と
+    /// 測定の割り当て（ms / mn と ms0-15 / mn0-15、room_eq.js:1085-1111）が全部入っていて、
+    /// 足した時は空（:911-914）なので、測定が外れて補正は素通しに戻る。
+    /// lt / fd / dy / gn は呼び手（EffeTuneDSP.resetParams）が値として戻している。
+    func reset(node: EffeTuneDSP.Node) {
+        guard let session = sessions[node.id] else { return }
+        session.correction.clear(engine: EffeTuneDSP.shared.engine, instance: node.instance)
+        update(node.id) {
+            $0.config = RoomEQConfig()
+            $0.sources = []
+            $0.measurement = ""
+        }
+    }
+
     static let notRouted =
         "This effect is not routed to any channel. Change Routing first."
 

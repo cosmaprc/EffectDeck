@@ -79,6 +79,9 @@ struct IRReverbView: View {
         .sheet(isPresented: $browsing) {
             IRLibraryView { entry in apply(entry.url, id: entry.id) }
         }
+        // 下ごしらえや cm / lt / cr で DSP が入れ直すと、新しい 1 行は assetInfo に入る。
+        // この画面で入れたときの `loaded` が残っていると前の 1 行を出し続けるので捨てる。
+        .onChange(of: dsp.assetInfo[node.id]) { _, _ in loaded = nil }
     }
 
     // MARK: IR を取り込む

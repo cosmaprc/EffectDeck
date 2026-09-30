@@ -982,6 +982,9 @@ final class EffeTuneDSP: ObservableObject {
         case "CrosstalkCancellationPlugin":
             // ll / lr / rl / rr は空、設計の指示は初期値（crosstalk_cancellation.js:46-55）。
             CrosstalkStore.shared.reset(node: chain[index])
+        case "RoomEqPlugin":
+            // 測定の割り当て（ms0-15）は空、設計の設定は初期値（room_eq.js:880-914）。
+            RoomEQStore.shared.reset(node: chain[index])
         default:
             break
         }
