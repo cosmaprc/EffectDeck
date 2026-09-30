@@ -229,14 +229,36 @@ final class EffeTuneDSP: ObservableObject {
     private func applyAddDefaults(_ node: inout Node) {
         switch node.spec.type {
         case BassManagementDesigners.type:
-            // bass_management.js:23, 42-45。Ch は All、処理幅ぶんの Role を Managed に。
-            // su は 0 のままなので、Sub を選ぶまでカーネルは素通し（kernel.cpp:455-462）。
+            // bass_management.js:23。Ch は All。Reset では触らない
+            // （上流は defaultParameters から channel を外す。plugin-manager.js:47）。
             node.channelSpec = -2
+        default:
+            break
+        }
+        applyConstructorValues(&node)
+    }
+
+    /// 上流の constructor が params.json の既定から外している**値**。
+    /// 足すときと Reset のときの両方に掛ける。上流の Reset は生成時に控えた
+    /// getParameters()（constructor の値）へ戻すため（plugin-manager.js:41,
+    /// pipeline-item-builder.js:398-401）、足した直後と同じ姿に戻る。
+    private func applyConstructorValues(_ node: inout Node) {
+        switch node.spec.type {
+        case BassManagementDesigners.type:
+            // bass_management.js:42-45。処理幅ぶんの Role を Managed に。
+            // su は 0 のままなので、Sub を選ぶまでカーネルは素通し（kernel.cpp:455-462）。
             guard let roles = node.spec.params.first(where: { $0.key == "ro" }) else { return }
             for ch in 0..<min(roles.count, Int(maxChannels))
             where node.values.indices.contains(roles.offset + ch) {
                 node.values[roles.offset + ch] = 1
             }
+        case "RoomEqPlugin":
+            // 既定はレイテンシ最小（pm='min'）で、fd は 0 を送る
+            // （room_eq.js:883, :1061）。params.json の 16384 は使わない。
+            // 設計が走れば RoomEQStore が正しい値で上書きする。
+            guard let fd = node.spec.params.first(where: { $0.key == "fd" }),
+                  node.values.indices.contains(fd.offset) else { return }
+            node.values[fd.offset] = 0
         default:
             break
         }
@@ -901,6 +923,8 @@ final class EffeTuneDSP: ObservableObject {
         guard chain.indices.contains(index) else { return }
         let before = instanceLatency(of: chain[index])
         chain[index].values = chain[index].spec.defaults
+        // 上流の Reset は constructor の値へ戻すので、足した直後と同じ既定を掛ける。
+        applyConstructorValues(&chain[index])
         // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
         // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
         chain[index].design = [:]

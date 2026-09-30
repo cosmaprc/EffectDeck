@@ -105,13 +105,12 @@ enum ETNoteLayout: String, CaseIterable, Identifiable {
 /// （note_spectrogram.js:160-164）、DSP のパラメータではないので params.json に無い。
 /// こちらは画面の @State で持つだけで、保存も DSP への送信もしない。
 ///
-/// 既定は上流（同 :86-90）と 3 つ違う。上流は ly が Horizontal、vl が true、ts が 2。
-/// 向きと Volume は初手の見た目が大きく変わるので、いまの姿のまま Vertical・切にしてある。
+/// 既定は上流（同 :125-127）にそろえてある。ly は Horizontal、vl は true、ts は 2。
 struct ETNoteDisplay: Equatable {
     var color: ETNoteColor = .normal
     var resolution: ETNoteResolution = .semitone
-    var layout: ETNoteLayout = .vertical
-    var volume: Bool = false
+    var layout: ETNoteLayout = .horizontal
+    var volume: Bool = true
     /// 秒。上流 :726-729 の 1〜10、刻み 1。
     var timeSpan: Double = 2
 
