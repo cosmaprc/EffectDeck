@@ -128,10 +128,13 @@ layout on a phone and the dial geometry need an eye.
   dropdowns, library and SQLite catalog, MIDI app targets, the worklet's `gate` crossfade
   and `assetPending`, the Room EQ host-plot refactor, `et_rhythm_analyzer_warm_up`
   (`__EMSCRIPTEN__` only), the offline generators (`learn_targets.py`, `compact_model.py`).
-- Showing a version mismatch when connecting to the PC (the remote control): not part of
-  this follow. It belongs to `feature/remote-poc` and the fork; the proposal is to add
-  `dsp` and the loadable `effects` to the PC's hello and to mark and refuse chain items the
-  other side lacks. Untouched.
+- Showing a version mismatch when connecting to the PC (the remote control): not part of this
+  branch. It is done on `feature/remote-poc` (merged with this branch) and the fork
+  (`poc/remote-control`): the PC's hello reply carries `dsp` and `effects`, EffectDeck's hello
+  carries `dsp`; a Version row in Remote Control shows the difference, effects the PC lacks are
+  not sent (chain or presets) and their cards show the unsupported text. A PC that does not
+  report `effects` is compared by `dsp` only, and one that reports neither is not refused anything.
+- Sub Synth graph: the dry curve is scaled by Dry Level (upstream `_dryResponseDb`).
 
 ## Handoff
 
@@ -140,5 +143,5 @@ On macOS, copy the tree with `Vendor/effetune` at `v2.12.0` unpatched, run
 tree for this work is `effetune-2120` (a throwaway; the scripts `~/gui_compile_2120.sh` and
 `~/gui_logic_2120.sh` point at it).
 
-The remote PoC fork is still based on 2.11.0: a 2.12 EffectDeck can push Analog Meter,
-Rhythm Analyzer or Tonal Balance EQ to a PC that does not know them.
+The remote PoC fork is still based on 2.11.0 (it reports `effects` and `dsp` now): a PC that does
+not know Analog Meter, Rhythm Analyzer or Tonal Balance EQ is told apart and those stages are not sent.
