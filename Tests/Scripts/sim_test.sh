@@ -555,20 +555,39 @@ if [ "$RC" != 0 ] && has "$CALLS" "setup" && has "$ROOT/archive.log" "!! Scripts
   ok archive_runs_setup_and_stops_on_failure
 else ng archive_runs_setup_and_stops_on_failure "rc=$RC"; fi
 
-# 紫（既定）は ET_BETA 付き、青は付かない。アイコンと中身が 1 つの引数で決まる。
-beta='SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) ET_BETA'
-store='SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited)'
-pre="xcodebuild -project EffeTuneLive.xcodeproj -scheme EffeTuneLive -configuration Release -sdk iphoneos -arch arm64 -allowProvisioningUpdates"
+# 紫（既定）は -configuration Beta、青は Release。アイコンと ET_BETA は project.yml の構成が決める
+# ので、コマンドラインには ET_APPICON も SWIFT_ACTIVE_COMPILATION_CONDITIONS も載せない。
+pre="xcodebuild -project EffeTuneLive.xcodeproj -scheme EffeTuneLive -configuration"
+mid="-sdk iphoneos -arch arm64 -allowProvisioningUpdates"
 post="archive -archivePath $WORK/arch/EffeTuneLive.xcarchive"
 fresh
 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
-a_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre ET_APPICON=EffectDeckPublicBeta $beta $post" \
-  && [ -d "$WORK/arch/EffeTuneLive.xcarchive" ] && has "$ROOT/archive.log" "書庫: " && a_ok=1
+a_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre Beta $mid $post"   && [ -d "$WORK/arch/EffeTuneLive.xcarchive" ] && has "$ROOT/archive.log" "書庫: "   && has "$ROOT/archive.log" "config=Beta" && a_ok=1
 fresh
 ARCHIVE_DIR="$WORK/arch" run_script archive.sh EffeTuneLive EffeTuneLive
-b_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre ET_APPICON=EffeTuneLive $store $post" && b_ok=1
-if [ "$a_ok$b_ok" = 11 ]; then ok archive_icon_decides_et_beta
-else ng archive_icon_decides_et_beta "beta=$a_ok store=$b_ok $(grep '^xcodebuild' "$CALLS" | head -1)"; fi
+b_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre Release $mid $post" && b_ok=1
+fresh
+ARCHIVE_DIR="$WORK/arch" CONFIG=Release run_script archive.sh
+c_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre Release $mid $post" && c_ok=1
+if [ "$a_ok$b_ok$c_ok" = 111 ]; then ok archive_config_decides_icon_and_et_beta
+else ng archive_config_decides_icon_and_et_beta "beta=$a_ok store=$b_ok env=$c_ok $(grep '^xcodebuild' "$CALLS" | head -1)"; fi
+
+# 構成で決める。コマンドラインで上書きしない（上書きすると Xcode Cloud と書庫がずれる）。
+fresh
+ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+if [ "$RC" = 0 ] && hasnt "$CALLS" "ET_APPICON=" && hasnt "$CALLS" "SWIFT_ACTIVE_COMPILATION_CONDITIONS="; then
+  ok archive_does_not_override_icon_or_flags_on_command_line
+else ng archive_does_not_override_icon_or_flags_on_command_line "$(grep '^xcodebuild' "$CALLS" | head -1)"; fi
+
+# 知らないアイコン名・構成名は xcodebuild を呼ばずに落とす。
+fresh
+ARCHIVE_DIR="$WORK/arch" run_script archive.sh EffeTuneLive NoSuchIcon
+r1=$RC; r1x=0; hasnt "$CALLS" "xcodebuild" && r1x=1
+fresh
+ARCHIVE_DIR="$WORK/arch" CONFIG=Debug run_script archive.sh
+r2=$RC; r2x=0; hasnt "$CALLS" "xcodebuild" && r2x=1
+if [ "$r1" != 0 ] && [ "$r2" != 0 ] && [ "$r1x$r2x" = 11 ]; then ok archive_unknown_icon_or_config_stops_before_xcodebuild
+else ng archive_unknown_icon_or_config_stops_before_xcodebuild "icon rc=$r1 cfg rc=$r2"; fi
 
 fresh
 mkdir -p "$WORK/arch/EffeTuneLive.xcarchive"

@@ -1,8 +1,13 @@
 #!/bin/bash
 # 配布用の書庫を作る。
 #
-#   bash Scripts/archive.sh                            紫（TestFlight 行き。ET_BETA）
-#   bash Scripts/archive.sh EffeTuneLive EffeTuneLive  青（店へ出す版）
+#   bash Scripts/archive.sh                            紫（-configuration Beta。TestFlight 行き。ET_BETA）
+#   bash Scripts/archive.sh EffeTuneLive EffeTuneLive  青（-configuration Release。店へ出す版）
+#   CONFIG=Release bash Scripts/archive.sh             同上（構成名で直接選ぶ）
+#
+# ローカルの非常用。ふだんの配布は Xcode Cloud（ci_scripts/ci_post_clone.sh と
+# scheme "EffectDeck Beta"〈Archive は Beta〉・EffeTuneLive〈Archive は Release〉）。
+# どちらも project.yml の同じ構成を読む。
 #
 # 先に Scripts/setup.sh を通す（パッチ・カタログ・プリセット・note-models・版・プロジェクト）。
 # 前は gen_version と xcodegen しか走らせず、書庫が正しいかは、前のビルドが木を
@@ -18,23 +23,31 @@ export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.." || exit 1
 . Scripts/asc_auth.sh || exit 1   # PROVISIONING（API キー）。画面ロック中の "No Accounts" よけ
 SCHEME="${1:-EffeTuneLive}"
-# アイコン。**既定は紫**（EffectDeckPublicBeta）。ここから出る書庫は TestFlight 行きで、
-# 端末で青と紫を見分けられると、いまどちらを触っているか分かる。
-#
-# 店へ出すときだけ第 2 引数に EffeTuneLive を渡して青にする。
+# ビルド構成で決める。**アイコンと ET_BETA は project.yml の構成（Beta / Release）が持つ**
+# ので、ここでは構成名を選ぶだけ。Xcode Cloud もローカルも同じ定義を読む。
+#   Beta     紫（EffectDeckPublicBeta）＋ ET_BETA。TestFlight 行き。**既定**。
+#            端末で青と紫を見分けられると、いまどちらを触っているか分かる。
+#   Release  青（EffeTuneLive）。店へ出す版。
+# 選び方は環境変数 CONFIG=Beta|Release、または第 2 引数（従来のアイコン名）。
+#   EffectDeckPublicBeta -> Beta、EffeTuneLive -> Release。それ以外は xcodebuild を呼ばずに落とす。
 # 起動時に setAlternateIconName で差し替える形にしないのは、系が毎回
 # 「アイコンを変えました」の確認を出すから。
+# いま ET_BETA で変わるのは同梱の JSFX の見本（ETJSFXHost.showsBundledSamples）だけ。
+# 見本を .app に積むかも同じ構成で決まる（Scripts/embed_debug_jsfx.sh が
+# SWIFT_ACTIVE_COMPILATION_CONDITIONS を読む）。JSFX 本体は店の版でも開いている
+# （ETJSFXHost.isEnabled）。店に出さない機能を足すときは Beta 構成の側で開ける。
 APPICON="${2:-EffectDeckPublicBeta}"
-# **アイコンと中身を 1 つの引数で決める。**別々にすると噛み合わなくなる
-# （紫なのに JSFX が無い形を一度作った）。
-# ベータ側だけ ET_BETA を立てる。いま ET_BETA で変わるのは同梱の JSFX の見本
-# （ETJSFXHost.showsBundledSamples）だけ。見本を.appに積むかも同じ値で決まる
-# （Scripts/embed_debug_jsfx.shがこの変数を読む）。JSFX 本体は店の版でも開いている
-# （ETJSFXHost.isEnabled）。店に出さない機能を足すときはここで開ける。
-if [ "$APPICON" = "EffectDeckPublicBeta" ]; then
-  SWIFT_FLAGS='$(inherited) ET_BETA'
+if [ -n "${CONFIG:-}" ]; then
+  case "$CONFIG" in
+    Beta|Release) ;;
+    *) echo "FINISHED: CONFIG は Beta か Release（受け取った値: $CONFIG）。書庫は作らない (exit=2)"; exit 2 ;;
+  esac
 else
-  SWIFT_FLAGS='$(inherited)'
+  case "$APPICON" in
+    EffectDeckPublicBeta) CONFIG=Beta ;;
+    EffeTuneLive)         CONFIG=Release ;;
+    *) echo "FINISHED: 第 2 引数は EffectDeckPublicBeta か EffeTuneLive（受け取った値: $APPICON）。書庫は作らない (exit=2)"; exit 2 ;;
+  esac
 fi
 LOG="$PWD/archive.log"
 ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
@@ -42,14 +55,12 @@ ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
 XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
 
 main() {
-  echo "=== start $(date) === icon=$APPICON"
+  echo "=== start $(date) === config=$CONFIG"
   rm -rf "$ARCHIVE"
   # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
   bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
   "$XCODEBUILD" -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
-    -configuration Release -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
-    ET_APPICON="$APPICON" \
-    SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_FLAGS" \
+    -configuration "$CONFIG" -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
     archive -archivePath "$ARCHIVE" 2>&1 \
     | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|errSec" | tail -10
   local code="${PIPESTATUS[0]}"

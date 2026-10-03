@@ -6,7 +6,8 @@
 # 店の版には積まない。一覧に出さないだけでなく、書庫にも入れない
 # （Tools/review_notes.txtの「ships no scripts」はこれで成り立つ）。
 # 条件はアプリ側のETJSFXHost.showsBundledSamples（`#if DEBUG || ET_BETA`）と揃える。
-# ET_BETAはScripts/archive.shが紫のときにSWIFT_ACTIVE_COMPILATION_CONDITIONSへ足す。
+# ET_BETAはproject.ymlのBeta構成（紫のアイコンと同じ所）がSWIFT_ACTIVE_COMPILATION_CONDITIONSへ足す。
+# 構成名がBetaなだけではDebug扱いにならない（第三者のLocalは積まない）。
 #
 # Local/DebugJSFXFactoryは第三者の実物で、**再配布しない**。
 # gitignoreしてあるうえ、ここでDebugのときしか写さない。

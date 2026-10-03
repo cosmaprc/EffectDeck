@@ -313,7 +313,7 @@ final class ETJSFXHost: ObservableObject {
     /// 見本は配った相手が JSFX を試すための手がかりで、店で売る版に並べるものではない。
     /// **建てるときに決まる。**受領書（`appStoreReceiptURL`）は開発ビルドでも
     /// `sandboxReceipt` を返すので、店に出す側の挙動を手元で確かめられない。
-    /// Scripts/archive.sh がアイコンと同じ引数で ET_BETA を立てる。
+    /// project.yml の Beta 構成がアイコン（紫）と同じ所で ET_BETA を立てる。
     /// **紫のアイコンなら見本が在る**、が必ず成り立つ。
     static var showsBundledSamples: Bool {
         #if DEBUG || ET_BETA
