@@ -334,10 +334,31 @@ enum ETRemoteIRSync {
     /// 1 回に送る生のバイト数（base64 にする前）。PC の枠の上限は 4 MB。
     static let chunkSize = 512 * 1024
 
+    /// PC の枠の上限（IR 1 本）。これを超えるものは送っても断られるので、送らない。
+    static let maxBytes = 64 * 1024 * 1024
+
+    /// PC が irsChanged を送ってから、または手元の IR が増えてから、足し合わせ直すまで待つ時間。
+    /// 続けて入れても（フォルダごとの取り込みなど）1 回で済ませる。
+    static let liveDebounceNanoseconds: UInt64 = 1_000_000_000
+
     /// 取りに行く鍵と、送る鍵。どちらも並びを固定する。
-    static func plan(pc: [String], local: [String]) -> (download: [String], upload: [String]) {
+    /// `skip` は、このつなぎの中ですでに失敗した鍵（鍵が合わない・音として開けない・PC が断った）。
+    /// 変わるたびに同じものを取り直さないよう、ライブのときだけ渡す。
+    static func plan(pc: [String], local: [String], skip: Set<String> = []) -> (download: [String], upload: [String]) {
         let p = Set(pc), l = Set(local)
-        return (p.subtracting(l).sorted(), l.subtracting(p).sorted())
+        return (p.subtracting(l).subtracting(skip).sorted(), l.subtracting(p).subtracting(skip).sorted())
+    }
+
+    /// 手元の IR が増えたか。`known` は前の足し合わせの終わりに手元にあった鍵。
+    /// 減っただけ（消した・足し合わせで自分が取り込んだ分）なら足し合わせ直さない。
+    /// **消すことは PC へ伝えない**（足すだけ）ので、減ったことは見ない。
+    static func hasAdditions(known: Set<String>, current: [String]) -> Bool {
+        current.contains { !known.contains($0) }
+    }
+
+    /// PC へ送ってよい大きさか（1 バイト以上、枠の上限まで）。
+    static func canUpload(bytes: Int) -> Bool {
+        bytes > 0 && bytes <= maxBytes
     }
 
     /// `bytes` を size ごとに切った範囲。0 バイトでも空の塊を 1 つ返す（total が 0 にならない）。

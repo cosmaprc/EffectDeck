@@ -479,6 +479,49 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(ETRemoteIRSync.chunks(8, size: 4), [0..<4, 4..<8])
     }
 
+    func testIRPlanSkipsKeysThatAlreadyFailed() {
+        // ライブのときは、このつなぎで失敗した鍵を取り直さない・送り直さない。
+        let plan = ETRemoteIRSync.plan(pc: ["a", "b", "c"], local: ["c", "d", "e"], skip: ["b", "e"])
+        XCTAssertEqual(plan.download, ["a"])
+        XCTAssertEqual(plan.upload, ["d"])
+        // skip を渡さなければ、つないだ直後の足し合わせと同じ。
+        let all = ETRemoteIRSync.plan(pc: ["a", "b"], local: ["b", "z"])
+        XCTAssertEqual(all.download, ["a"])
+        XCTAssertEqual(all.upload, ["z"])
+    }
+
+    func testIRPlanIsAddOnly() {
+        // 片方にしか無いものは足すだけ。消す指図は出ない（返すのは取る鍵と送る鍵だけ）。
+        let plan = ETRemoteIRSync.plan(pc: [], local: ["x"])
+        XCTAssertEqual(plan.download, [])
+        XCTAssertEqual(plan.upload, ["x"])
+        let none = ETRemoteIRSync.plan(pc: ["x"], local: ["x"])
+        XCTAssertTrue(none.download.isEmpty && none.upload.isEmpty)
+    }
+
+    func testIRLocalAdditionsOnly() {
+        // 手元で増えたときだけ足し合わせ直す。消した・減っただけ・同じなら何もしない。
+        XCTAssertTrue(ETRemoteIRSync.hasAdditions(known: ["a"], current: ["a", "b"]))
+        XCTAssertTrue(ETRemoteIRSync.hasAdditions(known: [], current: ["a"]))
+        XCTAssertFalse(ETRemoteIRSync.hasAdditions(known: ["a", "b"], current: ["a"]))
+        XCTAssertFalse(ETRemoteIRSync.hasAdditions(known: ["a"], current: ["a"]))
+        XCTAssertFalse(ETRemoteIRSync.hasAdditions(known: ["a"], current: []))
+        // 足し合わせで自分が取り込んだ分は、終わりに known へ入れるので、また増えたことにならない。
+        let known: Set<String> = ["a", "downloaded"]
+        XCTAssertFalse(ETRemoteIRSync.hasAdditions(known: known, current: ["downloaded", "a"]))
+    }
+
+    func testIRUploadSizeLimit() {
+        XCTAssertFalse(ETRemoteIRSync.canUpload(bytes: 0))
+        XCTAssertTrue(ETRemoteIRSync.canUpload(bytes: 1))
+        XCTAssertTrue(ETRemoteIRSync.canUpload(bytes: ETRemoteIRSync.maxBytes))
+        XCTAssertFalse(ETRemoteIRSync.canUpload(bytes: ETRemoteIRSync.maxBytes + 1))
+        // 1 本は塊の数が PC の上限（上限バイト数 / 塊）を超えない。
+        XCTAssertEqual(ETRemoteIRSync.chunks(ETRemoteIRSync.maxBytes).count,
+                       ETRemoteIRSync.maxBytes / ETRemoteIRSync.chunkSize)
+        XCTAssertEqual(ETRemoteIRSync.liveDebounceNanoseconds, 1_000_000_000)
+    }
+
     func testIRFileName() {
         XCTAssertEqual(ETRemoteIRSync.fileName(name: "Hall", ext: "wav"), "Hall.wav")
         XCTAssertEqual(ETRemoteIRSync.fileName(name: "Hall.WAV", ext: "wav"), "Hall.wav")
