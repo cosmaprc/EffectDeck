@@ -602,7 +602,8 @@ else ng archive_keeps_full_xcodebuild_log_when_asked "rc=$RC"; fi
 
 fresh
 ET_ARCHIVE_ADHOC=1 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
-if [ "$RC" = 0 ] && has "$CALLS" "CODE_SIGN_IDENTITY=-" && has "$CALLS" "CODE_SIGN_STYLE=Manual"    && hasnt "$CALLS" "CODE_SIGNING_ALLOWED=NO"; then
+if [ "$RC" = 0 ] && has "$CALLS" "CODE_SIGN_IDENTITY=-" && has "$CALLS" "CODE_SIGN_STYLE=Manual"    && hasnt "$CALLS" "CODE_SIGNING_ALLOWED=NO" \
+   && hasnt "$CALLS" "allowProvisioningUpdates" && hasnt "$CALLS" "authenticationKey"; then
   ok archive_adhoc_signs_with_dash_and_never_unsigned
 else ng archive_adhoc_signs_with_dash_and_never_unsigned "$(grep '^xcodebuild' "$CALLS" | head -1)"; fi
 

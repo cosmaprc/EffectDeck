@@ -3,7 +3,7 @@
 - 道具の版（xcodegen の版と sha256・Xcode・runner のラベル）が ci.yml・canary.yml・release.yml で食い違わない。
 - release.yml が守る決まり（承認の Environment・秘密の置き場・submodule の取り方・上げ先）。
 - 紫（アイコン EffectDeckPublicBeta）と ET_BETA は Beta 構成の同じ所にだけ書いてある。
-- Scripts/ExportOptions-ci.plist（クラウド署名の書き出し）の鍵。
+- Scripts/ExportOptions-ci.plist（手動署名の書き出し）の鍵と、release.yml の署名の段取り。
 """
 import plistlib
 import re
@@ -72,12 +72,14 @@ class ReleaseConfigTest(unittest.TestCase):
         self.assertNotIn("environment:", gate)
         self.assertRegex(release, r"(?m)^    environment: release$")
         self.assertRegex(release, r"(?m)^    needs: gate$")
-        for name in ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8"):
+        for name in ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8", "DIST_P12_BASE64", "DIST_P12_PASSWORD"):
             self.assertIn("secrets.%s" % name, release)
-        # 秘密の参照は release ジョブの 3 つだけ。ほかのワークフローは ASC の secret を持たない。
-        self.assertEqual(len(re.findall(r"secrets\.", code(RELEASE))), 3)
+        # 秘密の参照は release ジョブの 5 つだけ（API キー 3 つ + 配布用証明書の p12 とそのパスワード）。
+        # ほかのワークフローは ASC・配布用証明書の secret を持たない。
+        self.assertEqual(len(re.findall(r"secrets\.", code(RELEASE))), 5)
         for wf in (CI, CANARY, ".github/workflows/dsp.yml"):
             self.assertNotIn("secrets.ASC_", read(wf), wf)
+            self.assertNotIn("secrets.DIST_", read(wf), wf)
 
     def test_release_matches_the_local_build_recipe(self):
         rel = code(RELEASE)
@@ -112,16 +114,55 @@ class ReleaseConfigTest(unittest.TestCase):
         # 鍵は必ず消す。
         self.assertRegex(rel, r"(?s)if: always\(\)\n        run: \|\n          rm -f .*AuthKey_")
 
-    def test_export_options_use_cloud_signing(self):
+    def test_export_options_use_manual_signing(self):
         with open(ROOT / "Scripts" / "ExportOptions-ci.plist", "rb") as f:
             opts = plistlib.load(f)
         self.assertEqual(opts["method"], "app-store-connect")
         self.assertEqual(opts["destination"], "export")
-        self.assertEqual(opts["signingStyle"], "automatic")
+        self.assertEqual(opts["signingStyle"], "manual")
         self.assertEqual(opts["teamID"], "C82ST8T9MN")
+        self.assertEqual(opts["signingCertificate"], "Apple Distribution: Masahiro Sato (C82ST8T9MN)")
         self.assertIs(opts["manageAppVersionAndBuildNumber"], False)
-        self.assertNotIn("provisioningProfiles", opts)
-        self.assertNotIn("signingCertificate", opts)
+        self.assertIs(opts["uploadSymbols"], True)
+        self.assertEqual(opts["provisioningProfiles"], {
+            "ai.nemut.effetune": "EffeTuneLive-AppStore",
+            "ai.nemut.effetune.extension": "EffeTuneLiveExt-AppStore",
+            "ai.nemut.effetune.share": "EffectDeckShare-AppStore",
+        })
+
+    def test_release_signs_manually_with_a_throwaway_keychain(self):
+        text, rel = read(RELEASE), code(RELEASE)
+        # 手で選ぶ署名の入力は無い。書庫はいつも ad-hoc。
+        self.assertNotIn("archive_signing", rel)
+        self.assertNotIn("SIGNING", rel)
+        self.assertRegex(rel, r"(?m)^          ET_ARCHIVE_ADHOC: 1$")
+        # プロファイルの名前と bundle ID は書き出しの設定と同じ 3 組。
+        with open(ROOT / "Scripts" / "ExportOptions-ci.plist", "rb") as f:
+            profiles = plistlib.load(f)["provisioningProfiles"]
+        for bundle, name in profiles.items():
+            self.assertIn('"%s %s"' % (name, bundle), rel)
+        self.assertEqual(len(re.findall(r"tools/asc\.py profile|Tools/asc\.py profile", rel)), 1)
+        # 一時キーチェーン: ランダムなパスワード・自動ロック・鍵の使用許可・検索リストへ。
+        for needle in ("security create-keychain", "openssl rand", "set-keychain-settings -lut 21600",
+                       "set-key-partition-list", "-T /usr/bin/codesign", "list-keychains -d user -s",
+                       "default-keychain -d user -s", "find-identity"):
+            self.assertIn(needle, rel, needle)
+        # 書き出しの段: API キーも自動更新も渡さず、Cloud signing が出たら止める。
+        step = re.search(r"(?ms)^      - name: 書き出し（手動署名）\n(.*?)(?=^      - name: )", text)
+        self.assertTrue(step, "書き出しの段が無い")
+        body = step.group(1)
+        self.assertIn("-exportOptionsPlist Scripts/ExportOptions-ci.plist", body)
+        for bad in ("allowProvisioningUpdates", "authenticationKey", "asc_auth.sh", "PROVISIONING"):
+            self.assertNotIn(bad, "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#")), bad)
+        self.assertRegex(body, r"(?i)grep -qi 'cloud signing'")
+        # 後片付け: 常に走り、キーチェーンを消し、検索リストと既定を戻し、置いたプロファイルだけ消す。
+        m = re.search(r"(?ms)^      - name: キーチェーン・プロファイルを消す\n        if: always\(\)\n(.*?)(?=^      - name: )", text)
+        self.assertTrue(m, "キーチェーンの後片付けが無い")
+        for needle in ("security delete-keychain", "list-keychains -d user -s", "default-keychain -d user -s",
+                       "profile-uuids.txt", "dist.p12"):
+            self.assertIn(needle, m.group(1), needle)
+        # 証明書の増減は警告に出す。
+        self.assertIn("::warning::証明書の一覧", rel)
 
     def test_no_xcode_cloud_leftovers(self):
         self.assertFalse((ROOT / "ci_scripts").exists())

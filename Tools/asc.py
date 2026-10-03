@@ -28,6 +28,11 @@ GitHub Actions の release.yml が使う（どれも読むだけか、内部グ�
   python3 asc.py add-internal <build-id>      ビルドを内部グループ "Internal" に足す
                                               （外部グループには足さない・拒む）
   python3 asc.py cert-ids                     証明書の "id type name" の一覧（読むだけ）
+  python3 asc.py profile <名前> <bundle-id> <出力先>
+                                              App Store 用プロファイル 1 つを取り <uuid>.mobileprovision に書く。
+                                              名前が同じ ACTIVE な IOS_APP_STORE が**ちょうど 1 つ**で、
+                                              bundle ID が合い、配布用証明書 DIST_CERT_ID に結ばれているときだけ
+                                              通る（読むだけ。uuid を出す）
 
 KEY_ID と ISSUER は環境変数 ASC_KEY_ID・ASC_ISSUER_ID で上書きできる（既定は下の値）。
 """
@@ -44,6 +49,9 @@ KEY_ID = os.environ.get("ASC_KEY_ID") or "JYMYS92KUB"
 ISSUER = os.environ.get("ASC_ISSUER_ID") or "175cb308-6a31-42f0-970a-e72757f60bde"
 KEY = Path.home() / ".appstoreconnect" / "private_keys" / f"AuthKey_{KEY_ID}.p8"
 APP = "6812467517"
+# 配布用証明書（Apple Distribution: Masahiro Sato）。release.yml が runner に入れる p12 はこれ。
+# プロファイルがこの証明書に結ばれていなければ、署名しても配布に使えない。
+DIST_CERT_ID = "4CGZ2DSM55"
 BASE = "https://api.appstoreconnect.apple.com"
 
 
@@ -177,6 +185,53 @@ def internal_group_id() -> str:
     return groups[0]["id"]
 
 
+def fetch_profile(name: str, bundle_id: str, out_dir: str) -> str:
+    """名前 name の App Store 用プロファイルを 1 つ取って <uuid>.mobileprovision に書き、uuid を返す。
+
+    ACTIVE な IOS_APP_STORE で名前が一致するものがちょうど 1 つ、その bundle ID が bundle_id、
+    結ばれた証明書に DIST_CERT_ID が入っていること。どれか欠けたら何も書かず SystemExit(1)。
+    """
+    import base64
+    import re
+    import urllib.parse
+
+    def fail(msg: str):
+        print(f"!! {msg}", file=sys.stderr)
+        raise SystemExit(1)
+
+    q = urllib.parse.quote(name, safe="")
+    d = call("GET", f"/v1/profiles?filter[name]={q}&include=bundleId,certificates&limit=200")
+    hits = [p for p in d.get("data", [])
+            if (p.get("attributes") or {}).get("name") == name
+            and (p.get("attributes") or {}).get("profileState") == "ACTIVE"
+            and (p.get("attributes") or {}).get("profileType") == "IOS_APP_STORE"]
+    if len(hits) != 1:
+        fail(f"プロファイル {name} の ACTIVE な IOS_APP_STORE が {len(hits)} 個ある（1 個のはず）")
+    prof = hits[0]
+    rel = prof.get("relationships") or {}
+    bid = ((rel.get("bundleId") or {}).get("data") or {}).get("id")
+    included = d.get("included", [])
+    ident = next(((i.get("attributes") or {}).get("identifier") for i in included
+                  if i.get("type") == "bundleIds" and i.get("id") == bid), None)
+    if ident != bundle_id:
+        fail(f"プロファイル {name} の bundle ID は {ident}（{bundle_id} のはず）")
+    certs = {c.get("id") for c in (rel.get("certificates") or {}).get("data") or []}
+    if DIST_CERT_ID not in certs:
+        fail(f"プロファイル {name} に配布用証明書 {DIST_CERT_ID} が結ばれていない（{sorted(certs)}）")
+    a = prof.get("attributes") or {}
+    uuid, content = a.get("uuid"), a.get("profileContent")
+    if not uuid or not re.fullmatch(r"[0-9A-Fa-f-]{36}", uuid) or not content:
+        fail(f"プロファイル {name} に uuid か中身が無い")
+    try:
+        raw = base64.b64decode(content, validate=True)
+    except ValueError:
+        fail(f"プロファイル {name} の中身が base64 でない")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{uuid}.mobileprovision").write_bytes(raw)
+    return uuid
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -233,6 +288,10 @@ def main() -> int:
         for c in pages("/v1/certificates?limit=200"):
             a = c.get("attributes") or {}
             print(c["id"], a.get("certificateType"), a.get("name"))
+        return 0
+
+    if cmd == "profile":
+        print(fetch_profile(sys.argv[2], sys.argv[3], sys.argv[4]))
         return 0
 
     if cmd == "builds":

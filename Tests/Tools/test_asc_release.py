@@ -1,10 +1,13 @@
-"""Tools/asc.py のうち release.yml が使う部分（next-build・train-check・add-internal・wait-build）。
+"""Tools/asc.py のうち release.yml が使う部分（next-build・train-check・add-internal・wait-build・profile）。
 
 App Store Connect には繋がない。asc.call を偽物に差し替えて、返事を決めて走らせる。
 """
+import base64
 import contextlib
 import io
+import tempfile
 import unittest.mock
+from pathlib import Path
 
 from tools_support import load_tool, unittest
 
@@ -146,6 +149,87 @@ class AscReleaseTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         rc, _, err = run(self.asc, Fake({key: [processing]}), "wait-build", "2026.10.03", "32", "0")
         self.assertEqual(rc, 4)
+
+    # ---- profile ------------------------------------------------------------
+
+    UUID = "8c1f7f0e-4a52-4f0e-9d1c-0123456789ab"
+
+    def profile_reply(self, **over):
+        """ASC が返す形（data + included）。over で一部だけ壊す。"""
+        attrs = {"name": "EffeTuneLive-AppStore", "uuid": self.UUID, "profileState": "ACTIVE",
+                 "profileType": "IOS_APP_STORE",
+                 "profileContent": base64.b64encode(b"PROFILE-BYTES").decode()}
+        attrs.update(over.pop("attrs", {}))
+        rel = {"bundleId": {"data": {"type": "bundleIds", "id": "b-1"}},
+               "certificates": {"data": [{"type": "certificates", "id": self.asc.DIST_CERT_ID}]}}
+        rel.update(over.pop("rel", {}))
+        included = over.pop("included", [{"type": "bundleIds", "id": "b-1",
+                                          "attributes": {"identifier": "ai.nemut.effetune"}}])
+        data = over.pop("data", [{"id": "p-1", "type": "profiles", "attributes": attrs, "relationships": rel}])
+        return {"data": data, "included": included}
+
+    def run_profile(self, reply, name="EffeTuneLive-AppStore", bundle="ai.nemut.effetune"):
+        fake = Fake({("GET", "/v1/profiles"): [reply]})
+        with tempfile.TemporaryDirectory() as tmp:
+            out = str(Path(tmp) / "profiles")
+            rc, stdout, err = run(self.asc, fake, "profile", name, bundle, out)
+            files = sorted(p.name for p in Path(out).glob("*")) if Path(out).exists() else []
+            body = (Path(out) / files[0]).read_bytes() if files else None
+        self.assertEqual([c[0] for c in fake.calls], ["GET"])  # 読むだけ
+        return rc, stdout, err, files, body
+
+    def test_profile_writes_the_one_matching_profile(self):
+        rc, out, _, files, body = self.run_profile(self.profile_reply())
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), self.UUID)
+        self.assertEqual(files, [self.UUID + ".mobileprovision"])
+        self.assertEqual(body, b"PROFILE-BYTES")
+
+    def test_profile_queries_by_name_with_includes(self):
+        fake = Fake({("GET", "/v1/profiles"): [self.profile_reply()]})
+        with tempfile.TemporaryDirectory() as tmp:
+            run(self.asc, fake, "profile", "EffeTuneLive-AppStore", "ai.nemut.effetune", tmp)
+        path = fake.calls[0][1]
+        self.assertIn("filter[name]=EffeTuneLive-AppStore", path)
+        self.assertIn("include=bundleId,certificates", path)
+
+    def test_profile_refuses_when_not_exactly_one_active_app_store_profile(self):
+        good = self.profile_reply()["data"][0]
+
+        def variant(**attrs):
+            p = {**good, "attributes": {**good["attributes"], **attrs}}
+            return p
+
+        cases = {
+            "none": [],
+            "two": [good, {**good, "id": "p-2"}],
+            "expired": [variant(profileState="INVALID")],
+            "adhoc": [variant(profileType="IOS_APP_ADHOC")],
+            "other name": [variant(name="EffeTuneLive-AppStore-20260926")],
+        }
+        for label, data in cases.items():
+            rc, out, err, files, _ = self.run_profile(self.profile_reply(data=data))
+            self.assertEqual(rc, 1, label)
+            self.assertEqual((out, files), ("", []), label)
+            self.assertIn("ACTIVE な IOS_APP_STORE", err, label)
+
+    def test_profile_refuses_wrong_bundle_id(self):
+        rc, _, err, files, _ = self.run_profile(self.profile_reply(), bundle="ai.nemut.effetune.share")
+        self.assertEqual((rc, files), (1, []))
+        self.assertIn("bundle ID", err)
+        rc, _, err, files, _ = self.run_profile(self.profile_reply(included=[]))
+        self.assertEqual((rc, files), (1, []))
+
+    def test_profile_refuses_when_distribution_cert_is_not_linked(self):
+        other = {"certificates": {"data": [{"type": "certificates", "id": "4X675A6X2Y"}]}}
+        rc, _, err, files, _ = self.run_profile(self.profile_reply(rel=other))
+        self.assertEqual((rc, files), (1, []))
+        self.assertIn(self.asc.DIST_CERT_ID, err)
+
+    def test_profile_refuses_missing_or_broken_content(self):
+        for attrs in ({"profileContent": None}, {"profileContent": "%%%not-base64"}, {"uuid": "../../x"}):
+            rc, _, _, files, _ = self.run_profile(self.profile_reply(attrs=attrs))
+            self.assertEqual((rc, files), (1, []), attrs)
 
 
 if __name__ == "__main__":
