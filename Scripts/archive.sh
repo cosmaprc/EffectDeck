@@ -18,6 +18,7 @@
 #                          増えるため。権限（entitlements）は ad-hoc 署名にも埋まり、書き出し
 #                          （Scripts/ExportOptions-ci.plist の手動署名。配布用証明書とプロファイルは
 #                          release.yml が用意する）が配布用に署名し直す。
+#                          このときは -allowProvisioningUpdates と API キーを xcodebuild に渡さない。
 #                          署名なし（CODE_SIGNING_ALLOWED=NO）にしない。書き出しが権限をプロファイルから
 #                          取り、本体の media-device-extension の空配列が消える。
 #
@@ -72,6 +73,9 @@ fi
 if [ "${ET_ARCHIVE_ADHOC:-0}" = "1" ]; then
   BUILD_ARGS+=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES
                PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=C82ST8T9MN)
+  # ad-hoc は開発者サイトに用が無い。-allowProvisioningUpdates も API キーも渡さず、
+  # Apple 側に証明書やプロファイルを作らせる道を残さない。
+  PROVISIONING=()
 fi
 LOG="$PWD/archive.log"
 ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
@@ -84,7 +88,7 @@ main() {
   # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
   bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
   "$XCODEBUILD" -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
-    -configuration "$CONFIG" -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
+    -configuration "$CONFIG" -sdk iphoneos -arch arm64 ${PROVISIONING[@]+"${PROVISIONING[@]}"} \
     archive -archivePath "$ARCHIVE" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} 2>&1 \
     | tee "${ET_XCODEBUILD_LOG:-/dev/null}" \
     | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|errSec" | tail -10

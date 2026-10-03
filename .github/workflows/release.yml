@@ -19,7 +19,7 @@
 # キーチェーンに入れる。App Store のプロファイル（3 つ）は API キーで Tools/asc.py profile が取り、
 # 回の間だけ置く。
 #   書庫     Scripts/archive.sh を ad-hoc 署名（ET_ARCHIVE_ADHOC=1）で。開発用証明書は要らず、
-#            "Apple Development: Created via API" も増えない。
+#            "Apple Development: Created via API" も増えない。-allowProvisioningUpdates と API キーも渡さない。
 #   書き出し Scripts/ExportOptions-ci.plist（manual。Mac の ~/signing/export.plist と同じ中身）。
 #            API キー（-allowProvisioningUpdates）は渡さず、Apple 側に何も作らせない。
 #            ログに "Cloud signing" が出たら（Xcode が自動署名に落ちた）止める。
