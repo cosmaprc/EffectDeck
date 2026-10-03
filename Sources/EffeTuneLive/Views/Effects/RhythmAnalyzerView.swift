@@ -201,8 +201,9 @@ private struct RhythmFigure: View {
 
     var body: some View {
         let isNarrow = width < Self.narrowWidth
-        // 横長は 3:2、縦長（狭い）は 3:4（createResponsiveGraph の aspectRatio / mobileAspectRatio）。
-        let height = max(160, width * (isNarrow ? 4.0 / 3.0 : 2.0 / 3.0))
+        // 横長は 3:2（createResponsiveGraph の aspectRatio）。縦長（狭い）は上流の 3:4 より
+        // 縦に伸ばして 3:5 にする。3:4 では 3 本の帯が 55pt ほどで、見出しと目盛りが印にかぶる。
+        let height = max(160, width * (isNarrow ? 5.0 / 3.0 : 2.0 / 3.0))
         // 枠が来たら入れる。入れたあとの知らせで描き直す（tracker の objectWillChange）。
         let sequence = telemetry.frame(tap: tapId, type: .rhythmAnalyzer)?.sequence
         VStack(alignment: .leading, spacing: 8) {
@@ -210,15 +211,22 @@ private struct RhythmFigure: View {
                 x: .blank(), y: .blank(),
                 height: height,
                 insets: .none,
-                caption: tracker.state.snapshot == nil ? "Waiting for audio" : nil,
                 clipsContent: true,
+                showsHeader: false,
                 draw: { context, plot in
                     let painter = RhythmPainter(
                         state: tracker.state, mask: tracker.mask(), span: span,
                         showTempogram: showTempogram, showLanes: showLanes,
                         showEcho: showEcho, showLens: showLens,
                         now: ProcessInfo.processInfo.systemUptime)
-                    painter.paint(&context, rect: plot.rect)
+                    // paint は座標を動かすので、写しに描かせる（待ちの字は元の座標で描く）。
+                    var painted = context
+                    painter.paint(&painted, rect: plot.rect)
+                    if tracker.state.snapshot == nil {
+                        context.draw(Text("Waiting for audio")
+                                        .font(.system(size: 12)).foregroundStyle(.secondary),
+                                     at: CGPoint(x: plot.rect.midX, y: plot.rect.midY), anchor: .center)
+                    }
                 })
                 .frame(maxWidth: 1024)
                 .onGeometryChange(for: CGFloat.self) { proxy in

@@ -16,6 +16,13 @@ struct ETDisplayNumberRow: View {
     /// 0 なら刻み無し。
     var step: Double = 0
     var isInteger: Bool = false
+    /// 末尾の 0 を出さない（Peak Hold の 0 / 10。上流は値をそのまま出す）。
+    var trimsZeros: Bool = false
+
+    private var valueText: String {
+        let text = ETNumberText.stepped(value, step: isInteger ? 1 : step)
+        return trimsZeros ? ETAnalogMeter.trimZeros(text) : text
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -25,7 +32,7 @@ struct ETDisplayNumberRow: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
-                ETValueField(text: ETNumberText.stepped(value, step: isInteger ? 1 : step),
+                ETValueField(text: valueText,
                              label: title,
                              editText: { ETNumberText.draft(value) }) { typed in
                     commit(typed)

@@ -279,4 +279,51 @@ final class AnalogMeterTests: XCTestCase {
         XCTAssertNil(ETAnalogMeter.cellReading(channel: 3, reading: r, mode: 5, needle: 0))
         XCTAssertNil(ETAnalogMeter.cellReading(channel: 0, reading: nil, mode: 0, needle: 0))
     }
+
+    // MARK: 2.12.0 の見た目の寄せ方
+
+    func testTrimZerosMatchesUpstreamNumberInputs() {
+        XCTAssertEqual(ETAnalogMeter.trimZeros("5.00"), "5")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("1.50"), "1.5")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("10.0"), "10")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("0.0"), "0")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("-0.00"), "0")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("0.25"), "0.25")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("100"), "100", "小数点が無ければ 0 を落とさない")
+        XCTAssertEqual(ETAnalogMeter.trimZeros("-14"), "-14")
+    }
+
+    /// 強調するのは基準の目盛りだけ（上流 analog_meter.js:759-772）。赤い帯の始まりは強調しない。
+    func testEmphasizedTickIsOnlyTheReference() {
+        let din = ETAnalogMeter.scale(mode: "PPM", settings: settings())
+        XCTAssertTrue(ETAnalogMeter.isEmphasized(-9, in: din))
+        XCTAssertFalse(ETAnalogMeter.isEmphasized(0, in: din), "DIN の 0 は赤の始まりで、基準ではない")
+        XCTAssertFalse(ETAnalogMeter.isEmphasized(-5, in: din))
+        let peak = ETAnalogMeter.scale(mode: "Sample Peak", settings: settings())
+        XCTAssertFalse(ETAnalogMeter.isEmphasized(0, in: peak), "基準も赤も無い針")
+        let loud = ETAnalogMeter.scale(mode: "Loudness", settings: settings())
+        XCTAssertTrue(ETAnalogMeter.isEmphasized(-23, in: loud))
+    }
+
+    func testStatsGoToTheEmptySlotOrABand() {
+        // 針 3 つ: iPad の 3 列には空きが無く、iPhone の 2 列には 4 つ目が空く。
+        XCTAssertFalse(ETAnalogMeter.hasEmptySlot(ETAnalogMeter.grid(cells: 3)))
+        XCTAssertTrue(ETAnalogMeter.hasEmptySlot(ETAnalogMeter.grid(cells: 3, maxColumns: 2)))
+        XCTAssertFalse(ETAnalogMeter.hasEmptySlot(ETAnalogMeter.grid(cells: 2, maxColumns: 2)))
+        XCTAssertTrue(ETAnalogMeter.hasEmptySlot(ETAnalogMeter.grid(cells: 7)), "8 枠に 7 つ")
+    }
+
+    func testStatRowsKeepUpstreamTexts() {
+        let p = ETAnalogMeter.Program(momentary: -13.44, shortTerm: -15.6, integrated: -15.4, lra: 0.44,
+                                      maxTruePeak: -5.4, integratedSeconds: 9)
+        let rows = ETAnalogMeter.statRows(program: p, integratedValid: true, lraValid: true)
+        XCTAssertEqual(rows.map(\.label), ["M", "S", "I", "LRA", "TP", "Time"])
+        XCTAssertEqual(rows.map(\.value), ["-13.4 LUFS", "-15.6 LUFS", "-15.4 LUFS", "0.4 LU", "-5.4 dBTP", "0:09"])
+        let off = ETAnalogMeter.statRows(program: p, integratedValid: false, lraValid: false)
+        XCTAssertEqual(off[2].value, "--- LUFS")
+        XCTAssertEqual(off[3].value, "--- LU")
+        var silent = p
+        silent.momentary = -200
+        XCTAssertEqual(ETAnalogMeter.statRows(program: silent, integratedValid: true, lraValid: true)[0].value, "-∞ LUFS")
+    }
 }

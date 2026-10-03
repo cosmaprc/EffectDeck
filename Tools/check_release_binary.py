@@ -52,7 +52,7 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
-# 出荷物の決まりごと。project.yml・*.entitlements・Scripts/archive.sh の写し。
+# 出荷物の決まりごと。project.yml（構成 Beta / Release）・*.entitlements の写し。
 # 変えたらここも直す（ここが挙げるファイルが無ければ FAIL で気づく）。
 # ---------------------------------------------------------------------------
 
@@ -86,8 +86,8 @@ BUNDLES = {
 }
 ROLE_LABEL = {"app": "本体", "device": "Media Device Extension", "share": "共有の拡張"}
 
-# アイコンの名前（project.yml の ET_APPICON）で青と紫を見分ける。Scripts/archive.sh が
-# アイコンと ET_BETA を 1 つの引数で決めるので、紫なら見本が在る、が成り立つ。
+# アイコンの名前（project.yml の ET_APPICON）で青と紫を見分ける。project.yml の Beta 構成が
+# アイコンと ET_BETA を同じ所で決めるので、紫なら見本が在る、が成り立つ。
 ICON_FLAVOR = {"EffeTuneLive": "store", "EffectDeckPublicBeta": "beta"}
 
 # どのソースがどの実行ファイルに入るか（project.yml の sources の写し。写し忘れは
@@ -1669,8 +1669,8 @@ def check_samples(rep, repo, app_dir, flavor):
             return
         missing = sorted(set(tracked) - set(shipped))
         if missing:
-            rep.fail("samples", "紫（ET_BETA）なのに見本が欠けている: %s（アイコンと中身は同じ引数で決める。"
-                     "Scripts/archive.sh）" % ", ".join(missing))
+            rep.fail("samples", "紫（ET_BETA）なのに見本が欠けている: %s（アイコンと中身は同じ構成で決める。"
+                     "project.yml の Beta）" % ", ".join(missing))
         elif not foreign:
             rep.ok("samples", "紫の版の %s/ は %s の %d 本と中身まで同じ" % (SAMPLES_DIR, TRACKED_SAMPLES, len(tracked)))
 

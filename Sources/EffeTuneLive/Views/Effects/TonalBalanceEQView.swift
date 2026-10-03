@@ -60,8 +60,8 @@ struct TonalBalanceEQView: View {
             row("tc")
         }
         row("am")
-        row("rg", disabled: amountIsZero)
-        row("sm", disabled: amountIsZero)
+        row("rg", disabled: amountIsZero, trimsZeros: true)
+        row("sm", disabled: amountIsZero, trimsZeros: true)
         if let p = layout.param("at") {
             TonalAveragingRow(index: index, param: p, values: node.values, dsp: dsp)
         }
@@ -71,9 +71,9 @@ struct TonalBalanceEQView: View {
     }
 
     @ViewBuilder
-    private func row(_ key: String, disabled: Bool = false) -> some View {
+    private func row(_ key: String, disabled: Bool = false, trimsZeros: Bool = false) -> some View {
         if let p = layout.param(key) {
-            ParameterRow(param: p, nodeIndex: index, values: node.values, dsp: dsp)
+            ParameterRow(param: p, nodeIndex: index, values: node.values, dsp: dsp, trimsZeros: trimsZeros)
                 .disabled(disabled)
                 .opacity(disabled ? 0.45 : 1)
         }
@@ -257,6 +257,10 @@ private struct TonalBalanceFigure: View {
 
     private var layout: TonalBalanceLayout { TonalBalanceLayout(node.spec) }
 
+    /// EQ の応答の線と、保留した持ち上げの色（上流の --et-graph-trace）。測った線は tint なので、
+    /// 交わる所でも見分けがつく。
+    private static let traceGreen = Color(red: 0, green: 1, blue: 0)
+
     private var targetIndex: Int {
         min(max(Int(layout.value(node.values, "tg").rounded()), 0), ETTonalBalance.targets.count - 1)
     }
@@ -423,8 +427,8 @@ private struct TonalBalanceFigure: View {
             let xs = ETTonalBalance.curveLogFreqs
             fillRuns(c.targetLow, c.targetHigh, .color(Color.secondary.opacity(0.22)), in: &context)
             // 保留した持ち上げは薄い。上の縁だけ 1 本引いて見えるようにする。
-            fillRuns(c.withheldLow, c.withheldHigh, .color(Color.orange.opacity(0.16)), in: &context)
-            stroke(xs, c.withheldEdge, .color(Color.orange), width: 1, in: &context)
+            fillRuns(c.withheldLow, c.withheldHigh, .color(Self.traceGreen.opacity(0.15)), in: &context)
+            stroke(xs, c.withheldEdge, .color(Self.traceGreen.opacity(0.8)), width: 1, in: &context)
             stroke(xs, c.target, ETGraphShading.overlayCompare, width: 1.5, in: &context)
             stroke(xs, c.measured, ETGraphShading.overlay, width: 1.5, in: &context)
             for band in 0..<ETTonalBalance.bands where display.measured[band].isFinite {
@@ -432,7 +436,7 @@ private struct TonalBalanceFigure: View {
                 context.fill(Path(ellipseIn: CGRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4)),
                              with: ETGraphShading.overlay)
             }
-            stroke(ETTonalBalance.gridLogFreqs, display.response, ETGraphShading.curve, width: 2, in: &context)
+            stroke(ETTonalBalance.gridLogFreqs, display.response, .color(Self.traceGreen), width: 2, in: &context)
         } else {
             // 0 dB の線の上。既定の印と Target adjust の曲線が居る所の上。
             context.draw(Text("Play audio to start measuring")

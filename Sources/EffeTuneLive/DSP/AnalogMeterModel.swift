@@ -239,6 +239,10 @@ enum ETAnalogMeter {
         var aspect: Double { Double(columns * 4) / Double(rows * 3) }
     }
 
+    /// 最後の行に空きの枠があるか（Loudness の針が 3 つで 2 列のとき、4 つ目の枠）。
+    /// 統計の表（statRows）をそこへ置く。
+    static func hasEmptySlot(_ grid: Grid) -> Bool { grid.cells < grid.columns * grid.rows }
+
     static func grid(cells: Int, maxColumns: Int = ETAnalogMeter.maxColumns) -> Grid {
         let n = cells < 1 ? 1 : cells
         let columns = n < maxColumns ? n : maxColumns
@@ -346,6 +350,16 @@ enum ETAnalogMeter {
         return now - over < (holdSeconds > 0 ? holdSeconds : 1)
     }
 
+    /// 数値欄の小数点以下の末尾の 0 を落とす（5.00 → 5、1.50 → 1.5、10.0 → 10）。
+    /// 上流の number 入力は値をそのまま出す。Attack / Release / Peak Hold の欄がこれを使う。
+    static func trimZeros(_ s: String) -> String {
+        guard s.contains(".") else { return s }
+        var t = Substring(s)
+        while t.last == "0" { t = t.dropLast() }
+        if t.last == "." { t = t.dropLast() }
+        return t.isEmpty || t == "-" || t == "-0" ? "0" : String(t)
+    }
+
     /// 積算時間の表示（formatAnalogMeterDuration、:198-205）。
     static func duration(_ seconds: Double) -> String {
         // Float の枠は 3e38 まで運べる。Int(_:) は範囲の外で落ちるので、100 年で止める。
@@ -366,6 +380,33 @@ enum ETAnalogMeter {
         guard reading.channels.indices.contains(channel) else { return nil }
         let values = reading.channels[channel]
         return (mode == loudnessMode && needle == 1) ? values.maxDB : values.needleDB
+    }
+
+    /// Program の統計 6 行（drawProgramStats、:722-766 の表を縦に並べた順）。
+    /// 上流は M / S / I と LRA / TP / Time の 2 つの表。上の 3 行と下の 3 行がそれに当たる。
+    static func statRows(program: Program, integratedValid: Bool, lraValid: Bool) -> [(label: String, value: String)] {
+        func lufs(_ v: Double) -> String { v <= silenceDB ? "-∞" : String(format: "%.1f", v) }
+        return [
+            ("M", "\(lufs(program.momentary)) LUFS"),
+            ("S", "\(lufs(program.shortTerm)) LUFS"),
+            ("I", "\(integratedValid ? lufs(program.integrated) : "---") LUFS"),
+            ("LRA", "\(lraValid ? String(format: "%.1f", program.lra) : "---") LU"),
+            ("TP", "\(lufs(program.maxTruePeak)) dBTP"),
+            ("Time", duration(program.integratedSeconds)),
+        ]
+    }
+
+    /// Program の読みがまだ無いときの表（上流の無効値の字。M・S・I は "---"、Time は 0:00）。
+    /// 表を消さずに出しておくので、読みが来ても帯の大きさは変わらない。
+    static let emptyStatRows: [(label: String, value: String)] = [
+        ("M", "--- LUFS"), ("S", "--- LUFS"), ("I", "--- LUFS"),
+        ("LRA", "--- LU"), ("TP", "--- dBTP"), ("Time", "0:00"),
+    ]
+
+    /// 目盛りの字の色と線（2 px）を強調するか。上流（analog_meter.js:759-772）どおり基準の目盛りだけ。
+    /// 字の太さは変えない。赤い帯の始まりは強調しない。
+    static func isEmphasized(_ value: Double, in scale: Scale) -> Bool {
+        value == scale.reference
     }
 
     /// 針の見出し（cellTitle、:548-557）。

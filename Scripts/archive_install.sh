@@ -1,5 +1,5 @@
 #!/bin/bash
-# 書庫（Release + strip）を建てて、そのまま実機へ入れる。
+# 書庫（Release / Beta 構成 + strip。既定は紫の Beta、APPICON=EffeTuneLive で青の Release）を建てて、そのまま実機へ入れる。
 #
 # **出荷する形そのもので触るため。**Scripts/build.sh は plain build なので
 # strip されず、Release でしか出ない不具合をすり抜ける。一度それで

@@ -130,6 +130,8 @@ struct ParameterRow: View {
     let values: [Float]
 
     @ObservedObject var dsp: EffeTuneDSP
+    /// 数値欄の末尾の 0 を出さない（Analog Meter の Attack 5・Release 1.5）。既定は他の行と同じ桁。
+    var trimsZeros = false
     @State private var slot = 0
     @State private var editing = false
     @State private var draft = ""
@@ -330,9 +332,11 @@ struct ParameterRow: View {
         // 保存値と表示値がずれるものを通す（いまは Tilt EQ の Pivot Freq だけ）。
         let v = param.display(value)
         if isInteger { return String(Int(v.rounded())) }
-        if abs(v) >= 100 { return String(format: "%.0f", v) }
-        if abs(v) >= 10 { return String(format: "%.1f", v) }
-        return String(format: "%.2f", v)
+        let text: String
+        if abs(v) >= 100 { text = String(format: "%.0f", v) }
+        else if abs(v) >= 10 { text = String(format: "%.1f", v) }
+        else { text = String(format: "%.2f", v) }
+        return trimsZeros ? ETAnalogMeter.trimZeros(text) : text
     }
 
     /// 数値欄。触ると打ち込める。

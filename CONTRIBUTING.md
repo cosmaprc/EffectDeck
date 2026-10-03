@@ -225,7 +225,7 @@ is reinstalled before the run. The log is `uitest.log`, the result bundle is
 ## CI
 
 GitHub Actions, on every push to `main` and every pull request. No secrets; nothing is
-signed.
+signed. (Releases are a separate workflow, `release.yml`; see [Releasing](#releasing).)
 
 `.github/workflows/ci.yml`:
 
@@ -250,6 +250,35 @@ with it.
 CI retries a failed test once (`-retry-tests-on-failure`); the script does not.
 
 The UI tests are not run in CI. Run them yourself when you change what they cover.
+
+### Releasing
+
+`.github/workflows/release.yml` builds, signs and uploads to App Store Connect. It is the
+normal path; `Scripts/ship.sh` on the Mac is the local fallback. Nothing in it adds a build
+to the external "EffectDeck Public Beta" group or submits anything for review.
+
+TestFlight (purple, `Beta` configuration):
+
+1. If the version is already closed in App Store Connect, run `python3 Tools/gen_version.py --today`,
+   commit and push to `main`. The version is the day, and a closed version cannot take another build.
+2. Wait for CI to go green on that `main` commit.
+3. `git tag tf-YYYY.MM.DD-NN <sha> && git push origin tf-YYYY.MM.DD-NN`. The date in the tag must
+   equal `MARKETING_VERSION`.
+4. Approve the run in GitHub (the `release` environment has a required reviewer). Until then
+   nothing is signed or uploaded.
+5. The workflow archives, exports with cloud signing (the App Store Connect API key), runs
+   `Tools/check_release_binary.py`, uploads, waits for processing and adds the build to the
+   internal group "Internal". The build number is the highest in App Store Connect plus one; it
+   is not committed.
+
+App Store build (blue, `Release`): Actions, Release, Run workflow on `main` with `flavor=store`.
+`dry_run` is on by default; it archives, exports and checks the build and runs `altool --validate-app`
+but uploads nothing. Untick it to upload.
+
+Adding a build to Public Beta, attaching it to a version and submitting for review stay manual
+(`python3 Tools/asc.py attach …`). The key lives only in the `release` environment secrets
+(`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`) and is deleted at the end of every run. The
+ipa and the archive are never uploaded as artifacts, because the repository is public.
 
 `.github/workflows/dsp.yml` runs upstream's own DSP test suite on `Vendor/effetune` with
 our patches applied, in Debug and with ASan+UBSan. It runs nightly and when `Patches/`,

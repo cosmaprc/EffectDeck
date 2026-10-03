@@ -1,8 +1,24 @@
 #!/bin/bash
 # 配布用の書庫を作る。
 #
-#   bash Scripts/archive.sh                            紫（TestFlight 行き。ET_BETA）
-#   bash Scripts/archive.sh EffeTuneLive EffeTuneLive  青（店へ出す版）
+#   bash Scripts/archive.sh                            紫（-configuration Beta。TestFlight 行き。ET_BETA）
+#   bash Scripts/archive.sh EffeTuneLive EffeTuneLive  青（-configuration Release。店へ出す版）
+#   CONFIG=Release bash Scripts/archive.sh             同上（構成名で直接選ぶ）
+#
+# ふだんの配布は GitHub Actions（.github/workflows/release.yml。tf-* のタグで Beta、
+# 手動で store）で、そこもこのスクリプトを呼ぶ。ローカルの非常用は Scripts/ship.sh。
+# どちらも project.yml の同じ構成（Beta / Release）を読む。
+#
+# 環境変数（どれも省略できる）:
+#   ET_BUILD_NUMBER=N      ビルド番号（CURRENT_PROJECT_VERSION）をコマンドラインで上書きする。
+#                          release.yml が ASC の最大 + 1 を渡す（コミットはしない）。数字だけ。
+#   ET_XCODEBUILD_LOG=path xcodebuild の出力を丸ごとそこへも残す（archive.log は絞った行だけ）。
+#   ET_ARCHIVE_ADHOC=1     書庫を ad-hoc 署名（-）で作る。GitHub の runner には開発用証明書の
+#                          秘密鍵が無く、自動署名だと毎回 "Created via API" の証明書が増えるときの
+#                          逃げ道。権限（entitlements）は ad-hoc 署名にも埋まり、書き出し
+#                          （Scripts/ExportOptions-ci.plist のクラウド署名）が配布用に署名し直す。
+#                          署名なし（CODE_SIGNING_ALLOWED=NO）にしない。書き出しが権限をプロファイルから
+#                          取り、本体の media-device-extension の空配列が消える。
 #
 # 先に Scripts/setup.sh を通す（パッチ・カタログ・プリセット・note-models・版・プロジェクト）。
 # 前は gen_version と xcodegen しか走らせず、書庫が正しいかは、前のビルドが木を
@@ -18,23 +34,43 @@ export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.." || exit 1
 . Scripts/asc_auth.sh || exit 1   # PROVISIONING（API キー）。画面ロック中の "No Accounts" よけ
 SCHEME="${1:-EffeTuneLive}"
-# アイコン。**既定は紫**（EffectDeckPublicBeta）。ここから出る書庫は TestFlight 行きで、
-# 端末で青と紫を見分けられると、いまどちらを触っているか分かる。
-#
-# 店へ出すときだけ第 2 引数に EffeTuneLive を渡して青にする。
+# ビルド構成で決める。**アイコンと ET_BETA は project.yml の構成（Beta / Release）が持つ**
+# ので、ここでは構成名を選ぶだけ。GitHub Actions もローカルも同じ定義を読む。
+#   Beta     紫（EffectDeckPublicBeta）＋ ET_BETA。TestFlight 行き。**既定**。
+#            端末で青と紫を見分けられると、いまどちらを触っているか分かる。
+#   Release  青（EffeTuneLive）。店へ出す版。
+# 選び方は環境変数 CONFIG=Beta|Release、または第 2 引数（従来のアイコン名）。
+#   EffectDeckPublicBeta -> Beta、EffeTuneLive -> Release。それ以外は xcodebuild を呼ばずに落とす。
 # 起動時に setAlternateIconName で差し替える形にしないのは、系が毎回
 # 「アイコンを変えました」の確認を出すから。
+# いま ET_BETA で変わるのは同梱の JSFX の見本（ETJSFXHost.showsBundledSamples）だけ。
+# 見本を .app に積むかも同じ構成で決まる（Scripts/embed_debug_jsfx.sh が
+# SWIFT_ACTIVE_COMPILATION_CONDITIONS を読む）。JSFX 本体は店の版でも開いている
+# （ETJSFXHost.isEnabled）。店に出さない機能を足すときは Beta 構成の側で開ける。
 APPICON="${2:-EffectDeckPublicBeta}"
-# **アイコンと中身を 1 つの引数で決める。**別々にすると噛み合わなくなる
-# （紫なのに JSFX が無い形を一度作った）。
-# ベータ側だけ ET_BETA を立てる。いま ET_BETA で変わるのは同梱の JSFX の見本
-# （ETJSFXHost.showsBundledSamples）だけ。見本を.appに積むかも同じ値で決まる
-# （Scripts/embed_debug_jsfx.shがこの変数を読む）。JSFX 本体は店の版でも開いている
-# （ETJSFXHost.isEnabled）。店に出さない機能を足すときはここで開ける。
-if [ "$APPICON" = "EffectDeckPublicBeta" ]; then
-  SWIFT_FLAGS='$(inherited) ET_BETA'
+if [ -n "${CONFIG:-}" ]; then
+  case "$CONFIG" in
+    Beta|Release) ;;
+    *) echo "FINISHED: CONFIG は Beta か Release（受け取った値: $CONFIG）。書庫は作らない (exit=2)"; exit 2 ;;
+  esac
 else
-  SWIFT_FLAGS='$(inherited)'
+  case "$APPICON" in
+    EffectDeckPublicBeta) CONFIG=Beta ;;
+    EffeTuneLive)         CONFIG=Release ;;
+    *) echo "FINISHED: 第 2 引数は EffectDeckPublicBeta か EffeTuneLive（受け取った値: $APPICON）。書庫は作らない (exit=2)"; exit 2 ;;
+  esac
+fi
+# ビルド番号の上書き。数字以外は xcodebuild を呼ばずに落とす。
+BUILD_ARGS=()
+if [ -n "${ET_BUILD_NUMBER:-}" ]; then
+  case "$ET_BUILD_NUMBER" in
+    *[!0-9]*) echo "FINISHED: ET_BUILD_NUMBER は数字だけ（受け取った値: $ET_BUILD_NUMBER）。書庫は作らない (exit=2)"; exit 2 ;;
+  esac
+  BUILD_ARGS=("CURRENT_PROJECT_VERSION=$ET_BUILD_NUMBER")
+fi
+if [ "${ET_ARCHIVE_ADHOC:-0}" = "1" ]; then
+  BUILD_ARGS+=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES
+               PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=C82ST8T9MN)
 fi
 LOG="$PWD/archive.log"
 ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
@@ -42,15 +78,14 @@ ARCHIVE="${ARCHIVE_DIR:-/tmp}/$SCHEME.xcarchive"
 XCODEBUILD="${ET_XCODEBUILD:-/usr/bin/xcodebuild}"
 
 main() {
-  echo "=== start $(date) === icon=$APPICON"
+  echo "=== start $(date) === config=$CONFIG"
   rm -rf "$ARCHIVE"
   # setup.sh が gen_version と xcodegen（project.yml）まで走らせる。
   bash Scripts/setup.sh || { echo "!! Scripts/setup.sh が落ちた。書庫は作らない"; return 1; }
   "$XCODEBUILD" -project EffeTuneLive.xcodeproj -scheme "$SCHEME" \
-    -configuration Release -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
-    ET_APPICON="$APPICON" \
-    SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_FLAGS" \
-    archive -archivePath "$ARCHIVE" 2>&1 \
+    -configuration "$CONFIG" -sdk iphoneos -arch arm64 "${PROVISIONING[@]}" \
+    archive -archivePath "$ARCHIVE" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} 2>&1 \
+    | tee "${ET_XCODEBUILD_LOG:-/dev/null}" \
     | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|errSec" | tail -10
   local code="${PIPESTATUS[0]}"
   [ "$code" -eq 0 ] || { echo "!! xcodebuild archive が落ちた (exit $code)"; return 1; }

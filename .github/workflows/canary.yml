@@ -16,7 +16,8 @@
 # 道具は ci.yml と同じもの（Scripts/setup.sh・Tools/gen_sim_spec.py・.github/scripts/pick_simulator.py・
 # .github/scripts/check_xcresult_skips.py・版を固定した xcodegen）。Xcode とランタイムの選び方だけ
 # .github/scripts/pick_xcode.py。
-# runner のラベルと下の env（STABLE_XCODE_APP・SIM_NAME・XCODEGEN_*）は ci.yml の macos と同じ値。
+# runner のラベルと下の env（STABLE_XCODE_APP・SIM_NAME・XCODEGEN_*）は ci.yml の macos と同じ値
+# （release.yml も同じラベル・XCODE_APP・XCODEGEN_* を持つ）。
 # 入れ替えるときは両方直す（先の Xcode を持つ image が先に出たら、ラベルはこちらだけ進めてよい）。
 #
 # 署名はしない（CODE_SIGNING_ALLOWED=NO）。秘密も使わない。

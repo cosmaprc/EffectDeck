@@ -55,6 +55,14 @@ enum ETScreenshotSeed {
     /// 濁りを削り、3kHz を少し出し、高域に棚を足した、よくある形にしてある。
     /// 後ろに Spectrum Analyzer を置いて、かかった結果が図に出るようにする。
     static var storeChain: String? {
+        // `-ETSeed am-<presetId>` は Analog Meter の同梱プリセットを 1 枚だけ並べる
+        // （針の見え方を、Mode ごとに値の入った状態で撮るため）。
+        if let name = UserDefaults.standard.string(forKey: "ETSeed"), name.hasPrefix("am-"),
+           let preset = ETEffectPresetList.first(where: {
+               $0.effect == "Analog Meter" && $0.presetId == String(name.dropFirst(3))
+           }) {
+            return "{\"pipeline\":[{\"name\":\"Analog Meter\",\"enabled\":true,\"parameters\":" + preset.json + "}]}"
+        }
         if let name = UserDefaults.standard.string(forKey: "ETSeed"),
            let id = storePresets[name] {
             return ETSystemPresets.first { $0.id == id }?.json
@@ -167,7 +175,7 @@ enum ETScreenshotSeed {
     static var requested: [String]? {
         guard let name = UserDefaults.standard.string(forKey: "ETSeed") else { return nil }
         // プリセットを読むものは、並べる型を自分では決めない（storeChain が持つ）。
-        if storePresets[name] != nil || name == "analyzers4" { return [] }
+        if storePresets[name] != nil || name == "analyzers4" || name.hasPrefix("am-") { return [] }
         #if DEBUG
         if name == "demo" { return [] }
         #endif
