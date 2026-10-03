@@ -968,13 +968,12 @@ struct EffectPickerView: View {
     /// `newEffects.isEmpty` を見る）。上流が新しいものを足したときに、
     /// その型をここへ並べる。**一度足したら、次の版で必ず外すこと。**
     /// いつまでも「New」と出ていると意味を失う。
-    /// いまは dsp 0.11.0（EffeTune 2.11.0）で足された 4 つ。
-    /// dsp 0.10.0 の 3 つ（Pitch Meter / TV Audio Simulator / Spatial Mapper）は外した。
+    /// いまは dsp 0.12.0（EffeTune 2.12.0）で足された 3 つ。
+    /// dsp 0.11.0 の 4 つ（Attack Tonal Balance / Bass Extender / Bass Management / Chroma Spiral）は外した。
     static let newTypes = [
-        "AttackTonalBalancePlugin",
-        "BassExtenderPlugin",
-        "BassManagementPlugin",
-        "ChromaSpiralPlugin",
+        "AnalogMeterPlugin",
+        "RhythmAnalyzerPlugin",
+        "TonalBalanceEQPlugin",
     ]
     static let newKey = "__new"
 
@@ -1026,7 +1025,7 @@ struct EffectPickerView: View {
     /// 挟んでいたが、ブラウザを1枚余計に通るうえ、長い依頼文が途中（"so keep"）で切れていた。
     /// **決め事はJSFX.mdに書き、依頼には書かない。**依頼が渡すのはアプリとDSPの版だけ。
     /// 内蔵のエフェクトで済むときは、JSFX.mdが鎖（CHAIN.md）でも組めると言わせる。
-    /// **200字未満、@無し。**2026.09.22と0.11.0で192字（buildChainは194字）。
+    /// **200字未満、@無し。**2026.09.22と0.12.0で192字（buildChainは194字）。
     static let writeJSFX: URL = chatGPT(
         "Write a JSFX effect for \(requestVersion). " +
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
@@ -1039,7 +1038,7 @@ struct EffectPickerView: View {
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md " +
         "and follow it. Then ask me what sound I want.")
 
-    /// 依頼に入れる版。"EffectDeck v2026.09.22 (EffeTune DSP 0.11.0)"。
+    /// 依頼に入れる版。"EffectDeck v2026.09.22 (EffeTune DSP 0.12.0)"。
     /// ビルド番号は入れない。CHAIN.mdはこの書き方で版を読み（JSFX.mdから鎖へ回るときも）、
     /// 無ければSettings → Aboutを見させる。
     private static var requestVersion: String {

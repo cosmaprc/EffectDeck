@@ -20,6 +20,19 @@ class GenLicensesTests(unittest.TestCase):
         self.assertIn("René Nyffenegger", text)
         self.assertIn("permission notice appear in all copies", text)
 
+    def test_lists_fdlibm(self):
+        # Rhythm Analyzer（2.12.0）の g2_math.h にある atan / atan2 は fdlibm 5.3 の移植。
+        entry = next(item for item in self.gl.ITEMS if item[0] == "fdlibm")
+        self.assertEqual(entry[3], "Licenses/fdlibm.LICENSE")
+        text = (ROOT / entry[3]).read_text("utf-8")
+        self.assertIn("Sun Microsystems", text)
+        self.assertIn("provided that this notice", text)
+
+    @unittest.skipUnless(vendor_at_pin("effetune", "dsp/plugins/analyzer/rhythm_analyzer"),
+                         "Vendor/effetune が固定した版でない")
+    def test_fdlibm_copy_matches_vendor_header(self):
+        self.assertEqual(self.gl.check_copies(), [])
+
     # Base64.hpp でなく木（Vendor/ysfx）が固定した版かで見る。上流が Base64.hpp を動かしたら、
     # 飛ばさずに落ちる。別の版の checkout と比べて写しのせいにしない。
     @unittest.skipUnless(vendor_at_pin("ysfx", "sources/base64"),

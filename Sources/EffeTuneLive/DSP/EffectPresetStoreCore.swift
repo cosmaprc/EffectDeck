@@ -84,6 +84,12 @@ final class EffectPresetStoreCore {
         // getSerializableParametersの中身そのものなので、これらも入っている
         // （plugin-preset-dialog.js:145）。入れないとlt / fdしか残らない。
         ETDesignParam.write(node.design, type: node.spec.type, into: &params)
+        // 表示の設定（Analog Meter の rl / rg など）も入れる。上流のプリセットは getParameters の中身で、
+        // 表示の設定もそこに入っている。入れないと、保存して戻したときに針の目盛りが既定へ戻る。
+        // 触っていない鍵は上流の既定で書く（持つ型だけ。ETDisplayParam.defaults）ので、戻したときに
+        // 「保存したときの表示」へ戻る。
+        let display = ETDisplayParam.defaults(for: node.spec.type).merging(node.display) { _, mine in mine }
+        ETDisplayParam.write(display, type: node.spec.type, into: &params)
         return params
     }
 

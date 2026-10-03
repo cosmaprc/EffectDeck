@@ -9,6 +9,20 @@ import Foundation
 
 let ETCatalog: [ETEffect] = [
     ETEffect(
+      type: "AnalogMeterPlugin",
+      name: "Analog Meter",
+      about: "Classic needle meter with VU, PPM, peak, and loudness ballistics",
+      category: "analyzer",
+      paramsHash: 0xc0e236cd,
+      floatCount: 4,
+      defaults: [0.0, 0.3, 5.0, 1.5],
+      params: [
+        ETParam(name: "mode", key: "md", label: "Mode", kind: .enumeration(["VU", "PPM", "RMS", "Sample Peak", "True Peak", "Loudness"]), defaultValue: 0.0, offset: 0, count: 1),
+        ETParam(name: "integration", key: "it", label: "Integration", kind: .number(min: 0.05, max: 3.0, step: 0.01, unit: "s", isInteger: false), defaultValue: 0.3, offset: 1, count: 1),
+        ETParam(name: "attack", key: "at", label: "Attack", kind: .number(min: 1.0, max: 20.0, step: 0.1, unit: "ms", isInteger: false), defaultValue: 5.0, offset: 2, count: 1),
+        ETParam(name: "release", key: "rt", label: "Release", kind: .number(min: 0.1, max: 5.0, step: 0.01, unit: "s", isInteger: false), defaultValue: 1.5, offset: 3, count: 1)
+      ]),
+    ETEffect(
       type: "ChromaSpiralPlugin",
       name: "Chroma Spiral",
       about: "Spectrum by note and octave",
@@ -48,12 +62,12 @@ let ETCatalog: [ETEffect] = [
       name: "Oscilloscope",
       about: "Real-time waveform visualization",
       category: "analyzer",
-      paramsHash: 0x84e21dd2,
+      paramsHash: 0xc0b55527,
       floatCount: 7,
       defaults: [0.01, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0],
       params: [
         ETParam(name: "displayTime", key: "dt", label: "Display Time", kind: .number(min: 0.001, max: 0.1, step: 0.0, unit: "s", isInteger: false), defaultValue: 0.01, offset: 0, count: 1),
-        ETParam(name: "triggerMode", key: "tm", label: "Trigger Mode", kind: .enumeration(["Auto", "Normal"]), defaultValue: 0.0, offset: 1, count: 1),
+        ETParam(name: "triggerMode", key: "tm", label: "Trigger Mode", kind: .enumeration(["Auto", "Normal", "Off"]), defaultValue: 0.0, offset: 1, count: 1),
         ETParam(name: "triggerLevel", key: "tl", label: "Trigger Level", kind: .number(min: -1.0, max: 1.0, step: 0.01, unit: "", isInteger: false), defaultValue: 0.0, offset: 2, count: 1),
         ETParam(name: "triggerEdge", key: "te", label: "Trigger Edge", kind: .enumeration(["Rising", "Falling"]), defaultValue: 0.0, offset: 3, count: 1),
         ETParam(name: "holdoff", key: "ho", label: "Holdoff", kind: .number(min: 0.0001, max: 0.01, step: 0.0, unit: "s", isInteger: false), defaultValue: 0.0001, offset: 4, count: 1),
@@ -72,6 +86,19 @@ let ETCatalog: [ETEffect] = [
         ETParam(name: "referenceA4", key: "rf", label: "Reference A4", kind: .number(min: 400.0, max: 480.0, step: 1.0, unit: "Hz", isInteger: true), defaultValue: 440.0, offset: 0, count: 1),
         ETParam(name: "minimumMidi", key: "mn", label: "Lowest Note", kind: .number(min: 21.0, max: 108.0, step: 0.0, unit: "", isInteger: true), defaultValue: 36.0, offset: 1, count: 1),
         ETParam(name: "maximumMidi", key: "mx", label: "Highest Note", kind: .number(min: 21.0, max: 108.0, step: 0.0, unit: "", isInteger: true), defaultValue: 96.0, offset: 2, count: 1)
+      ]),
+    ETEffect(
+      type: "RhythmAnalyzerPlugin",
+      name: "Rhythm Analyzer",
+      about: "Shows tempo, beat grid and groove timing",
+      category: "analyzer",
+      paramsHash: 0xbae05865,
+      floatCount: 3,
+      defaults: [40.0, 240.0, 0.0],
+      params: [
+        ETParam(name: "minimumBpm", key: "mn", label: "Min BPM", kind: .number(min: 40.0, max: 192.0, step: 1.0, unit: "BPM", isInteger: true), defaultValue: 40.0, offset: 0, count: 1),
+        ETParam(name: "maximumBpm", key: "mx", label: "Max BPM", kind: .number(min: 50.0, max: 240.0, step: 1.0, unit: "BPM", isInteger: true), defaultValue: 240.0, offset: 1, count: 1),
+        ETParam(name: "metronomeClick", key: "ck", label: "Metronome Click", kind: .toggle, defaultValue: 0.0, offset: 2, count: 1)
       ]),
     ETEffect(
       type: "SpectrogramPlugin",
@@ -686,6 +713,32 @@ let ETCatalog: [ETEffect] = [
       params: [
         ETParam(name: "pivotExponent", key: "f0", label: "Pivot Freq (Hz)", kind: .number(min: 3.0, max: 9.9, step: 0.01, unit: "", isInteger: false), defaultValue: 6.91, offset: 0, count: 1, scale: .naturalExp),
         ETParam(name: "slope", key: "sl", label: "Slope", kind: .number(min: -12.0, max: 12.0, step: 0.1, unit: "dB/oct", isInteger: false), defaultValue: 0.0, offset: 1, count: 1)
+      ]),
+    ETEffect(
+      type: "TonalBalanceEQPlugin",
+      name: "Tonal Balance EQ",
+      about: "Gradually steers the tonal balance toward a learned target curve",
+      category: "eq",
+      paramsHash: 0x0a5d8c64,
+      floatCount: 36,
+      defaults: [0.0, 100.0, 6.0, 0.5, 30.0, 20.0, 16000.0, 83.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 316.0, 1000.0, 3160.0, 10000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7, 0.7, 0.7, 0.7, -6.0, 250.0, 0.0],
+      params: [
+        ETParam(name: "target", key: "tg", label: "Target", kind: .enumeration(["All", "Classical", "Electronic", "Pop", "Rock", "Tilt"]), defaultValue: 0.0, offset: 0, count: 1),
+        ETParam(name: "tiltSlope", key: "ts", label: "Slope", kind: .number(min: -18.0, max: 0.0, step: 0.1, unit: "dB/oct", isInteger: false), defaultValue: -6.0, offset: 33, count: 1),
+        ETParam(name: "tiltCorner", key: "tc", label: "Corner", kind: .number(min: 20.0, max: 1000.0, step: 1.0, unit: "Hz", isInteger: true), defaultValue: 250.0, offset: 34, count: 1),
+        ETParam(name: "measurementPaused", key: "mp", label: "Measurement Paused", kind: .toggle, defaultValue: 0.0, offset: 35, count: 1, runtimeOnly: true),
+        ETParam(name: "amount", key: "am", label: "Amount", kind: .number(min: 0.0, max: 100.0, step: 1.0, unit: "%", isInteger: true), defaultValue: 100.0, offset: 1, count: 1),
+        ETParam(name: "range", key: "rg", label: "Range", kind: .number(min: 0.0, max: 12.0, step: 0.5, unit: "dB", isInteger: false), defaultValue: 6.0, offset: 2, count: 1),
+        ETParam(name: "smoothing", key: "sm", label: "Smoothing", kind: .number(min: 0.1667, max: 2.0, step: 0.01, unit: "oct", isInteger: false), defaultValue: 0.5, offset: 3, count: 1),
+        ETParam(name: "averagingTime", key: "at", label: "Averaging Time", kind: .number(min: 0.1, max: 100.0, step: 0.1, unit: "s", isInteger: false), defaultValue: 30.0, offset: 4, count: 1),
+        ETParam(name: "low", key: "lo", label: "Low", kind: .number(min: 20.0, max: 200.0, step: 1.0, unit: "Hz", isInteger: true), defaultValue: 20.0, offset: 5, count: 1),
+        ETParam(name: "high", key: "hi", label: "High", kind: .number(min: 2000.0, max: 20000.0, step: 1.0, unit: "Hz", isInteger: true), defaultValue: 16000.0, offset: 6, count: 1),
+        ETParam(name: "averageSpl", key: "sp", label: "Average SPL", kind: .number(min: 60.0, max: 96.0, step: 0.1, unit: "dB", isInteger: false), defaultValue: 83.0, offset: 7, count: 1),
+        ETParam(name: "adjustEnabled", key: "ea", label: "Adjust Enabled", kind: .toggle, defaultValue: 1.0, offset: 8, count: 5),
+        ETParam(name: "adjustType", key: "ta", label: "Adjust Type", kind: .enumeration(["pk", "ls", "hs"]), defaultValue: 0.0, offset: 13, count: 5),
+        ETParam(name: "adjustFrequency", key: "fa", label: "Adjust Frequency", kind: .number(min: 20.0, max: 20000.0, step: 1.0, unit: "Hz", isInteger: true), defaultValue: 100.0, offset: 18, count: 5),
+        ETParam(name: "adjustGain", key: "ga", label: "Adjust Gain", kind: .number(min: -20.0, max: 20.0, step: 0.1, unit: "dB", isInteger: false), defaultValue: 0.0, offset: 23, count: 5),
+        ETParam(name: "adjustQ", key: "qa", label: "Adjust Q", kind: .number(min: 0.1, max: 10.0, step: 0.01, unit: "", isInteger: false), defaultValue: 0.7, offset: 28, count: 5)
       ]),
     ETEffect(
       type: "ToneControlPlugin",

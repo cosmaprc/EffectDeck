@@ -100,7 +100,8 @@ SOURCE_ROLES = [
     ("Sources/Extension/", ("device",), None, None),
     ("Sources/ShareExtension/", ("share",), None, None),
     ("Vendor/effetune/dsp/core/", ("app",), None, r"test[^/]*\.cpp$"),
-    ("Vendor/effetune/dsp/plugins/", ("app",), None, r"test[^/]*\.cpp$"),
+    # calibrate_tables.cpp は int main を持つ単体ツール。project.yml が積まない。
+    ("Vendor/effetune/dsp/plugins/", ("app",), None, r"test[^/]*\.cpp$|(^|/)calibrate_tables\.cpp$"),
     ("Vendor/effetune/dsp/include/", ("app",), None, None),
     ("Vendor/effetune/dsp/vendor/pffft/src/", ("app",), None, r"test[^/]*$"),
     ("Vendor/ysfx/sources/", ("app",), None,

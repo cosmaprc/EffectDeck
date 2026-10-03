@@ -45,6 +45,7 @@ enum ETEffectViews {
     static func has(_ type: String) -> Bool { types.contains(type) }
 
     private static let types: Set<String> = [
+        "AnalogMeterPlugin",
         "PitchMeterPlugin",
         "SpatialMapperPlugin",
         "AutoLevelerPlugin",
@@ -82,6 +83,7 @@ enum ETEffectViews {
         "OscilloscopePlugin",
         "PhaseSelectEqPlugin",
         "PowerAmpSagPlugin",
+        "RhythmAnalyzerPlugin",
         "RoomEqPlugin",
         "SaturationPlugin",
         "SpectrogramPlugin",
@@ -89,6 +91,7 @@ enum ETEffectViews {
         "StereoMeterPlugin",
         "SubSynthPlugin",
         "SWRadioSimulatorPlugin",
+        "TonalBalanceEQPlugin",
         "TubeSimulatorPlugin",
     ]
 
@@ -97,6 +100,8 @@ enum ETEffectViews {
     static func view(index: Int, node: EffeTuneDSP.Node,
                      dsp: EffeTuneDSP) -> some View {
         switch node.spec.type {
+        case "AnalogMeterPlugin":
+            AnalogMeterView(index: index, node: node, dsp: dsp)
         case "PitchMeterPlugin":
             PitchMeterView(index: index, node: node, dsp: dsp)
         case "SpatialMapperPlugin":
@@ -171,6 +176,8 @@ enum ETEffectViews {
             PhaseSelectEqView(index: index, node: node, dsp: dsp)
         case "PowerAmpSagPlugin":
             PowerAmpSagView(index: index, node: node, dsp: dsp)
+        case "RhythmAnalyzerPlugin":
+            RhythmAnalyzerView(index: index, node: node, dsp: dsp)
         case "RoomEqPlugin":
             RoomEQView(index: index, node: node, dsp: dsp)
         case "SaturationPlugin":
@@ -185,6 +192,8 @@ enum ETEffectViews {
             SubSynthView(index: index, node: node, dsp: dsp)
         case "SWRadioSimulatorPlugin":
             SWRadioSimulatorView(index: index, node: node, dsp: dsp)
+        case "TonalBalanceEQPlugin":
+            TonalBalanceEQView(index: index, node: node, dsp: dsp)
         case "TubeSimulatorPlugin":
             TubeSimulatorView(index: index, node: node, dsp: dsp)
         default:

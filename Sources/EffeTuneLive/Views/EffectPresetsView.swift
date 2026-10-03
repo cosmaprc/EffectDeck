@@ -58,7 +58,7 @@ struct EffectPresetsView: View {
     /// いま一致している出荷時プリセットの id。無ければ空。
     private var activeId: String {
         guard let node = node else { return "" }
-        return EffectPresetApply.matchingPresetId(for: spec, current: node.values)
+        return EffectPresetApply.matchingPresetId(for: spec, current: node.values, display: node.display)
     }
 
     private var names: [String] { store.names(of: spec.name) }
@@ -78,6 +78,9 @@ struct EffectPresetsView: View {
         // designerの材料（5Band FIR PEQの帯域など）もfloatに載らないので鍵で運ぶ
         // （DSP/DesignParams.swift）。値と同じ回で当て、設計のやり直しは1度だけDSPがやる。
         dsp.setValues(next, at: index, design: params)
+        // 表示だけの設定（Analog Meter の Reference / Range など。DSP/DisplayParams.swift）も、
+        // プリセットが書いているものは当てる。float に載らないので鍵で運んでいる。
+        dsp.applyDisplay(from: params, at: index)
 
         // IR Reverb の素材だけは float に載らないので鍵で運ぶ
         // （PipelineStore.swift:74-77 と同じ扱い）。段に書いてから入れ直す。
