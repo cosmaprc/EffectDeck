@@ -368,7 +368,10 @@ private struct AnalogMeterFigure: View {
         // 大きい読み値の空きを取るのは Program の針だけ。
         let readoutBaseline = box.maxY - inset - 5
         let pivotX = box.minX + box.width / 2
-        let pivotY = readoutBaseline - readoutSize * 0.75 - fontSize * 0.9
+        // 軸の根元と半径は、同じ図の中でいちばん大きい読み値（Loudness は Program）で決める。
+        // 針ごとに変えると、同じ行の軸と針の長さがそろわない（上流は全セル同じ形）。
+        let pivotReadout: CGFloat = loudness ? programReadout : readoutSize
+        let pivotY = readoutBaseline - pivotReadout * 0.75 - fontSize * 0.9
         // 見出しの帯。目盛りの字の上端が見出しの下に収まるところまで弧を下げる。
         let titleBottom = box.minY + inset * 2 + fontSize * 1.25
         let labelRise = 9 + fontSize * 0.85 * 1.25

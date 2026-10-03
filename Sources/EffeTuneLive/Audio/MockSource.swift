@@ -68,10 +68,14 @@ final class ETMockSource {
     private var sweepPhase: Double = 0
 
     private let mode: Mode
+    /// music の持ち上げ（倍率）。`-ETMockGainDB <dB>` で選ぶ。既定は 0 dB。
+    private let musicBoost: Float
 
     init(sampleRate: Double) {
         self.sampleRate = sampleRate > 0 ? sampleRate : 48000
         self.mode = Self.mode
+        let db = UserDefaults.standard.double(forKey: "ETMockGainDB")
+        self.musicBoost = Float(pow(10.0, db / 20.0))
     }
 
     // MARK: music
@@ -183,8 +187,8 @@ final class ETMockSource {
             let base = Int(phase)
             for i in 0..<max(0, frames) {
                 let s = Self.music(sample: base + i, sampleRate: sr)
-                out[i * 2] = s.left
-                out[i * 2 + 1] = s.right
+                out[i * 2] = max(-1, min(1, s.left * musicBoost))
+                out[i * 2 + 1] = max(-1, min(1, s.right * musicBoost))
             }
             phase += Double(max(0, frames))
             if phase >= sr * 7200 { phase -= sr * 7200 }
