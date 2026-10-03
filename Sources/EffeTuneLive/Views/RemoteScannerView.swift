@@ -109,7 +109,7 @@ struct RemotePanelView: View {
 }
 
 /// Remote Control の画面の中身（List・題・QR の読み取り）。NavigationStack の中に置く。
-/// ツールバーのシート（RemotePanelView）と、設定画面の Remote Control の行の行き先が同じ中身を出す。
+/// ツールバーのシート（RemotePanelView）の中身。設定画面の Remote の面は同じ節を RemoteSections で並べる。
 /// QR の読み取りはここで出す（画面の上に重なる）。
 /// 設定画面の Remote の面に置く節。List の中に直に並べる（RemoteContent は自前の List を持つ）。
 struct RemoteSections: View {

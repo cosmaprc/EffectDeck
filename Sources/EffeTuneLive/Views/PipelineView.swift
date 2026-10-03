@@ -1873,7 +1873,7 @@ private struct PipelineToolbar: ToolbarContent {
             // PoC: PC の EffeTune を操る画面を開くアイコン（シート。つなぐ・切るもシートの中）。
             // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
             // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは
-            // Settings の Remote Control の行から開く。
+            // 設定画面の Remote の面から開く。
             if pickerAsPopover {
                 RemoteToolbarButton { present(.remote) }
             }

@@ -27,7 +27,7 @@
 //  つなぎ先: ws://<host>:47300/?t=<token>（ETRemoteAddress）。トークンが違うと PC は
 //  コード 4401 で閉じるので、その場合は再接続しない（繰り返しても通らない）。
 //  PC の画面の QR（http://host:port/?t=…。ws:// も読む）をアプリの中の読み取り（RemoteScannerView）で読んだら
-//  pair(_:) が控えてつなぐ（入口はツールバーのアイコン・帯・設定画面の Remote Control の行）。
+//  pair(_:) が控えてつなぐ（入口はツールバーのアイコン・帯・設定画面の Remote の面）。
 //
 //  **入切のスイッチは無い。**QR を読む（pair）か Connect でつなぎ、Disconnect で切る。
 //  Disconnect しなければ、起動のたびに控えた PC へつなぎ直す（Preferences.remoteWantsConnection）。
