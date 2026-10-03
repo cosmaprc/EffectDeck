@@ -28,6 +28,24 @@ import CoreGraphics
 @MainActor
 final class RhythmTracker: ObservableObject {
     let state = ETRhythmState()
+
+    /// tap ごとに 1 つ。**画面に持たせない。** カードを畳む・開くと図は別の場所の別の画面に
+    /// 作り直されるので、@StateObject では開くたびに履歴が空になり、Echo rows が埋まるまで
+    /// （Span × 5〜7 拍、8 拍で 20 秒ほど）上流より印が少なかった。上流は plugin が履歴を持ち、
+    /// 畳んでも消えない。2 つの画面（ドラッグ中の写しなど）が同じ輪を取り合うことも無くなる。
+    /// tap は作るたびに新しい番号（EffeTuneDSP.nextTap）なので、もう居ない tap の分は捨てる。
+    private static var byTap: [UInt32: RhythmTracker] = [:]
+
+    static func shared(tap: UInt32) -> RhythmTracker {
+        // 0 は tap を付けられなかったもの（"Waiting for audio" のまま）。分けて持たない。
+        guard tap != 0 else { return RhythmTracker() }
+        if let tracker = byTap[tap] { return tracker }
+        let live = Set(EffeTuneDSP.shared.chain.map(\.tapId))
+        byTap = byTap.filter { live.contains($0.key) }
+        let made = RhythmTracker()
+        byTap[tap] = made
+        return made
+    }
     private var clearCount = Telemetry.shared.clearCount
     /// Tempogram の濃淡の板。state.tempogramDirty のときだけ作り直す。
     private(set) var tempogramMask: CGImage?
@@ -94,7 +112,7 @@ struct RhythmAnalyzerView: View {
     @ObservedObject var dsp: EffeTuneDSP
 
     @Environment(\.etGraphOnly) private var graphOnly
-    @StateObject private var tracker = RhythmTracker()
+    @ObservedObject private var tracker: RhythmTracker
 
     // 表示だけの設定（DisplayParams の "RhythmAnalyzerPlugin"）。
     @State private var span: Double = Double(ETRhythm.defaultSpan)
@@ -102,6 +120,13 @@ struct RhythmAnalyzerView: View {
     @State private var showLanes = true
     @State private var showEcho = true
     @State private var showLens = true
+
+    init(index: Int, node: EffeTuneDSP.Node, dsp: EffeTuneDSP) {
+        self.index = index
+        self.node = node
+        self.dsp = dsp
+        _tracker = ObservedObject(wrappedValue: RhythmTracker.shared(tap: node.tapId))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
