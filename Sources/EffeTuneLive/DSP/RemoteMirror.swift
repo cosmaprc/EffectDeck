@@ -15,7 +15,7 @@
 //
 //  つなぎ先: ws://<host>:47300/?t=<token>（ETRemoteAddress）。トークンが違うと PC は
 //  コード 4401 で閉じるので、その場合は再接続しない（繰り返しても通らない）。
-//  PC の画面の QR（ws://host:port/?t=…）を読んだら pair(_:) が控えてつなぐ。
+//  PC の画面の QR（http://host:port/?t=…。ws:// も読む）を読んだら pair(_:) が控えてつなぐ。
 //
 //  ---------------------------------------------------------------------------
 //  **何を送るか（メッセージの一覧は remote-v1 と v2）**
@@ -223,7 +223,7 @@ final class RemoteMirror: ObservableObject {
         }
     }
 
-    /// PC の QR の接続先（ws://host:port/?t=…）。読めたら控えてつなぐ。
+    /// PC の QR の接続先（http://host:port/?t=…。前の形の ws:// も）。読めたら控えてつなぐ。
     /// PipelineView の onOpenURL と、アプリの中の読み取り（RemoteScannerView）から。
     @discardableResult
     func pair(_ url: URL) -> Bool {

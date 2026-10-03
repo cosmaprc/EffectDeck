@@ -291,8 +291,26 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:47300"))          // トークンが無い
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:99999/tok"))      // ポートが範囲の外
         XCTAssertNil(ETRemoteAddress.parse("192.168.1.10:abc/tok"))
-        XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:47300/?t=x"))
         XCTAssertNil(ETRemoteAddress.parse("wss://192.168.1.10:47300/?t=x"))  // ws しか作らない
+        XCTAssertNil(ETRemoteAddress.parse("https://192.168.1.10:47300/?t=x"))  // PC は http しか出さない
+        XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:47300/?x=1"))   // トークンが無い
+        XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:47300/other?t=x"))  // 行き先が違う
+        XCTAssertNil(ETRemoteAddress.parse("http://192.168.1.10:99999/?t=x"))
+    }
+
+    func testAddressPCLinkHTTP() {
+        // PC がブラウザにもアプリにも出す 1 つのリンク。ws:// を作る。
+        let a = ETRemoteAddress.parse("http://192.168.1.10:47300/?t=ab12cd34")
+        XCTAssertEqual(a, ETRemoteAddress(host: "192.168.1.10", port: 47300, token: "ab12cd34"))
+        XCTAssertEqual(a?.url?.absoluteString, "ws://192.168.1.10:47300/?t=ab12cd34")
+        XCTAssertEqual(ETRemoteAddress.parse("http://10.0.0.5:47301?t=abc"),
+                       ETRemoteAddress(host: "10.0.0.5", port: 47301, token: "abc"))
+        XCTAssertEqual(ETRemoteAddress.parse("HTTP://10.0.0.5:47301/remote.html?t=abc"),
+                       ETRemoteAddress(host: "10.0.0.5", port: 47301, token: "abc"))
+        XCTAssertEqual(ETRemoteAddress.parse("  http://10.0.0.5/?t=abc \n"),
+                       ETRemoteAddress(host: "10.0.0.5", port: 47300, token: "abc"))
+        // 控えた字から読み戻せる。
+        XCTAssertEqual(a.flatMap { ETRemoteAddress.parse($0.text) }, a)
     }
 
     // MARK: - v2: QR のリンク
@@ -303,6 +321,18 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(a, ETRemoteAddress(host: "192.168.1.10", port: 47300, token: "ab12cd34"))
         // 控える字は parse がそのまま読み戻せる。
         XCTAssertEqual(a.flatMap { ETRemoteAddress.parse($0.text) }, a)
+    }
+
+    func testPairingLinkReadsThePCHTTPLink() throws {
+        for (text, port) in [("http://192.168.1.10:47300/?t=ab12cd34", 47300),
+                             ("http://192.168.1.10:47300?t=ab12cd34", 47300),
+                             ("http://192.168.1.10:47300/remote.html?t=ab12cd34", 47300),
+                             ("http://192.168.1.10/?t=ab12cd34", 47300),
+                             ("http://192.168.1.10:47305/?t=ab12cd34", 47305)] {
+            let url = try XCTUnwrap(URL(string: text))
+            XCTAssertEqual(ETRemoteAddress.pairingLink(url),
+                           ETRemoteAddress(host: "192.168.1.10", port: port, token: "ab12cd34"), text)
+        }
     }
 
     func testPairingLinkDefaultsThePort() throws {
@@ -317,6 +347,10 @@ final class RemoteProtocolTests: XCTestCase {
                      "ws://1.2.3.4:47300/chain?t=x",                             // 行き先が違う
                      "ws://1.2.3.4:47300/",                                      // トークンが無い
                      "wss://1.2.3.4:47300/?t=x",                                 // 暗号つき（作らない）
+                     "https://1.2.3.4:47300/?t=x",                               // PC は http しか出さない
+                     "http://1.2.3.4:47300/?x=1",                                // トークンが無い
+                     "http://1.2.3.4:47300/chain?t=x",                           // 行き先が違う
+                     "ws://1.2.3.4:47300/remote.html?t=x",                       // /remote.html は http だけ
                      "ws://1.2.3.4:99999/?t=x"] {                                // ポートが範囲の外
             let url = try XCTUnwrap(URL(string: text))
             XCTAssertNil(ETRemoteAddress.pairingLink(url), text)

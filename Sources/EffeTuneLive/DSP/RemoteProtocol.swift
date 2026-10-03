@@ -105,7 +105,8 @@ enum ETRemoteProjection {
     }
 }
 
-/// 画面で打たれた接続先。`host:port/token` が基本で、`ws://host:port/?t=token` も受ける。
+/// 画面で打たれた接続先。`host:port/token` が基本で、PC が QR とリンクに出す
+/// `http://host:port/?t=token`（Web クライアントの URL）と、前の形の `ws://host:port/?t=token` も受ける。
 struct ETRemoteAddress: Equatable {
 
     static let defaultPort = 47300
@@ -132,6 +133,7 @@ struct ETRemoteAddress: Equatable {
     ///   192.168.1.10/ab12cd34               （ポートは 47300）
     ///   ws://192.168.1.10:47300/?t=ab12cd34
     ///   ws://192.168.1.10:47300/ab12cd34
+    ///   http://192.168.1.10:47300/?t=ab12cd34       （PC のリンク。/ か /remote.html。url は ws を作る）
     static func parse(_ text: String) -> ETRemoteAddress? {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
@@ -139,11 +141,17 @@ struct ETRemoteAddress: Equatable {
         // 完全な URL。scheme を見て、無ければ下の素の形へ回す。
         if let range = s.range(of: "://") {
             let scheme = s[s.startIndex..<range.lowerBound].lowercased()
-            // wss は受けない。url は ws しか作らないので、受けると暗号なしへ黙って落ちる。
-            guard scheme == "ws",
+            // wss と https は受けない。url は ws しか作らず、PC は暗号なしの http しか出さないので、
+            // 受けると暗号なしへ黙って落ちる。
+            guard scheme == "ws" || scheme == "http",
                   let c = URLComponents(string: s), let host = c.host, !host.isEmpty else { return nil }
-            let token = c.queryItems?.first(where: { $0.name == "t" })?.value
-                ?? c.path.split(separator: "/").last.map(String.init) ?? ""
+            let queryToken = c.queryItems?.first(where: { $0.name == "t" })?.value
+            if scheme == "http" {
+                // PC のリンクはトークンが t にある。行き先は / か /remote.html だけ（別の http の URL を受けない）。
+                guard c.path.isEmpty || c.path == "/" || c.path == "/remote.html", let queryToken else { return nil }
+                return make(host: host, port: c.port ?? defaultPort, token: queryToken)
+            }
+            let token = queryToken ?? c.path.split(separator: "/").last.map(String.init) ?? ""
             return make(host: host, port: c.port ?? defaultPort, token: token)
         }
 
@@ -178,15 +186,15 @@ extension ETRemoteAddress {
     /// Preferences.remoteAddress に書く字（`host:port/token`）。parse がそのまま読む。
     var text: String { "\(host):\(port)/\(token)" }
 
-    /// PC が QR に出す接続先 `ws://<IPv4>:47300/?t=<token>` を読む。
-    /// **QR には API の接続先そのものを入れる**（2026-09-30 本人の決定）。EffectDeck の名前の
-    /// リンクにすると、PC 側が特定のクライアントを知ることになる。代わりにカメラのアプリからは
-    /// 開けないので、読むのはアプリの中の読み取り（RemoteScannerView）だけ。
-    /// ws 以外・t の無いもの・パスが / 以外のものは nil（カメラで拾った別の QR を受けない）。
+    /// PC が QR とリンクに出す接続先 `http://<IPv4>:47300/?t=<token>` を読む。
+    /// **QR はクライアントの種類を問わず 1 つ**（2026-10-03 本人の決定。PC は何がつなぐかを知らない）。
+    /// ブラウザならそのまま開き、EffectDeck は同じ host・port・t から ws:// を作る。
+    /// 前の形の `ws://<IPv4>:47300/?t=<token>` も読む。
+    /// http と ws 以外・t の無いもの・パスが / 以外のもの（http は /remote.html も）は nil（別の QR を受けない）。
     static func pairingLink(_ url: URL) -> ETRemoteAddress? {
-        guard url.scheme?.lowercased() == "ws",
+        guard let scheme = url.scheme?.lowercased(), scheme == "ws" || scheme == "http",
               let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              c.path.isEmpty || c.path == "/",
+              c.path.isEmpty || c.path == "/" || (scheme == "http" && c.path == "/remote.html"),
               let t = c.queryItems?.first(where: { $0.name == "t" })?.value, !t.isEmpty else { return nil }
         return parse(url.absoluteString)
     }

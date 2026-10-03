@@ -5,7 +5,7 @@
 //                              入切はここでしない。状態（入・つなぎ中・つながった）だけを絵で見せる
 //    - RemotePanelView         アイコンから開くシート。行は RemoteRows（Settings の Remote Control 節と同じもの）
 //    - RemoteRows              Remote Control の入切・Status・つなぎ先・Mirror Analyzers・QR の読み取り・Forget
-//    - RemoteScannerView       PC の画面の QR（ws://host:port/?t=…）を読む。VisionKit の
+//    - RemoteScannerView       PC の画面の QR（http://host:port/?t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
 //    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、PC の測定値を映していない Analyzer の図を沈める
 //    - ETRemoteUnsupportedMark PC の EffeTune が持っていない効果の段に、送れないと出す（鎖には載せない）
@@ -194,7 +194,7 @@ struct RemoteRows: View {
 // MARK: - QR の読み取り
 
 struct RemoteScannerView: View {
-    /// 読めた接続先。ws:// で t の揃ったものだけが来る。
+    /// 読めた接続先。http:// か ws:// で t の揃ったものだけが来る。
     let onFound: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var ready = false
