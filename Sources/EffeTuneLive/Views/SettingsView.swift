@@ -1,7 +1,7 @@
 //  SettingsView.swift
 //  右上の ⋯ から出す 1 枚。EffeTune も設定は右上に置いてある。
 //
-//  **画面は 1 枚。押して進むのは 1 段だけ（Licenses・Report a problem・Known limitations）。**
+//  **画面は 1 枚。押して進むのは 1 段だけ（Remote Control・Licenses・Report a problem・Known limitations）。**
 //  以前はシート（Settings）→ Status →（戻って）About → Licenses → 本文 と、
 //  シートの中で 3 回潜っていた。Status も About も読むだけの画面で、
 //  行数が足りないものを画面に昇格させた結果そうなっていた。
@@ -62,6 +62,11 @@ struct SettingsView: View {
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
                     DetailsSection(io: io, dsp: dsp, prefs: prefs)
+                    // PC の EffeTune を操る画面（ツールバーのシートと同じ中身）。
+                    // 行は 1 つだけ。音の節の間には混ぜず、末尾から押して進む。
+                    Section {
+                        NavigationLink("Remote Control") { RemoteContent() }
+                    }
                 case .about:
                     about
                 }

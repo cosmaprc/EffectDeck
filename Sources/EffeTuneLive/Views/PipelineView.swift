@@ -51,7 +51,7 @@ struct PipelineView: View {
     /// ツールバーを別の型へ出したので、その型からも見えるところに置く。
     enum Sheet: String, Identifiable, Equatable {
         case picker, settings, routing, presets, ir, tips
-        /// PC の EffeTune を操る設定（PoC。ツールバーのアイコンから。RemoteScannerView.swift）。
+        /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
         case remote
         var id: String { rawValue }
     }
@@ -1870,9 +1870,10 @@ private struct PipelineToolbar: ToolbarContent {
             RemoteStatusSlot(io: io) { present(.remote) }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            // PoC: PC の EffeTune を操る設定を開くアイコン。入切はシートの中（RemoteToolbarButton）。
+            // PoC: PC の EffeTune を操る画面を開くアイコン（シート。つなぐ・切るもシートの中）。
             // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
-            // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは Settings から開く。
+            // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは
+            // Settings の Remote Control の行から開く。
             if pickerAsPopover {
                 RemoteToolbarButton { present(.remote) }
             }

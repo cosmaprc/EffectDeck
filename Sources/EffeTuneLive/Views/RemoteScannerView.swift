@@ -3,7 +3,8 @@
 //
 //    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
 //                              つなぐ・切るはここでしない。状態（つなぎたい・つなぎ中・つながった）だけを絵で見せる
-//    - RemotePanelView         アイコンから開くシート。行は RemoteRows。入口はツールバーのアイコンと Remote Control の帯だけ（設定画面には置かない）
+//    - RemotePanelView         アイコンから開くシート。中身は RemoteContent。入口はツールバーのアイコン・Remote Control の帯・設定画面の Remote Control の行
+//    - RemoteContent           List と題と QR の読み取り。シートと設定画面の行き先で共有する
 //    - RemoteRows              状態（ETRemoteIntent.layout）ごとの行。**入切のスイッチは無い。**
 //                              情報（PC）・設定（Options）・操作（Connect / Scan QR Code / Disconnect / Forget）を別の Section に分ける
 //    - RemoteScannerView       PC の画面の QR（http://host:port/?t=…）を読む。VisionKit の
@@ -91,25 +92,34 @@ struct RemoteStatusSlot: View {
 
 // MARK: - シート
 
-/// アイコンから開くシート。行は RemoteRows。設定画面には置かない（音の設定でも、EffeTune という面でもない）。
-/// QR の読み取りはここで出す（シートの上に重なる）。
+/// アイコンから開くシート。中身は RemoteContent（設定画面から押して進む先と同じ）。
 struct RemotePanelView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var scanning = false
 
     var body: some View {
         NavigationStack {
-            List {
-                RemoteRows(scan: { scanning = true })
-            }
-            .navigationTitle("Remote Control")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-            }
+            RemoteContent()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
         }
         // 行が少ないので、画面の半分も要らない。上へ引けば広がるように .large も残す（RoutingView と同じ）。
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// Remote Control の画面の中身（List・題・QR の読み取り）。NavigationStack の中に置く。
+/// ツールバーのシート（RemotePanelView）と、設定画面の Remote Control の行の行き先が同じ中身を出す。
+/// QR の読み取りはここで出す（画面の上に重なる）。
+struct RemoteContent: View {
+    @State private var scanning = false
+
+    var body: some View {
+        List {
+            RemoteRows(scan: { scanning = true })
+        }
+        .navigationTitle("Remote Control")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $scanning) {
             RemoteScannerView { url in
                 scanning = false
