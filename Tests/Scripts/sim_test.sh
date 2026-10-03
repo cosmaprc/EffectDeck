@@ -128,6 +128,7 @@ done
 if [ "$code" != 0 ]; then echo "** TEST FAILED **"; exit "$code"; fi
 [ -z "$ipa" ] || { mkdir -p "$ipa" && : > "$ipa/EffectDeck.ipa"; }
 [ "$archive" = 0 ] || [ -z "$arch" ] || mkdir -p "$arch/Products/Applications/EffectDeck.app"
+[ "$archive" = 0 ] || echo "** ARCHIVE SUCCEEDED **"
 [ -z "$app" ] || [ "${STUB_XCODEBUILD_NO_APP:-0}" = 1 ] || mkdir -p "$app/EffectDeck.app"
 if [ "$prev" = test ] && [ "${STUB_XCODEBUILD_NO_TESTS:-0}" != 1 ]; then
   echo "Test Case '-[EffeTuneLiveUnitTests.StubTests testStub]' started."
@@ -572,12 +573,38 @@ c_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre Release $mid $post" && c_ok=1
 if [ "$a_ok$b_ok$c_ok" = 111 ]; then ok archive_config_decides_icon_and_et_beta
 else ng archive_config_decides_icon_and_et_beta "beta=$a_ok store=$b_ok env=$c_ok $(grep '^xcodebuild' "$CALLS" | head -1)"; fi
 
-# 構成で決める。コマンドラインで上書きしない（上書きすると Xcode Cloud と書庫がずれる）。
+# 構成で決める。コマンドラインで上書きしない（上書きすると release.yml と手元の書庫がずれる）。
 fresh
 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
 if [ "$RC" = 0 ] && hasnt "$CALLS" "ET_APPICON=" && hasnt "$CALLS" "SWIFT_ACTIVE_COMPILATION_CONDITIONS="; then
   ok archive_does_not_override_icon_or_flags_on_command_line
 else ng archive_does_not_override_icon_or_flags_on_command_line "$(grep '^xcodebuild' "$CALLS" | head -1)"; fi
+
+# release.yml が渡す口。ET_BUILD_NUMBER はビルド番号だけをコマンドラインで上書きし、
+# ET_XCODEBUILD_LOG は xcodebuild の出力を丸ごと残し、ET_ARCHIVE_ADHOC は ad-hoc 署名にする。
+fresh
+ET_BUILD_NUMBER=32 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+n_ok=0; [ "$RC" = 0 ] && hasline "$CALLS" "$pre Beta $mid $post CURRENT_PROJECT_VERSION=32" && n_ok=1
+fresh
+ET_BUILD_NUMBER=x ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+n_bad=0; [ "$RC" = 2 ] && hasnt "$CALLS" "xcodebuild" && n_bad=1
+fresh
+ET_BUILD_NUMBER=3x2 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+n_bad2=0; [ "$RC" = 2 ] && hasnt "$CALLS" "xcodebuild" && n_bad2=1
+if [ "$n_ok$n_bad$n_bad2" = 111 ]; then ok archive_build_number_override_is_numeric_only
+else ng archive_build_number_override_is_numeric_only "ok=$n_ok x=$n_bad 3x2=$n_bad2 rc=$RC"; fi
+
+fresh
+ET_XCODEBUILD_LOG="$WORK/xcodebuild-full.log" ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+if [ "$RC" = 0 ] && has "$WORK/xcodebuild-full.log" "ARCHIVE SUCCEEDED" 2>/dev/null; then
+  ok archive_keeps_full_xcodebuild_log_when_asked
+else ng archive_keeps_full_xcodebuild_log_when_asked "rc=$RC"; fi
+
+fresh
+ET_ARCHIVE_ADHOC=1 ARCHIVE_DIR="$WORK/arch" run_script archive.sh
+if [ "$RC" = 0 ] && has "$CALLS" "CODE_SIGN_IDENTITY=-" && has "$CALLS" "CODE_SIGN_STYLE=Manual"    && hasnt "$CALLS" "CODE_SIGNING_ALLOWED=NO"; then
+  ok archive_adhoc_signs_with_dash_and_never_unsigned
+else ng archive_adhoc_signs_with_dash_and_never_unsigned "$(grep '^xcodebuild' "$CALLS" | head -1)"; fi
 
 # 知らないアイコン名・構成名は xcodebuild を呼ばずに落とす。
 fresh

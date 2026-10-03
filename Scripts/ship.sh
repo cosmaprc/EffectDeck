@@ -4,9 +4,11 @@
 #
 #   bash Scripts/ship.sh                        紫（TestFlight 行き。archive.sh が -configuration Beta）
 #   APPICON=EffeTuneLive bash Scripts/ship.sh   青（店へ出す版。-configuration Release）
-#   （構成名は archive.sh の CONFIG=Beta|Release でも選べる。ふだんの配布は Xcode Cloud で、
-#    これはローカルの非常用。Xcode Cloud の Next Build Number はここで上げた番号を知らない。
-#    上げたら ASC の Xcode Cloud 設定で次の番号を上回る値にしておく）
+#   （構成名は archive.sh の CONFIG=Beta|Release でも選べる。ふだんの配布は GitHub Actions
+#    〈.github/workflows/release.yml。tf-* のタグ→承認→TestFlight〉で、これはローカルの非常用。
+#    Actions はビルド番号を毎回 ASC の最大 + 1 から決める（Tools/asc.py next-build）ので、
+#    ここで上げた番号を取り違えない。ここは project.yml の CURRENT_PROJECT_VERSION で出すので、
+#    ASC の最大より大きいことを自分で確かめる）
 #   SKIP_ARCHIVE=1 bash Scripts/ship.sh         書庫は作り直さず、今ある書庫を書き出す
 #   NO_WAIT=1 bash Scripts/ship.sh              上げたら終わり（処理待ちを飛ばす）
 #

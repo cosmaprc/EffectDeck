@@ -479,7 +479,7 @@ schemes:
     archive:
       config: Release
 
-  # TestFlight へ出す版（紫・ET_BETA）。Xcode Cloud の EffectDeck Beta ワークフローが使う。
+  # TestFlight へ出す版（紫・ET_BETA）。GitHub Actions の release.yml〈tf-* のタグ〉と scheme の Archive が使う。
   "EffectDeck Beta":
     build:
       targets:

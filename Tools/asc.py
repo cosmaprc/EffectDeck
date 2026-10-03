@@ -19,8 +19,20 @@
   python3 asc.py post <path> <body.json>      任意の POST
   python3 asc.py delete <path> [body.json]    任意の DELETE
   python3 asc.py resubmit <submission-id>     却下された提出を直したあと出し直す
+
+GitHub Actions の release.yml が使う（どれも読むだけか、内部グループへ足すだけ）:
+  python3 asc.py next-build [--floor N]       次のビルド番号（ASC の最大 + 1）を数字だけで出す
+  python3 asc.py train-check <版>             版が開いていれば 0、閉じていれば 3
+  python3 asc.py wait-build <版> <N> <秒>     処理が VALID になるのを待ち、build の ID を出す
+                                              （INVALID/FAILED は 1、時間切れは 4）
+  python3 asc.py add-internal <build-id>      ビルドを内部グループ "Internal" に足す
+                                              （外部グループには足さない・拒む）
+  python3 asc.py cert-ids                     証明書の "id type name" の一覧（読むだけ）
+
+KEY_ID と ISSUER は環境変数 ASC_KEY_ID・ASC_ISSUER_ID で上書きできる（既定は下の値）。
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -28,8 +40,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-KEY_ID = "JYMYS92KUB"
-ISSUER = "175cb308-6a31-42f0-970a-e72757f60bde"
+KEY_ID = os.environ.get("ASC_KEY_ID") or "JYMYS92KUB"
+ISSUER = os.environ.get("ASC_ISSUER_ID") or "175cb308-6a31-42f0-970a-e72757f60bde"
 KEY = Path.home() / ".appstoreconnect" / "private_keys" / f"AuthKey_{KEY_ID}.p8"
 APP = "6812467517"
 BASE = "https://api.appstoreconnect.apple.com"
@@ -89,11 +101,139 @@ def call(method: str, path: str, body=None):
         raise SystemExit(1)
 
 
+# ---- GitHub Actions（release.yml）が使う部品 ----------------------------------
+
+# 「この版の列車は閉じた」とみなす版の状態。閉じた版番号（以下）には、もうビルドを足せない。
+# 新しい名前（appVersionState）と古い名前（appStoreState）の両方を見る。
+CLOSED_STATES = {
+    "ACCEPTED", "PENDING_DEVELOPER_RELEASE", "PENDING_APPLE_RELEASE",
+    "PROCESSING_FOR_DISTRIBUTION", "READY_FOR_DISTRIBUTION",
+    "REPLACED_WITH_NEW_VERSION",
+    "READY_FOR_SALE", "PROCESSING_FOR_APP_STORE", "PREORDER_READY_FOR_SALE",
+}
+
+
+def vtuple(s: str):
+    """版の文字列を数の組へ。数字とドットだけでなければ文字列のまま（等しいか、だけ比べる）。"""
+    try:
+        return tuple(int(x) for x in s.split("."))
+    except (ValueError, AttributeError):
+        return s
+
+
+def pages(path: str):
+    """links.next を辿って data を全部返す。"""
+    out = []
+    while path:
+        d = call("GET", path)
+        out.extend(d.get("data", []))
+        nxt = (d.get("links") or {}).get("next")
+        path = nxt[len(BASE):] if nxt and nxt.startswith(BASE) else None
+    return out
+
+
+def next_build(floor: int = 0) -> int:
+    """ASC にある最大のビルド番号 + 1。処理中・失敗した upload も数える（番号は再利用できない）。"""
+    nums = [floor]
+    for b in pages(f"/v1/builds?filter[app]={APP}&fields[builds]=version&limit=200"):
+        v = (b.get("attributes") or {}).get("version")
+        if v and str(v).isdigit():
+            nums.append(int(v))
+    for u in pages(f"/v1/apps/{APP}/buildUploads?limit=200"):
+        v = (u.get("attributes") or {}).get("cfBundleVersion")
+        if v and str(v).isdigit():
+            nums.append(int(v))
+    return max(nums) + 1
+
+
+def closed_train(version: str):
+    """version 以上の版が承認済みの状態にあれば (その版, 状態)。無ければ None。"""
+    want = vtuple(version)
+    for v in pages(f"/v1/apps/{APP}/appStoreVersions?limit=200"):
+        a = v.get("attributes") or {}
+        if a.get("platform") not in (None, "IOS"):
+            continue
+        hit = sorted(({a.get("appVersionState"), a.get("appStoreState")} - {None}) & CLOSED_STATES)
+        if not hit:
+            continue
+        state = hit[0]
+        got = vtuple(a.get("versionString") or "")
+        if got == want or (isinstance(got, tuple) and isinstance(want, tuple) and got >= want):
+            return a.get("versionString"), state
+    return None
+
+
+def internal_group_id() -> str:
+    """名前が Internal で、内部グループであるものの ID。ちょうど 1 つでなければ止まる。"""
+    d = call("GET", f"/v1/apps/{APP}/betaGroups?filter[name]=Internal&limit=50")
+    groups = [g for g in d.get("data", [])
+              if (g.get("attributes") or {}).get("name") == "Internal"]
+    if len(groups) != 1:
+        print(f"!! Internal という名前のグループが {len(groups)} 個ある（1 個のはず）", file=sys.stderr)
+        raise SystemExit(1)
+    if not (groups[0].get("attributes") or {}).get("isInternalGroup"):
+        print("!! Internal が内部グループではない。外部グループには足さない", file=sys.stderr)
+        raise SystemExit(1)
+    return groups[0]["id"]
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 1
     cmd = sys.argv[1]
+
+    if cmd == "next-build":
+        floor = 0
+        if len(sys.argv) > 3 and sys.argv[2] == "--floor":
+            floor = int(sys.argv[3])
+        print(next_build(floor))
+        return 0
+
+    if cmd == "train-check":
+        version = sys.argv[2]
+        hit = closed_train(version)
+        if hit:
+            print(f"!! MARKETING_VERSION {version} は閉じている（{hit[0]} が {hit[1]}）。"
+                  "python3 Tools/gen_version.py --today を回して main へ入れ、CI が通ってから"
+                  "もう一度タグを打つ", file=sys.stderr)
+            return 3
+        print(f"版 {version} は開いている")
+        return 0
+
+    if cmd == "wait-build":
+        version, num, limit = sys.argv[2], sys.argv[3], int(sys.argv[4])
+        deadline = time.time() + limit
+        while True:
+            d = call("GET", f"/v1/builds?filter[app]={APP}&filter[version]={num}"
+                            f"&filter[preReleaseVersion.version]={version}&limit=5")
+            for b in d.get("data", []):
+                state = (b.get("attributes") or {}).get("processingState")
+                if state == "VALID":
+                    print(b["id"])
+                    return 0
+                if state in ("INVALID", "FAILED"):
+                    print(f"!! build {num} が {state} になった", file=sys.stderr)
+                    return 1
+            if time.time() >= deadline:
+                print(f"!! build {num} の処理が {limit} 秒で終わらない", file=sys.stderr)
+                return 4
+            time.sleep(30)
+
+    if cmd == "add-internal":
+        # 内部グループ（Internal）だけ。グループ ID は引数に取らない。外部グループ
+        # （EffectDeck Public Beta）への追加と審査への提出は本人が手でやる。
+        gid = internal_group_id()
+        call("POST", f"/v1/betaGroups/{gid}/relationships/builds",
+             {"data": [{"type": "builds", "id": sys.argv[2]}]})
+        print(f"build {sys.argv[2]} を内部グループ Internal ({gid}) に足した")
+        return 0
+
+    if cmd == "cert-ids":
+        for c in pages("/v1/certificates?limit=200"):
+            a = c.get("attributes") or {}
+            print(c["id"], a.get("certificateType"), a.get("name"))
+        return 0
 
     if cmd == "builds":
         d = call("GET", f"/v1/builds?filter[app]={APP}&limit=10"

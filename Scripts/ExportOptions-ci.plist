@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- GitHub Actions の release.yml が xcodebuild -exportArchive に渡す書き出しの設定。
+     クラウド署名: 署名は自動（signingStyle=automatic）で、Apple Distribution の証明書と App Store の
+     プロファイルは API キー（-authenticationKey*）で Xcode が Apple 側に作らせる。runner に秘密鍵は置かない。
+     上げるのは別の段（altool）なので destination は export。ビルド番号は release.yml が ASC の最大 + 1 に
+     決めて書庫に入れてあるので、書き出しに上げさせない（manageAppVersionAndBuildNumber=false）。
+     Mac の手元の ~/signing/export.plist（manual 署名・プロファイル名つき）は Scripts/ship.sh 用で別物。 -->
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>teamID</key>
+	<string>C82ST8T9MN</string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
+</dict>
+</plist>

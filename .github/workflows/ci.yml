@@ -19,7 +19,9 @@
 # runs-on には env を書けないので、ラベルは macos ジョブの runs-on の 1 箇所だけに置いてある。
 # 入れ替えるときはそこと、すぐ下の macos ジョブの env（XCODE_APP・SIM_NAME・SIM_OS）を合わせて直す。
 # canary.yml（毎晩、いちばん新しい Xcode で同じ 2 つを回す）も同じラベルと env（STABLE_XCODE_APP・
-# SIM_NAME・XCODEGEN_*）と build の段を写して持っているので、一緒に直す。
+# SIM_NAME・XCODEGEN_*）と build の段を写して持っている。release.yml（配布）も同じラベル・XCODE_APP・
+# XCODEGEN_*・xcodegen と submodule の段を写して持っている。どれも一緒に直す
+# （Tests/Tools/test_release_config.py が食い違いを落とす）。
 # プレビューの image は予告なく変わるので、Xcode は xcode-select で固定し、iOS 27 の SDK が
 # 無ければその場で止める。
 #
