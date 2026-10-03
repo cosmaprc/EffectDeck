@@ -165,11 +165,11 @@ struct RemoteRows: View {
         let intent = mirror.intent
         switch intent.layout {
         case .unpaired:
-            Section {
+            Section(Self.title) {
                 scanButton
             }
         case .active:
-            Section("PC") {
+            Section(Self.title) {
                 LabeledContent("Status") {
                     Text(mirror.statusText)
                         .foregroundStyle(.secondary)
@@ -208,7 +208,7 @@ struct RemoteRows: View {
             }
         case .idle:
             // 切断中は PC の情報を並べない（つないでいるように読める）。つなぎ先の名前はボタンに出す。
-            Section {
+            Section(Self.title) {
                 if intent.canConnect {
                     Button("Connect to \(connectTarget)") { mirror.connectToSaved() }
                 }
@@ -226,6 +226,9 @@ struct RemoteRows: View {
             }
         }
     }
+
+    /// 先頭の節の見出し。どの状態でも同じ（何を操る画面かを言う）。
+    static let title = "EffeTune Remote Control"
 
     /// 切断中の Connect に出すつなぎ先。ホスト名、無ければアドレスの host。
     private var connectTarget: String {
