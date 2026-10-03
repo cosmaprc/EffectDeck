@@ -624,3 +624,93 @@ enum ETRemoteHello {
         return m
     }
 }
+
+// MARK: - つなぐ・切るの状態（入切を持たない）
+
+/// 「つなぎたいか」と「つなぎ先を控えているか」だけで決まる状態。**入切のスイッチは無い。**
+/// QR を読む（pair）か Connect でつなぎ、Disconnect で切る。切るまでは起動のたびにつなぎ直す。
+///
+/// 画面（layout）と起動（launch）と遷移を、通信や Preferences から離して 1 か所に置く。
+/// RemoteMirror は Preferences から値を読んでこの遷移を通し、書き戻すだけ。
+///
+/// 遷移:
+///   pair        控えを書き換え、すぐつなぐ。4401 の印は消す
+///   connect     控えがあって 4401 でないときだけ、つなぐ
+///   disconnect  つなぎたくない。控えは残す（Connect で戻れる）
+///   forget      つなぎたくない。控えも消す
+///   rejected    PC がトークンを断った（4401）。つなぎ直しても通らないので、つなぎたくない側へ倒す
+///   launch      起動。控えが無いのに「つなぎたい」が残っていたら落とす
+struct ETRemoteIntent: Equatable {
+
+    var hasAddress: Bool
+    var wantsConnection: Bool
+    /// 最後のつなぎで 4401 を受けた。控えは残すが、同じ字ではつなげない。
+    var tokenRejected = false
+
+    /// シートの形。
+    enum Layout: Equatable {
+        /// 一度も組んでいない（控えが無い）。Scan QR Code だけ。
+        case unpaired
+        /// つなぎたい（つないでいる最中・つながった・つなぎ直しを待っている）。
+        /// PC（読むだけ）・Options・Disconnect。
+        case active
+        /// 控えはあるが、つなぎたくない。PC・Connect・Scan QR Code・Forget。
+        case idle
+    }
+
+    var layout: Layout {
+        guard hasAddress else { return .unpaired }
+        return wantsConnection ? .active : .idle
+    }
+
+    /// Connect を出せるか（idle で、同じ字でつなげる）。
+    var canConnect: Bool { layout == .idle && !tokenRejected }
+
+    mutating func pair() {
+        hasAddress = true
+        wantsConnection = true
+        tokenRejected = false
+    }
+
+    /// つなげたか。
+    @discardableResult
+    mutating func connect() -> Bool {
+        guard hasAddress, !tokenRejected else { return false }
+        wantsConnection = true
+        return true
+    }
+
+    mutating func disconnect() {
+        wantsConnection = false
+    }
+
+    mutating func forget() {
+        hasAddress = false
+        wantsConnection = false
+        tokenRejected = false
+    }
+
+    mutating func rejected() {
+        wantsConnection = false
+        tokenRejected = true
+    }
+
+    mutating func launch() {
+        wantsConnection = wantsConnection && hasAddress
+    }
+}
+
+/// 最後につないだ PC の EffeTune の名前と版。つながっていないあいだの PC の行に出す。
+struct ETRemoteLastHost: Codable, Equatable {
+    var name: String
+    var label: String
+
+    init(name: String, label: String) {
+        self.name = name
+        self.label = label
+    }
+
+    init(_ info: ETRemoteHostInfo) {
+        self.init(name: info.name, label: info.label)
+    }
+}

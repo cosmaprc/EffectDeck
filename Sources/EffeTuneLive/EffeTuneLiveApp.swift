@@ -31,7 +31,7 @@ struct EffeTuneLiveApp: App {
         CloudMirror.seedIfEmpty()
         // どの国の店から入れたか。中国本土では ChatGPT の入口を隠す（ETStorefrontGate）。
         ETStorefrontGate.shared.start()
-        // PoC: 設定で有効にしてあれば PC の EffeTune へつなぐ（DSP/RemoteMirror.swift）。
+        // PoC: Disconnect していなければ、控えた PC の EffeTune へつなぎ直す（DSP/RemoteMirror.swift）。
         RemoteMirror.shared.start()
     }
 

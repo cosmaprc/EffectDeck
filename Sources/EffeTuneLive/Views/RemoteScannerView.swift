@@ -2,9 +2,10 @@
 //  PC の EffeTune を LAN から操る PoC の画面側（DSP/RemoteMirror.swift）。
 //
 //    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
-//                              入切はここでしない。状態（入・つなぎ中・つながった）だけを絵で見せる
+//                              つなぐ・切るはここでしない。状態（つなぎたい・つなぎ中・つながった）だけを絵で見せる
 //    - RemotePanelView         アイコンから開くシート。行は RemoteRows。入口はツールバーのアイコンと Remote Control の帯だけ（設定画面には置かない）
-//    - RemoteRows              Remote Control の入切・Status・つなぎ先・Mirror Analyzers・QR の読み取り・Forget
+//    - RemoteRows              状態（ETRemoteIntent.layout）ごとの行。**入切のスイッチは無い。**
+//                              情報（PC）・設定（Options）・操作（Connect / Scan QR Code / Disconnect / Forget）を別の Section に分ける
 //    - RemoteScannerView       PC の画面の QR（http://host:port/?t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
 //    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、PC の測定値を映していない Analyzer の図を沈める
@@ -26,7 +27,7 @@ import VisionKit
 
 /// アイコン。**観測するのはこのビューだけ**にして、PipelineToolbar 自体は RemoteMirror を見ない
 /// （あちらは提示の途中の Menu を作り直さないよう、渡す値を絞ってある）。
-/// 押しても入切はしない。開くのは設定のシートで、入切もつなぎ先の変更もそちらでする。
+/// 押してもつなぎも切りもしない。開くのはシートで、つなぐ・切る・つなぎ先の変更はそちらでする。
 struct RemoteToolbarButton: View {
     @ObservedObject private var prefs = Preferences.shared
     @ObservedObject private var mirror = RemoteMirror.shared
@@ -38,16 +39,16 @@ struct RemoteToolbarButton: View {
 
     var body: some View {
         styled(Button("Remote Control", systemImage: "dot.radiowaves.left.and.right", action: open))
-            // 入れてあるのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
-            .symbolEffect(.pulse, isActive: prefs.remoteEnabled && mirror.status != .connected)
+            // つなぎたいのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
+            .symbolEffect(.pulse, isActive: prefs.remoteWantsConnection && mirror.status != .connected)
             .accessibilityValue(mirror.statusText)
     }
 
-    /// 入れてあるあいだは青く塗る。PC 側（EffeTune の見出しのアイコン）も入のとき青で塗るので合わせる。
+    /// つなぎたいあいだは青く塗る。PC 側（EffeTune の見出しのアイコン）も入のとき青で塗るので合わせる。
     /// ガラスのツールバーでは foregroundStyle の色が乗らないことがあるので、塗りのある形にする。
     @ViewBuilder
     private func styled<Label: View>(_ button: Button<Label>) -> some View {
-        if prefs.remoteEnabled {
+        if prefs.remoteWantsConnection {
             button.buttonStyle(.borderedProminent).tint(.blue)
         } else {
             button
@@ -88,18 +89,18 @@ struct RemoteStatusSlot: View {
     }
 }
 
-// MARK: - 設定のシート
+// MARK: - シート
 
 /// アイコンから開くシート。行は RemoteRows。設定画面には置かない（音の設定でも、EffeTune という面でもない）。
+/// QR の読み取りはここで出す（シートの上に重なる）。
 struct RemotePanelView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var scanning = false
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    RemoteRows()
-                }
+                RemoteRows(scan: { scanning = true })
             }
             .navigationTitle("Remote Control")
             .navigationBarTitleDisplayMode(.inline)
@@ -107,49 +108,126 @@ struct RemotePanelView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
-        // 行が 5 本しかないので、画面の半分も要らない。上へ引けば広がるように .large も残す（RoutingView と同じ）。
+        // 行が少ないので、画面の半分も要らない。上へ引けば広がるように .large も残す（RoutingView と同じ）。
         .presentationDetents([.medium, .large])
+        .sheet(isPresented: $scanning) {
+            RemoteScannerView { url in
+                scanning = false
+                RemoteMirror.shared.pair(url)
+            }
+        }
     }
 }
 
-/// Remote Control の行。シートと Settings が同じものを並べる（食い違わないよう 1 か所に置く）。
-/// List / Form の中に置く前提。QR の読み取りは自分で出す（親のシートの上に重なる）。
+/// Remote Control の行。**入切のスイッチは無い。**情報（PC・読むだけ）と設定（Options）と操作（ボタン）を
+/// 別の Section にする。形は状態（ETRemoteIntent.layout）で決まる。
+///
+///   unpaired  Scan QR Code だけ
+///   active    PC（Status・Address・EffeTune の版・食い違い）／ Options（Mirror Analyzers）／ Disconnect
+///   idle      PC（Address・前に見た EffeTune の版）／ Connect・Scan QR Code ／ Forget
+///
+/// List の中に置く前提。読み取りは scan で親が出す。
 struct RemoteRows: View {
     @ObservedObject private var prefs = Preferences.shared
     @ObservedObject private var mirror = RemoteMirror.shared
-    @State private var scanning = false
+    let scan: () -> Void
 
-    init() {}
+    init(scan: @escaping () -> Void) {
+        self.scan = scan
+    }
 
     var body: some View {
-        Toggle("Remote Control", isOn: Binding(
-            get: { prefs.remoteEnabled },
-            set: { on in
-                // 控えが無いまま入れても、つなぐ先が無い。QR を読ませる。
-                if on && !mirror.hasPairing {
-                    scanning = true
-                } else {
-                    prefs.remoteEnabled = on
+        let intent = mirror.intent
+        switch intent.layout {
+        case .unpaired:
+            Section {
+                scanButton
+            }
+        case .active:
+            Section("PC") {
+                LabeledContent("Status") {
+                    Text(mirror.statusText)
+                        .foregroundStyle(.secondary)
                 }
-            }))
-        LabeledContent("Status") {
-            Text(mirror.statusText)
-                .foregroundStyle(.secondary)
+                addressRow
+                if let host = mirror.host {
+                    LabeledContent(host.name) {
+                        Text(host.label)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let last = mirror.lastHost {
+                    // つなぎ直しを待っているあいだは前に見た版を出しておく。
+                    LabeledContent(last.name) {
+                        Text(last.label)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                mismatchRows
+            }
+            Section("Options") {
+                // 保存する設定。PC の EffeTune が測定値を送れない版のときだけ触れなくして理由を添える。
+                Toggle(isOn: $prefs.remoteMirrorAnalyzers) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mirror Analyzers")
+                        if mirror.telemetryUnsupported, let host = mirror.host {
+                            Text(host.unsupportedText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .disabled(mirror.telemetryUnsupported)
+            }
+            Section {
+                Button("Disconnect") { mirror.disconnectByUser() }
+            }
+        case .idle:
+            Section("PC") {
+                // 4401 のように、つながらなかった理由があるときだけ状態を出す。
+                if case .error = mirror.status {
+                    LabeledContent("Status") {
+                        Text(mirror.statusText)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                addressRow
+                if let last = mirror.lastHost {
+                    LabeledContent(last.name) {
+                        Text(last.label)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Section {
+                if intent.canConnect {
+                    Button("Connect") { mirror.connectToSaved() }
+                }
+                scanButton
+            }
+            Section {
+                Button("Forget", role: .destructive) { mirror.forget() }
+            }
         }
-        // トークンは出さない。host:port だけ。
+    }
+
+    private var scanButton: some View {
+        Button("Scan QR Code", action: scan)
+    }
+
+    /// トークンは出さない。host:port だけ。
+    @ViewBuilder
+    private var addressRow: some View {
         if let address = ETRemoteAddress.parse(prefs.remoteAddress) {
             LabeledContent("Address") {
                 Text("\(address.host):\(address.port)")
                     .foregroundStyle(.secondary)
             }
         }
-        if let host = mirror.host {
-            LabeledContent(host.name) {
-                Text(host.label)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        // PC の EffeTune と dsp/ の版か効果の一覧が食い違うとき。送れない効果は段にも印が付く。
+    }
+
+    /// PC の EffeTune と dsp/ の版か効果の一覧が食い違うとき。送れない効果は段にも印が付く。
+    @ViewBuilder
+    private var mismatchRows: some View {
         if let mismatch = mirror.mismatch {
             LabeledContent("Version") {
                 Text(mismatch.headline)
@@ -165,29 +243,6 @@ struct RemoteRows: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        }
-        // 保存する設定なので、つながっていなくても出して触れるようにしておく。
-        // PC の EffeTune が測定値を送れない版のときだけ、つながっている間は触れなくして理由を添える。
-        Toggle(isOn: $prefs.remoteMirrorAnalyzers) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Mirror Analyzers")
-                if mirror.telemetryUnsupported, let host = mirror.host {
-                    Text(host.unsupportedText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .disabled(mirror.telemetryUnsupported)
-        Button("Scan QR Code") { scanning = true }
-            .sheet(isPresented: $scanning) {
-                RemoteScannerView { url in
-                    scanning = false
-                    mirror.pair(url)
-                }
-            }
-        if !prefs.remoteAddress.isEmpty {
-            Button("Forget", role: .destructive) { mirror.forget() }
         }
     }
 }

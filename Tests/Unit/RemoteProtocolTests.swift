@@ -648,4 +648,89 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(ETRemoteTelemetry.inverse([0, nil, 1]), [0: 0, 1: 2])
         XCTAssertEqual(ETRemoteTelemetry.inverse([]), [:])
     }
+
+    // MARK: - つなぐ・切る（入切のスイッチは無い）
+
+    func testIntentLayoutByState() {
+        // 控えが無い: つなぎたいが残っていても Scan QR Code だけ。
+        XCTAssertEqual(ETRemoteIntent(hasAddress: false, wantsConnection: false).layout, .unpaired)
+        XCTAssertEqual(ETRemoteIntent(hasAddress: false, wantsConnection: true).layout, .unpaired)
+        // 控えがあって、つなぎたい: PC / Options / Disconnect。
+        XCTAssertEqual(ETRemoteIntent(hasAddress: true, wantsConnection: true).layout, .active)
+        // 控えがあって、つなぎたくない: PC / Connect / Scan QR Code / Forget。
+        XCTAssertEqual(ETRemoteIntent(hasAddress: true, wantsConnection: false).layout, .idle)
+    }
+
+    func testIntentPairConnectsImmediatelyAndClearsRejection() {
+        var i = ETRemoteIntent(hasAddress: false, wantsConnection: false)
+        i.pair()
+        XCTAssertEqual(i, ETRemoteIntent(hasAddress: true, wantsConnection: true))
+        XCTAssertEqual(i.layout, .active)
+
+        // 4401 で止まっていても、読み直したらつなぐ。
+        var rejected = ETRemoteIntent(hasAddress: true, wantsConnection: false, tokenRejected: true)
+        rejected.pair()
+        XCTAssertEqual(rejected, ETRemoteIntent(hasAddress: true, wantsConnection: true))
+    }
+
+    func testIntentDisconnectKeepsTheAddressAndConnectComesBack() {
+        var i = ETRemoteIntent(hasAddress: true, wantsConnection: true)
+        i.disconnect()
+        XCTAssertEqual(i.layout, .idle)
+        XCTAssertTrue(i.hasAddress)
+        XCTAssertTrue(i.canConnect)
+        XCTAssertTrue(i.connect())
+        XCTAssertEqual(i.layout, .active)
+        // つながっている（つなぎたい）あいだは Connect を出さない。
+        XCTAssertFalse(i.canConnect)
+    }
+
+    func testIntentConnectNeedsAnAddressAndAnAcceptedToken() {
+        var none = ETRemoteIntent(hasAddress: false, wantsConnection: false)
+        XCTAssertFalse(none.connect())
+        XCTAssertFalse(none.wantsConnection)
+
+        var rejected = ETRemoteIntent(hasAddress: true, wantsConnection: false, tokenRejected: true)
+        XCTAssertFalse(rejected.canConnect)
+        XCTAssertFalse(rejected.connect())
+        XCTAssertFalse(rejected.wantsConnection)
+    }
+
+    func testIntentForgetDropsEverything() {
+        var i = ETRemoteIntent(hasAddress: true, wantsConnection: true, tokenRejected: true)
+        i.forget()
+        XCTAssertEqual(i, ETRemoteIntent(hasAddress: false, wantsConnection: false))
+        XCTAssertEqual(i.layout, .unpaired)
+    }
+
+    func testIntentRejectedStopsWantingButKeepsTheAddress() {
+        var i = ETRemoteIntent(hasAddress: true, wantsConnection: true)
+        i.rejected()
+        XCTAssertEqual(i.layout, .idle)
+        XCTAssertTrue(i.tokenRejected)
+        XCTAssertFalse(i.canConnect, "同じ字でつなぎ直しても通らない")
+    }
+
+    func testIntentLaunchReconnectsOnlyWhenNotDisconnectedAndPaired() {
+        // Disconnect していなかった: 控えた PC へつなぎ直す。
+        var kept = ETRemoteIntent(hasAddress: true, wantsConnection: true)
+        kept.launch()
+        XCTAssertTrue(kept.wantsConnection)
+        // Disconnect した: つながない。
+        var off = ETRemoteIntent(hasAddress: true, wantsConnection: false)
+        off.launch()
+        XCTAssertFalse(off.wantsConnection)
+        // 控えが無いのに残っていた（前の版の enabled=true など）: 落とす。
+        var orphan = ETRemoteIntent(hasAddress: false, wantsConnection: true)
+        orphan.launch()
+        XCTAssertFalse(orphan.wantsConnection)
+    }
+
+    func testLastHostRoundTripsAndFollowsTheHostInfo() throws {
+        let info = ETRemoteHostInfo(state: ["appName": "EffeTune", "app": "2.11.0", "build": "db06db0e"])
+        let last = ETRemoteLastHost(info)
+        XCTAssertEqual(last, ETRemoteLastHost(name: "EffeTune", label: "2.11.0 (db06db0e)"))
+        let data = try JSONEncoder().encode(last)
+        XCTAssertEqual(try JSONDecoder().decode(ETRemoteLastHost.self, from: data), last)
+    }
 }

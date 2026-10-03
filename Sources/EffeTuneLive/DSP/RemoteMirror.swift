@@ -17,6 +17,10 @@
 //  コード 4401 で閉じるので、その場合は再接続しない（繰り返しても通らない）。
 //  PC の画面の QR（http://host:port/?t=…。ws:// も読む）を読んだら pair(_:) が控えてつなぐ。
 //
+//  **入切のスイッチは無い。**QR を読む（pair）か Connect でつなぎ、Disconnect で切る。
+//  Disconnect しなければ、起動のたびに控えた PC へつなぎ直す（Preferences.remoteWantsConnection）。
+//  遷移は ETRemoteIntent（RemoteProtocol.swift）。ここはそれを Preferences へ書いて apply() を呼ぶだけ。
+//
 //  ---------------------------------------------------------------------------
 //  **何を送るか（メッセージの一覧は remote-v1 と v2）**
 //    hello       つないだ直後に 1 回。返事の state で PC の鎖を入れ、Connected にする
@@ -67,14 +71,14 @@ final class RemoteMirror: ObservableObject {
     static let shared = RemoteMirror()
 
     enum Status: Equatable {
-        case off
+        case disconnected
         case connecting
         case connected
         case error(String)
 
         var label: String {
             switch self {
-            case .off:            return "Off"
+            case .disconnected:   return "Disconnected"
             case .connecting:     return "Connecting"
             case .connected:      return "Connected"
             case .error(let why): return "Error: \(why)"
@@ -82,7 +86,7 @@ final class RemoteMirror: ObservableObject {
         }
     }
 
-    @Published private(set) var status: Status = .off
+    @Published private(set) var status: Status = .disconnected
     /// つないだ直後の足し合わせの進み（"Syncing 3/7"）。済んだら nil。
     @Published private(set) var progress: String?
     /// PC の鎖を編集しているか。**手元の鎖は退避してあり、persist() は端末へ書かない。**
@@ -94,13 +98,19 @@ final class RemoteMirror: ObservableObject {
         return status.label
     }
 
-    /// つなぎ先を控えてあるか。無ければツールバーのボタンは QR の読み取りを開く。
-    /// トークンを断られた（4401）控えも無いのと同じ扱い。同じ字でつなぎ直しても通らない。
-    var hasPairing: Bool {
-        !tokenRejected && ETRemoteAddress.parse(Preferences.shared.remoteAddress) != nil
+    /// 控え・つなぎたいか・4401 から決まる状態。シートの形（layout）と Connect を出すかはここから読む。
+    /// Preferences（remoteAddress・remoteWantsConnection）と tokenRejected が変われば、
+    /// どちらも観測しているビューが読み直す。
+    var intent: ETRemoteIntent {
+        ETRemoteIntent(hasAddress: ETRemoteAddress.parse(Preferences.shared.remoteAddress) != nil,
+                       wantsConnection: Preferences.shared.remoteWantsConnection,
+                       tokenRejected: tokenRejected)
     }
     /// 最後のつなぎで 4401 を受けた。読み直す（pair）か、つながれば戻す。
     @Published private(set) var tokenRejected = false
+    /// 最後につないだ PC の EffeTune の名前と版。つながっていないあいだの PC の行に出す。
+    /// つないだら書き換え、別の PC を読んだ・Forget したら消す。
+    @Published private(set) var lastHost: ETRemoteLastHost? = RemoteMirror.loadLastHost()
     /// PC の測定値を映している段の tapId。ETRemoteMeasurementDim はここに入った段を沈めない。
     @Published private(set) var mirroredTaps: Set<UInt32> = []
 
@@ -113,7 +123,6 @@ final class RemoteMirror: ObservableObject {
     private var seq = 0
     private var backoff: TimeInterval = 1
     private var reconnectTask: Task<Void, Never>?
-    private var addressTask: Task<Void, Never>?
 
     /// 最後に PC へ送った鎖と、手元の番号 → PC の番号の対応。
     private var sentForm: [[String: Any]]?
@@ -190,6 +199,7 @@ final class RemoteMirror: ObservableObject {
     private var chainSink: AnyCancellable?
     private static let telemetryFPS = 15
 
+    private static let lastHostKey = "remote.lastHost"
     private static let stashKey = "remote.stash"
     private static let stashBypassKey = "remote.stashBypass"
 
@@ -198,55 +208,86 @@ final class RemoteMirror: ObservableObject {
     // MARK: - 設定
 
     /// 起動で 1 回。**App の init から呼ぶ**（EffeTuneLiveApp.swift）。
+    /// Disconnect していなければ（つなぎたいが残っていて控えもあれば）、控えた PC へつなぐ。
     func start() {
         // 編集中に落ちた。pipeline.last は手元の鎖のままだが、書き切る前だった分も含めて退避から戻す。
         pendingRestore = UserDefaults.standard.data(forKey: Self.stashKey) != nil
+        transition { $0.launch() }
         apply()
     }
 
-    /// Toggle が変わった。すぐ反映する。
-    func enabledChanged() {
-        addressTask?.cancel()
+    /// 控えた PC へつなぎ直す（Connect）。控えが無い・4401 だったときは何もしない。
+    /// 手元の鎖を退避して PC の鎖を入れる流れは、つながったとき（enterRemote）にいつもどおり走る。
+    func connectToSaved() {
+        var ok = false
+        transition { ok = $0.connect() }
+        guard ok else { return }
         backoff = 1
         apply()
     }
 
-    /// 接続先の字が変わった。打っている最中に何度もつなぎ直さないよう、止まってから反映する。
-    func addressChanged() {
-        guard Preferences.shared.remoteEnabled else { return }
-        addressTask?.cancel()
-        addressTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            if Task.isCancelled { return }
-            self?.backoff = 1
-            self?.apply()
-        }
+    /// 切る（Disconnect）。控えは残す。apply() が接続を落とし、退避した手元の鎖を戻す（leaveRemote）。
+    /// 起動してもつなぎ直さない。
+    func disconnectByUser() {
+        transition { $0.disconnect() }
+        backoff = 1
+        apply()
     }
 
     /// PC の QR の接続先（http://host:port/?t=…。前の形の ws:// も）。読めたら控えてつなぐ。
     /// PipelineView の onOpenURL と、アプリの中の読み取り（RemoteScannerView）から。
+    /// つないでいる最中でも、新しい PC へつなぎ直す（apply が先に切って手元の鎖を戻す）。
     @discardableResult
     func pair(_ url: URL) -> Bool {
         guard let address = ETRemoteAddress.pairingLink(url) else { return false }
-        tokenRejected = false
-        let prefs = Preferences.shared
-        prefs.remoteAddress = address.text
-        // 同じ値でも didSet は走る。enabledChanged が上の addressChanged の待ちを消してつなぎ直す。
-        prefs.remoteEnabled = true
+        Preferences.shared.remoteAddress = address.text
+        setLastHost(nil)
+        transition { $0.pair() }
+        backoff = 1
+        apply()
         return true
     }
 
     /// 控えを消して切る。
     func forget() {
-        let prefs = Preferences.shared
-        prefs.remoteEnabled = false
-        prefs.remoteAddress = ""
+        Preferences.shared.remoteAddress = ""
+        setLastHost(nil)
+        transition { $0.forget() }
+        backoff = 1
+        apply()
     }
 
+    /// 遷移（ETRemoteIntent）を通して Preferences と tokenRejected へ書き戻す。
+    /// 控えの字は pair が先に書く。控えが無くなる遷移（forget）では字を空にする。
+    private func transition(_ change: (inout ETRemoteIntent) -> Void) {
+        var next = intent
+        change(&next)
+        let prefs = Preferences.shared
+        if prefs.remoteWantsConnection != next.wantsConnection { prefs.remoteWantsConnection = next.wantsConnection }
+        if tokenRejected != next.tokenRejected { tokenRejected = next.tokenRejected }
+        if !next.hasAddress, !prefs.remoteAddress.isEmpty { prefs.remoteAddress = "" }
+    }
+
+    private func setLastHost(_ host: ETRemoteLastHost?) {
+        guard lastHost != host else { return }
+        lastHost = host
+        if let host, let data = try? JSONEncoder().encode(host) {
+            UserDefaults.standard.set(data, forKey: Self.lastHostKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.lastHostKey)
+        }
+    }
+
+    private static func loadLastHost() -> ETRemoteLastHost? {
+        UserDefaults.standard.data(forKey: lastHostKey)
+            .flatMap { try? JSONDecoder().decode(ETRemoteLastHost.self, from: $0) }
+    }
+
+    /// 接続を落として、つなぎたいなら張り直す。つなぎたくなければ Disconnected。
     private func apply() {
         disconnect()
-        guard Preferences.shared.remoteEnabled else {
-            status = .off
+        guard intent.wantsConnection else {
+            status = .disconnected
             return
         }
         connect()
@@ -325,6 +366,7 @@ final class RemoteMirror: ObservableObject {
             self.backoff = 1
             let info = ETRemoteHostInfo(state: state)
             self.host = info
+            self.setLastHost(ETRemoteLastHost(info))
             self.serverTelemetry = info.supports("telemetry")
             self.serverOverlays = info.supports("overlays")
             self.enterRemote(state)
@@ -391,8 +433,9 @@ final class RemoteMirror: ObservableObject {
         disconnect()
         if code == 4401 {
             // トークンが違う。同じ字で繰り返しても通らないので、つなぎ直さない。
+            // つなぎたくない側へ倒す（控えは残す。Scan QR Code で読み直すか Forget）。
+            transition { $0.rejected() }
             status = .error("Wrong token")
-            tokenRejected = true
             log.notice("remote: 4401 トークンが違う")
             return
         }
@@ -401,9 +444,9 @@ final class RemoteMirror: ObservableObject {
         scheduleReconnect()
     }
 
-    /// 1, 2, 4 … 15 秒。有効のあいだ続ける。つながったら 1 秒へ戻す。
+    /// 1, 2, 4 … 15 秒。Disconnect するまで続ける。つながったら 1 秒へ戻す。
     private func scheduleReconnect() {
-        guard Preferences.shared.remoteEnabled else { return }
+        guard intent.wantsConnection else { return }
         let delay = backoff
         backoff = min(backoff * 2, 15)
         reconnectTask?.cancel()
