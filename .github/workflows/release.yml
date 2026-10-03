@@ -82,7 +82,7 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             if [ "$GITHUB_REF" != refs/heads/main ]; then
-              echo "::error::手で回すのは main から（いまの ref: $GITHUB_REF）"
+              echo "::error::手で回すのは main から（いまの ref: ${GITHUB_REF}）"
               exit 1
             fi
             flavor="$IN_FLAVOR"; dry_run="$IN_DRY_RUN"
@@ -93,19 +93,19 @@ jobs:
           case "$flavor" in
             beta)  config=Beta ;;
             store) config=Release ;;
-            *) echo "::error::flavor は beta か store（$flavor）"; exit 1 ;;
+            *) echo "::error::flavor は beta か store（${flavor}）"; exit 1 ;;
           esac
-          case "$dry_run" in true|false) ;; *) echo "::error::dry_run が true/false でない（$dry_run）"; exit 1 ;; esac
+          case "$dry_run" in true|false) ;; *) echo "::error::dry_run が true/false でない（${dry_run}）"; exit 1 ;; esac
           version=$(sed -n 's/^ *MARKETING_VERSION: "\([^"]*\)".*/\1/p' project.yml | head -1)
           if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-            echo "::error::project.yml の MARKETING_VERSION が読めない（$version）"
+            echo "::error::project.yml の MARKETING_VERSION が読めない（${version}）"
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             # tf-YYYY.MM.DD-NN。日付は MARKETING_VERSION と同じでなければならない
             # （違うタグは、別の日の版を出してしまう打ち間違い）。
             if ! [[ "$GITHUB_REF_NAME" =~ ^tf-([0-9]{4}\.[0-9]{2}\.[0-9]{2})-[0-9]+$ ]]; then
-              echo "::error::タグは tf-YYYY.MM.DD-NN の形（$GITHUB_REF_NAME）"
+              echo "::error::タグは tf-YYYY.MM.DD-NN の形（${GITHUB_REF_NAME}）"
               exit 1
             fi
             if [ "${BASH_REMATCH[1]}" != "$version" ]; then
@@ -199,7 +199,7 @@ jobs:
           echo "iphoneos SDK: $sdk"
           case "$sdk" in
             27.*) ;;
-            *) echo "::error::iOS 27 の SDK が無い（$sdk）。配備先が 27.0 なので建たない"; exit 1 ;;
+            *) echo "::error::iOS 27 の SDK が無い（${sdk}）。配備先が 27.0 なので建たない"; exit 1 ;;
           esac
       # ci.yml の macos と同じ取り方。effetune は履歴ごと（dsp-v* のタグが gen_version に要る）。
       - name: submodule
@@ -286,7 +286,7 @@ jobs:
               exit 1
             fi
           elif [ "$rc" -ne 0 ]; then
-            echo "::error::ASC に問い合わせられない（exit $rc）"
+            echo "::error::ASC に問い合わせられない（exit ${rc}）"
             exit "$rc"
           fi
       - name: ビルド番号 = ASC の最大 + 1
@@ -294,9 +294,9 @@ jobs:
         run: |
           floor=$(sed -n 's/.*CURRENT_PROJECT_VERSION: "\([0-9]*\)".*/\1/p' project.yml | head -1)
           n=$(python3 Tools/asc.py next-build --floor "${floor:-0}")
-          [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::ビルド番号が数字でない（$n）"; exit 1; }
+          [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::ビルド番号が数字でない（${n}）"; exit 1; }
           echo "n=$n" >> "$GITHUB_OUTPUT"
-          echo "ビルド番号 $n（project.yml の $floor より上、ASC の最大 + 1。コミットはしない）"
+          echo "ビルド番号 ${n}（project.yml の $floor より上、ASC の最大 + 1。コミットはしない）"
       - name: 証明書の控え（前）
         run: python3 Tools/asc.py cert-ids | tee "$LOGS/certs-before.txt"
       - name: Scripts/setup.sh
@@ -391,7 +391,7 @@ jobs:
           unzip -p "$EXPORT_DIR/EffectDeck.ipa" Payload/EffectDeck.app/Info.plist > "$RUNNER_TEMP/Info.plist"
           got_build=$(plutil -extract CFBundleVersion raw -o - "$RUNNER_TEMP/Info.plist")
           got_version=$(plutil -extract CFBundleShortVersionString raw -o - "$RUNNER_TEMP/Info.plist")
-          echo "ipa: 版 $got_version / ビルド $got_build（期待: $VERSION / $BUILD_NUMBER）"
+          echo "ipa: 版 $got_version / ビルド ${got_build}（期待: $VERSION / ${BUILD_NUMBER}）"
           [ "$got_build" = "$BUILD_NUMBER" ] || { echo "::error::ipa のビルド番号が違う"; exit 1; }
           [ "$got_version" = "$VERSION" ] || { echo "::error::ipa の版が違う"; exit 1; }
       - name: 出荷物の検査（Tools/check_release_binary.py）
@@ -439,7 +439,7 @@ jobs:
           elif [ "$rc" -eq 4 ]; then
             echo "::warning::build $BUILD_NUMBER の処理が 30 分で終わらない。Internal へは手で足す（python3 Tools/asc.py builds → add-internal）"
           else
-            echo "::error::build $BUILD_NUMBER の処理が失敗した（exit $rc）"
+            echo "::error::build $BUILD_NUMBER の処理が失敗した（exit ${rc}）"
             exit "$rc"
           fi
       # 内部グループ（Internal）だけ。外部グループ（EffectDeck Public Beta）への追加と審査の提出はしない。
@@ -456,10 +456,10 @@ jobs:
         run: |
           {
             echo "### Release"
-            echo "- flavor: $FLAVOR（構成 $CONFIG）"
+            echo "- flavor: ${FLAVOR}（構成 ${CONFIG}）"
             echo "- 版 / ビルド: $VERSION / $BUILD_NUMBER"
             echo "- コミット: ${{ needs.gate.outputs.sha }}"
-            echo "- dry run: $DRY_RUN（版が閉じていた: ${CLOSED:-0}）"
+            echo "- dry run: ${DRY_RUN}（版が閉じていた: ${CLOSED:-0}）"
             if [ "$DRY_RUN" = true ]; then
               echo "- 上げていない。上げるのは tf-* のタグ（beta）か、dry_run を外した手動の回"
             else

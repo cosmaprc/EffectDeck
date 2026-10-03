@@ -68,15 +68,15 @@ jobs:
           echo "iphonesimulator SDK: $sdk"
           # 配備先が 27.0 なので、それより古い SDK では建たない（いちばん新しいものなら起きないはず）。
           if ! [ "${sdk%%.*}" -ge 27 ] 2>/dev/null; then
-            echo "::error::$app に iOS 27 以降の SDK が無い（$sdk）"
+            echo "::error::$app に iOS 27 以降の SDK が無い（${sdk}）"
             exit 1
           fi
           stable=""
           if [ -d "$STABLE_XCODE_APP" ]; then stable=$(cd "$STABLE_XCODE_APP" && pwd -P); fi
           if [ "$app" = "$stable" ]; then
-            echo "::notice title=canary::いちばん新しい Xcode は ci.yml の固定（$STABLE_XCODE_APP）と同じ。それでも回す"
+            echo "::notice title=canary::いちばん新しい Xcode は ci.yml の固定（${STABLE_XCODE_APP}）と同じ。それでも回す"
           fi
-          echo "::notice title=canary の Xcode::$xcode・iphonesimulator SDK $sdk（$app）"
+          echo "::notice title=canary の Xcode::${xcode}・iphonesimulator SDK ${sdk}（${app}）"
           echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
       - name: submodule
         run: |
@@ -122,7 +122,7 @@ jobs:
             echo "::warning::iOS $ios の端末が無いので $SIM_NAME を作る"
             udid=$(xcrun simctl create "$SIM_NAME (canary)" "$SIM_NAME" "$runtime_id")
           fi
-          echo "::notice title=canary のシミュレータ::iOS $ios（$runtime_id）・$udid"
+          echo "::notice title=canary のシミュレータ::iOS ${ios}（${runtime_id}）・$udid"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
           xcrun simctl bootstatus "$udid" -b
       - name: Logic の単体テスト

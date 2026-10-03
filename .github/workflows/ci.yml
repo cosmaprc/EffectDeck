@@ -308,7 +308,7 @@ jobs:
           echo "iphonesimulator SDK: $sdk"
           case "$sdk" in
             27.*) ;;
-            *) echo "::error::iOS 27 の SDK が無い（$sdk）。配備先が 27.0 なので建たない"; exit 1 ;;
+            *) echo "::error::iOS 27 の SDK が無い（${sdk}）。配備先が 27.0 なので建たない"; exit 1 ;;
           esac
       # effetune は generated と同じ取り方（blob:none は --depth 1 より速く、タグも付いてくる）。
       - name: submodule

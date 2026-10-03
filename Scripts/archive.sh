@@ -53,20 +53,20 @@ APPICON="${2:-EffectDeckPublicBeta}"
 if [ -n "${CONFIG:-}" ]; then
   case "$CONFIG" in
     Beta|Release) ;;
-    *) echo "FINISHED: CONFIG は Beta か Release（受け取った値: $CONFIG）。書庫は作らない (exit=2)"; exit 2 ;;
+    *) echo "FINISHED: CONFIG は Beta か Release（受け取った値: ${CONFIG}）。書庫は作らない (exit=2)"; exit 2 ;;
   esac
 else
   case "$APPICON" in
     EffectDeckPublicBeta) CONFIG=Beta ;;
     EffeTuneLive)         CONFIG=Release ;;
-    *) echo "FINISHED: 第 2 引数は EffectDeckPublicBeta か EffeTuneLive（受け取った値: $APPICON）。書庫は作らない (exit=2)"; exit 2 ;;
+    *) echo "FINISHED: 第 2 引数は EffectDeckPublicBeta か EffeTuneLive（受け取った値: ${APPICON}）。書庫は作らない (exit=2)"; exit 2 ;;
   esac
 fi
 # ビルド番号の上書き。数字以外は xcodebuild を呼ばずに落とす。
 BUILD_ARGS=()
 if [ -n "${ET_BUILD_NUMBER:-}" ]; then
   case "$ET_BUILD_NUMBER" in
-    *[!0-9]*) echo "FINISHED: ET_BUILD_NUMBER は数字だけ（受け取った値: $ET_BUILD_NUMBER）。書庫は作らない (exit=2)"; exit 2 ;;
+    *[!0-9]*) echo "FINISHED: ET_BUILD_NUMBER は数字だけ（受け取った値: ${ET_BUILD_NUMBER}）。書庫は作らない (exit=2)"; exit 2 ;;
   esac
   BUILD_ARGS=("CURRENT_PROJECT_VERSION=$ET_BUILD_NUMBER")
 fi

@@ -7,7 +7,7 @@
 #
 # GUI の Terminal から走らせること（ssh からだと codesign が鍵に届かない）。
 #
-# 書庫は Scripts/archive.sh と同じ $ARCHIVE_DIR（既定 /tmp）から読む。archive.sh が
+# 書庫は Scripts/archive.sh と同じ ${ARCHIVE_DIR}（既定 /tmp）から読む。archive.sh が
 # 落ちたら入れない（前は終了値を見ず、/tmp に残った書庫があればそれを入れていた）。
 # 全部 archive-install.log へ。最後の行は "=== ARCHIVE INSTALL FINISHED (exit=N) ==="。
 set -u

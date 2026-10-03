@@ -155,7 +155,7 @@ sim_select() {
     [ -n "$SIM_UDID" ] && SIM_NAME="$SIM"
   fi
   if [ -z "$SIM_UDID" ]; then
-    echo "!! シミュレータが無い: $SIM${SIM_OS:+（iOS $SIM_OS）}" >&2
+    echo "!! シミュレータが無い: $SIM${SIM_OS:+（iOS ${SIM_OS}）}" >&2
     echo "   名前は完全一致で引く。手近な端末へは逃げないし、作り足しもしない。" >&2
     echo "   使える端末（SIM=名前 か SIM=UDID で渡す）:" >&2
     printf '%s\n' "$table" | awk -F '\t' '{ printf "     %s  (%s, %s)\n", $3, $4, $2 }' >&2

@@ -61,7 +61,7 @@ if [ -n "${SAN:-}" ]; then
       address)   SAN_ARGS+=(-enableAddressSanitizer YES) ;;
       thread)    SAN_ARGS+=(-enableThreadSanitizer YES) ;;
       undefined) SAN_ARGS+=(-enableUndefinedBehaviorSanitizer YES) ;;
-      *) echo "!! SAN に知らない値: $s（address / thread / undefined）"
+      *) echo "!! SAN に知らない値: ${s}（address / thread / undefined）"
          exit 2 ;;
     esac
   done
