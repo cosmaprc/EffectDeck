@@ -2106,8 +2106,7 @@ private struct RemoteBanner: View {
                     .frame(width: 26)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    // 操っているのは PC の EffeTune。「Remote Control」では幅が足りず、何の話かも曖昧だった。
-                    Text("EffeTune")
+                    Text("Remote Control")
                         .font(.system(size: 15, weight: .semibold))
                     if let host = ETRemoteAddress.parse(Preferences.shared.remoteAddress)?.host {
                         Text(host)

@@ -72,7 +72,8 @@ struct RemoteStatusSlot: View {
     var body: some View {
         if mirror.isRemote {
             Button(action: open) {
-                Label("Remote Control", systemImage: "dot.radiowaves.left.and.right")
+                // 操っているのは PC の EffeTune。「Remote Control」ではツールバーの幅が足りない。
+                Label("EffeTune", systemImage: "dot.radiowaves.left.and.right")
                     .labelStyle(.titleAndIcon)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.blue)
