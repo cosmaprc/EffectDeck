@@ -729,13 +729,16 @@ struct ETRemoteIntent: Equatable {
 struct ETRemoteLastHost: Codable, Equatable {
     var name: String
     var label: String
+    /// PC のホスト名（state の host）。切断中の Connect のボタンに出す。古い記録には無い。
+    var hostName: String?
 
-    init(name: String, label: String) {
+    init(name: String, label: String, hostName: String? = nil) {
         self.name = name
         self.label = label
+        self.hostName = hostName
     }
 
     init(_ info: ETRemoteHostInfo) {
-        self.init(name: info.name, label: info.label)
+        self.init(name: info.name, label: info.label, hostName: info.hostName)
     }
 }

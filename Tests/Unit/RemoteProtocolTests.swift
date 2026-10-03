@@ -768,4 +768,14 @@ final class RemoteProtocolTests: XCTestCase {
         let data = try JSONEncoder().encode(last)
         XCTAssertEqual(try JSONDecoder().decode(ETRemoteLastHost.self, from: data), last)
     }
+
+    func testLastHostKeepsTheHostNameAndReadsOldRecords() throws {
+        let info = ETRemoteHostInfo(state: ["appName": "EffeTune", "app": "2.12.0", "host": "WIN-SE"])
+        XCTAssertEqual(ETRemoteLastHost(info).hostName, "WIN-SE")
+        // ホスト名を持たない前の記録も読める。
+        let old = Data(#"{"name":"EffeTune","label":"2.11.0"}"#.utf8)
+        let decoded = try JSONDecoder().decode(ETRemoteLastHost.self, from: old)
+        XCTAssertNil(decoded.hostName)
+        XCTAssertEqual(decoded.label, "2.11.0")
+    }
 }

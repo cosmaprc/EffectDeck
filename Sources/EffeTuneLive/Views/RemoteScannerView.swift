@@ -207,7 +207,11 @@ struct RemoteRows: View {
                 Button("Disconnect") { mirror.disconnectByUser() }
             }
         case .idle:
-            Section("PC") {
+            // 切断中は PC の情報を並べない（つないでいるように読める）。つなぎ先の名前はボタンに出す。
+            Section {
+                if intent.canConnect {
+                    Button("Connect to \(connectTarget)") { mirror.connectToSaved() }
+                }
                 // 4401 のように、つながらなかった理由があるときだけ状態を出す。
                 if case .error = mirror.status {
                     LabeledContent("Status") {
@@ -215,24 +219,18 @@ struct RemoteRows: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                addressRow
-                if let last = mirror.lastHost {
-                    LabeledContent(last.name) {
-                        Text(last.label)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            Section {
-                if intent.canConnect {
-                    Button("Connect") { mirror.connectToSaved() }
-                }
                 scanButton
             }
             Section {
                 Button("Forget", role: .destructive) { mirror.forget() }
             }
         }
+    }
+
+    /// 切断中の Connect に出すつなぎ先。ホスト名、無ければアドレスの host。
+    private var connectTarget: String {
+        if let name = mirror.lastHost?.hostName, !name.isEmpty { return name }
+        return ETRemoteAddress.parse(prefs.remoteAddress)?.host ?? "PC"
     }
 
     private var scanButton: some View {
