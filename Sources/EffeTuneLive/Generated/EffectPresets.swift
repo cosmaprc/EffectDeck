@@ -36,6 +36,142 @@ struct ETEffectPreset: Identifiable {
 /// グループの中の順も、上流が返したとおり。
 let ETEffectPresetList: [ETEffectPreset] = [
     ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "studio-vu",
+      label: "Studio VU (-18 dBFS)",
+      group: "",
+      json: #"""
+      {"md":"VU","it":0.3,"at":5,"rt":1.5,"rl":-18,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "smpte-vu",
+      label: "SMPTE VU (-20 dBFS)",
+      group: "",
+      json: #"""
+      {"md":"VU","it":0.3,"at":5,"rt":1.5,"rl":-20,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "hot-vu",
+      label: "Hot VU (-14 dBFS)",
+      group: "",
+      json: #"""
+      {"md":"VU","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "loud-master-vu",
+      label: "Loud Master VU (-8 dBFS)",
+      group: "",
+      json: #"""
+      {"md":"VU","it":0.3,"at":5,"rt":1.5,"rl":-8,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "din-ppm",
+      label: "DIN PPM",
+      group: "",
+      json: #"""
+      {"md":"PPM","it":0.3,"at":5,"rt":1.5,"rl":-18,"rg":50,"sc":0,"ph":0,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "bbc-ppm",
+      label: "BBC PPM",
+      group: "",
+      json: #"""
+      {"md":"PPM","it":0.3,"at":10,"rt":2.33,"rl":-18,"rg":40,"sc":1,"ph":0,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "nagra-modulometer",
+      label: "Nagra Modulometer",
+      group: "",
+      json: #"""
+      {"md":"PPM","it":0.3,"at":7.5,"rt":1.5,"rl":-18,"rg":30,"sc":2,"ph":0,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "k-20",
+      label: "K-20",
+      group: "",
+      json: #"""
+      {"md":"RMS","it":0.3,"at":5,"rt":1.5,"rl":-20,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "k-14",
+      label: "K-14",
+      group: "",
+      json: #"""
+      {"md":"RMS","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":46,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "k-12",
+      label: "K-12",
+      group: "",
+      json: #"""
+      {"md":"RMS","it":0.3,"at":5,"rt":1.5,"rl":-12,"rg":48,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "digital-peak",
+      label: "Digital Peak",
+      group: "",
+      json: #"""
+      {"md":"Sample Peak","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":60,"sc":0,"ph":2,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "true-peak-clip-watch",
+      label: "True Peak Clip Watch",
+      group: "",
+      json: #"""
+      {"md":"True Peak","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":20,"sc":0,"ph":10,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "ebu-r128",
+      label: "EBU R128 (-23 LUFS)",
+      group: "",
+      json: #"""
+      {"md":"Loudness","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "ebu-r128-wide",
+      label: "EBU R128 +18 Scale",
+      group: "",
+      json: #"""
+      {"md":"Loudness","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-23,"ls":1}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "tv-24-lkfs",
+      label: "TV (-24 LKFS)",
+      group: "",
+      json: #"""
+      {"md":"Loudness","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":0,"tg":-24,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "streaming-14-lufs",
+      label: "Streaming (-14 LUFS)",
+      group: "",
+      json: #"""
+      {"md":"Loudness","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":1,"tg":-14,"ls":0}
+      """#),
+    ETEffectPreset(
+      effect: "Analog Meter",
+      presetId: "streaming-16-lufs",
+      label: "Streaming (-16 LUFS)",
+      group: "",
+      json: #"""
+      {"md":"Loudness","it":0.3,"at":5,"rt":1.5,"rl":-14,"rg":40,"sc":0,"ph":1,"ln":1,"tg":-16,"ls":0}
+      """#),
+    ETEffectPreset(
       effect: "Power Amp Sag",
       presetId: "vintage-tube-sag",
       label: "Vintage Tube Sag",

@@ -83,6 +83,11 @@ struct ETParam: Identifiable {
     /// 保存している値と画面に出す値がずれるもの。
     var scale: ETParamScale = .direct
 
+    /// DSP の float には載るが、保存形式（プリセット・共有リンク・鎖）には書かず、読みもしないもの。
+    /// gen_catalog.py の RUNTIME_ONLY の表が正。Tonal Balance EQ の mp（測定の一時停止）。
+    /// 上流のプリセットにも画面の操作にも無く、ライブラリの bindings だけが立てる実行時の旗。
+    var runtimeOnly: Bool = false
+
     var id: String { name }
 
     var isArray: Bool { count > 1 }

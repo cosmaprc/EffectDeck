@@ -29,6 +29,8 @@ dspSettings: &dspSettings
     - $(SRCROOT)/Vendor/effetune/dsp/bindings/generated
     - $(SRCROOT)/Vendor/effetune/dsp/vendor/pffft/include/pffft
     - $(SRCROOT)/Generated/note-models
+    # 2.12.0 で heap_tree_model.h が note_spectrogram/ から tree_models/ に移った。
+    - $(SRCROOT)/Vendor/effetune/dsp/plugins/analyzer/tree_models
     - $(SRCROOT)/Vendor/ysfx/include
     - $(SRCROOT)/Vendor/ysfx/thirdparty/WDL/source
 
@@ -68,9 +70,11 @@ targets:
       - path: Vendor/effetune/dsp/core
         includes: ["**/*.cpp", "**/*.h"]
         excludes: ["**/*test*.cpp"]
+      # calibrate_tables.cpp は Tonal Balance EQ の表を作る単体ツール（int main を持つ）。
+      # 積むと Swift の @main と _main が衝突する。
       - path: Vendor/effetune/dsp/plugins
         includes: ["**/*.cpp", "**/*.h"]
-        excludes: ["**/*test*.cpp"]
+        excludes: ["**/*test*.cpp", "**/calibrate_tables.cpp"]
       - path: Vendor/effetune/dsp/vendor/pffft/src
         includes: ["**/*.c", "**/*.h"]
         excludes: ["**/*test*"]

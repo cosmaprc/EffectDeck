@@ -40,7 +40,7 @@ enum ETParamCoding {
         var objects: [String: [[String: Any]]] = [:]
 
         for p in params {
-            guard values.indices.contains(p.offset) else { continue }
+            guard values.indices.contains(p.offset), !p.runtimeOnly else { continue }
 
             if p.isObjectMember, let group = p.objectArrayKey, let member = p.memberKey {
                 var rows = objects[group] ?? []
@@ -122,6 +122,7 @@ enum ETParamCoding {
         var values = defaults
 
         for p in params {
+            if p.runtimeOnly { continue }
             if let key = p.flatArrayKey {
                 if let array = dict[key] as? [Any] {
                     for (i, item) in array.prefix(p.count).enumerated() {

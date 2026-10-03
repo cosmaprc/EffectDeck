@@ -122,6 +122,22 @@ SCALES = {
 }
 
 
+# 画面の並びが createUI の行番号だけでは決まらないもの。(type, key) -> 直前に置く key。
+# Tonal Balance EQ の Averaging Time は専用の行を作る関数（createAveragingTimeControl）が
+# createUI より前にあり、そのラベルの行が先頭に化ける。createUI では Smoothing の次に並ぶ。
+UI_AFTER = {
+    ("TonalBalanceEQPlugin", "at"): "sm",
+}
+
+# 保存形式にも鎖の語彙にも出さないパラメータ。(type, メンバ名)。DSP の float には載るので
+# catalog には残し、ETParam.runtimeOnly で印を付ける（ETParamCoding が書かず・読まない）。
+# Tonal Balance EQ の mp（測定の一時停止）は TONAL_BALANCE_EQ_DEFAULTS にも getParameters にも
+# 無く、画面の操作も無い。ライブラリの bindings だけが立てる実行時の旗。
+RUNTIME_ONLY = {
+    ("TonalBalanceEQPlugin", "measurementPaused"),
+}
+
+
 # ---------------------------------------------------------------- 鎖の語彙（chain/）
 
 # 鎖の字では組めないもの。**手で持つ。**type -> 理由（英語。そのままindex.mdに出る）。
@@ -692,6 +708,52 @@ def at(args, i):
     return args[i] if args and i < len(args) else None
 
 
+JS_NUMS = r"[-+]?(?:\d+\.?\d*|\.\d+)"
+CONST_ARRAY = re.compile(
+    r"\bconst\s+([A-Z_][A-Z0-9_]*)\s*=\s*(?:Object\.freeze\(\s*)?"
+    r"\[\s*(%s(?:\s*,\s*%s)*)\s*,?\s*\]" % (JS_NUMS, JS_NUMS))
+CONST_OBJECT = re.compile(r"\bconst\s+([A-Z_][A-Z0-9_]*)\s*=\s*Object\.freeze\(\s*\{")
+OBJECT_RANGE = re.compile(r"(\w+)\s*:\s*\[\s*(%s(?:\s*,\s*%s)*)\s*,?\s*\]" % (JS_NUMS, JS_NUMS))
+SPREAD = re.compile(r"\.\.\.\s*([A-Z_][A-Z0-9_]*)(?:\.(\w+))?")
+
+
+def const_number_lists(text):
+    """ファイルの先頭にある数だけの定数配列を引けるようにする。
+
+      const RHYTHM_ANALYZER_MN_RANGE = [40, 192];                  -> (NAME, None)
+      const TONAL_BALANCE_EQ_RANGES = Object.freeze({ tc: [20, 1000], … })   -> (NAME, 'tc')
+
+    戻り値は (定数名, キーか None) -> "40, 192"（数をカンマで繋いだ文字列）。
+    """
+    table = {}
+    for m in CONST_ARRAY.finditer(text):
+        table[(m.group(1), None)] = ", ".join(x.strip() for x in m.group(2).split(","))
+    for m in CONST_OBJECT.finditer(text):
+        # 対応する } まで。入れ子の {} は数えるが、文字列の中の括弧までは見ない（定数の表だけ読む）。
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        for mm in OBJECT_RANGE.finditer(text[m.end():i]):
+            table[(m.group(1), mm.group(1))] = ", ".join(x.strip() for x in mm.group(2).split(","))
+    return table
+
+
+def resolve_spreads(text):
+    """createParameterControl('Min BPM', ...MN_RANGE, 1, …) の ...定数 を、数に置き換える。
+
+    **spread は引数 1 つに見えるので、そのままだと後ろの引数が全部 1 つずつずれる**
+    （Rhythm Analyzer の Min BPM は刻みも単位も取れず、Tonal Balance EQ の Corner は
+    ラベルを取れなかった）。数だけの定数配列（と、その配列を持つ Object.freeze の表）の
+    spread だけ解く。読めないものはそのまま。行は変わらない。
+    """
+    table = const_number_lists(text)
+
+    def sub(m):
+        return table.get((m.group(1), m.group(2)), m.group(0))
+    return SPREAD.sub(sub, text)
+
+
 def read_ui(path, keys):
     """createUI が画面に出しているものを key ごとに集める。
 
@@ -699,7 +761,7 @@ def read_ui(path, keys):
     unit と範囲は取れなかったら None（params.json の値をそのまま使う合図）。
     line は画面での並び順に使う。
     """
-    text = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+    text = resolve_spreads(strip_comments(path.read_text(encoding="utf-8", errors="replace")))
     found = {}
 
     def line_of(pos):
@@ -901,6 +963,9 @@ def main():
                     ui_keys.add(k)
         js_path = JS_PLUGINS / category / (folder + ".js")
         ui = read_ui(js_path, ui_keys) if js_path.exists() else {}
+        for (t, k), after in UI_AFTER.items():
+            if t == type_name and k in ui and after in ui:
+                ui[k] = dict(ui[k], line=ui[after]["line"] + 0.5)
 
         params, defaults, offset = [], [], 0
         for mname, mcount in members:
@@ -993,6 +1058,9 @@ def main():
             scale = SCALES.get((type_name, mname))
             if scale:
                 extra += ", scale: .%s" % scale
+            runtime_only = (type_name, mname) in RUNTIME_ONLY
+            if runtime_only:
+                extra += ", runtimeOnly: true"
 
             # 鎖の語彙（chain/）に書く1行。鍵は保存形式で実際に書く名前にする
             # （オブジェクト配列はmemberKey、平らな配列はarrayKey。ETParamCodingと同じ）。
@@ -1039,6 +1107,8 @@ def main():
             info["default"] = ([typed(info, v) for v in vals] if mcount > 1
                                else typed(info, vals[0]))
 
+            if runtime_only:
+                info["runtimeOnly"] = True
             params.append((
                 u.get("line"),
                 "        ETParam(name: %s, key: %s, label: %s, kind: %s, defaultValue: %r, "
@@ -1064,7 +1134,7 @@ def main():
             "type": type_name, "name": name, "about": about, "category": category,
             "hash": phash, "floatCount": float_count,
             "params": ordered, "defaults": defaults,
-            "chain": [params[i][2] for i in order],
+            "chain": [params[i][2] for i in order if not params[i][2].get("runtimeOnly")],
         })
 
     # **外した型は黙らない。**そのエフェクトはアプリから消える。CI（ET_STRICT=1）では何も書かずに止める。

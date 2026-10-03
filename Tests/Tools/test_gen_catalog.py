@@ -165,6 +165,40 @@ class JsReadingTests(unittest.TestCase):
         self.assertEqual(found["du"]["label"], "Dust")
         self.assertIsNone(found["du"]["lo"])
 
+    def test_read_ui_resolves_spread_of_constant_ranges(self):
+        # 2.12.0: createParameterControl('Min BPM', ...MN_RANGE, 1, …) の spread は引数 1 つに見え、
+        # 後ろが全部ずれて刻みも単位も取れなかった（Rhythm Analyzer の Min/Max BPM）。
+        # Object.freeze の表の ...RANGES.tc も同じ（Tonal Balance EQ の Corner はラベルを落とした）。
+        text = """
+            const MN_RANGE = [40, 192];
+            const RANGES = Object.freeze({
+                am: [0, 100], tc: [20, 1000],
+                ...Object.fromEntries([1, 2].flatMap(b => [['fa' + b, [20, 20000]]]))
+            });
+            createUI() {
+                c.appendChild(this.createParameterControl(
+                    'Min BPM', ...MN_RANGE, 1, this.mn, v => this.setParameters({ mn: v }), 'BPM', 'mn'));
+                c.appendChild(this.createParameterControl(
+                    'Corner', ...RANGES.tc, 1, this.tc, v => this.setParameters({ tc: v }), 'Hz', 'tc', null, true));
+                c.appendChild(this.createParameterControl(
+                    'Other', ...UNKNOWN_RANGE, 1, this.ot, v => v, 'x', 'ot'));
+            }
+        """
+        with TempDir() as tmp:
+            found = self.gc.read_ui(self.js(tmp, text), {"mn", "tc", "ot"})
+        self.assertEqual((found["mn"]["label"], found["mn"]["lo"], found["mn"]["hi"],
+                          found["mn"]["step"], found["mn"]["unit"]), ("Min BPM", 40.0, 192.0, 1.0, "BPM"))
+        # 引数が 8 を超える行（toDisplay と整数の旗がある）は範囲も単位も持ってこない。ラベルだけ。
+        self.assertEqual(found["tc"]["label"], "Corner")
+        # 読めない定数は触らない（引数がずれたままなので範囲は取れない。ラベルは末尾の鍵から取れる）。
+        self.assertIsNone(found["ot"]["lo"])
+
+    def test_resolve_spreads_keeps_line_count(self):
+        text = "const R = [1, 2];\nf(...R,\n  3, ...Q)\n"
+        out = self.gc.resolve_spreads(text)
+        self.assertEqual(out, "const R = [1, 2];\nf(1, 2,\n  3, ...Q)\n")
+        self.assertEqual(out.count("\n"), text.count("\n"))
+
     def test_display_order_modal_resonator_mix(self):
         # 画面に出ているのが Mix だけの型。出ていないものは params.json の隣に付くので、
         # Mix は先頭へ来ない。
@@ -263,6 +297,51 @@ class MainTests(unittest.TestCase):
         with env_patch(ET_STRICT=strict), quiet() as (out, err):
             code = run_main(self.gc.main)
         return code, out.getvalue(), err.getvalue()
+
+    def test_runtime_only_param_stays_in_catalog_but_not_in_chain(self):
+        # Tonal Balance EQ の mp。DSP の float には載る（offset を詰める）が、保存形式にも
+        # 鎖の語彙にも出さない。ETParam.runtimeOnly の印で ETParamCoding が書かず読まない。
+        with TempDir() as tmp:
+            mv = MiniVendor(tmp)
+            fields = [
+                {"name": "amount", "key": "am", "kind": "float", "min": 0, "max": 100, "step": 1, "default": 100},
+                {"name": "measurementPaused", "key": "mp", "kind": "bool", "default": False},
+            ]
+            mv.plugin("eq", "tb", "RtPlugin", fields, [("amount", 1), ("measurementPaused", 1)])
+            gc = mv.bind(self.gc)
+            gc.RUNTIME_ONLY = {("RtPlugin", "measurementPaused")}
+            code, out, err = self.run_gen(mv)
+            self.assertEqual(code, 0, err)
+            swift = (tmp / "Sources/EffeTuneLive/Generated/EffectCatalog.swift").read_text("utf-8")
+            data = json.loads((tmp / "chain/v9.9.9/effects.json").read_text("utf-8"))
+        self.assertIn('key: "mp"', swift)
+        self.assertIn("offset: 1, count: 1, runtimeOnly: true)", swift)
+        self.assertIn("floatCount: 2", swift)
+        self.assertEqual([p["key"] for p in data["effects"][0]["params"]], ["am"])
+
+    def test_ui_after_moves_a_helper_row_behind_its_neighbour(self):
+        # Averaging Time の行を作る関数は createUI より前にあり、ラベルの行が先頭に化ける。
+        with TempDir() as tmp:
+            mv = MiniVendor(tmp)
+            fields = [
+                {"name": "smoothing", "key": "sm", "kind": "float", "min": 0, "max": 2, "step": 0.01, "default": 0.5},
+                {"name": "averagingTime", "key": "at", "kind": "float", "min": 0.1, "max": 100, "step": 0.1,
+                 "default": 30, "unit": "s"},
+                {"name": "low", "key": "lo", "kind": "float", "min": 20, "max": 200, "step": 1, "default": 20},
+            ]
+            js = (
+                "createRow() {\n  const l = document.createElement('label');\n"
+                "  l.textContent = 'Averaging Time (s):';\n  this.setParameters({ at: 1 });\n}\n"
+                "createUI() {\n"
+                "  c.appendChild(this.createParameterControl('Smoothing', 0, 2, 0.01, this.sm, v => v, '', 'sm'));\n"
+                "  c.appendChild(this.createParameterControl('Low', 20, 200, 1, this.lo, v => v, 'Hz', 'lo'));\n}\n")
+            mv.plugin("eq", "tb", "UaPlugin", fields, [("smoothing", 1), ("averagingTime", 1), ("low", 1)], js=js)
+            gc = mv.bind(self.gc)
+            gc.UI_AFTER = {("UaPlugin", "at"): "sm"}
+            code, out, err = self.run_gen(mv)
+            self.assertEqual(code, 0, err)
+            data = json.loads((tmp / "chain/v9.9.9/effects.json").read_text("utf-8"))
+        self.assertEqual([p["key"] for p in data["effects"][0]["params"]], ["sm", "at", "lo"])
 
     def test_array_defaults(self):
         # 配列の既定値は要素ごとに書く。足りない分は先頭で埋める（float() に掛けて 0 にしない）。
