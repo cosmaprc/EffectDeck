@@ -30,7 +30,8 @@ final class ETMockSource {
     ///     ピークホールドを撮るため。出力は ±1 で打ち切る）。
     ///   - silence: 無音（"-∞" の読みを撮るため）。
     ///   - music: 120 BPM のキック・スネア・ハット・ベース・和音（Rhythm Analyzer と
-    ///     VU の針の動きを撮るため）。
+    ///     VU の針の動きを撮るため）。ゆっくりした強弱（1〜2Hz のアクセント ±6〜10 dB と、
+    ///     2 秒の静かな区間）が付き、VU のバリスティクスが見える。
     enum Mode: String {
         case tone, clip, silence, music
     }
@@ -85,6 +86,42 @@ final class ETMockSource {
     /// 針の目盛り（Reference -14・Target -23）を確かめられる。撮影用の道具で、製品の音ではない。
     static let musicGain = 0.8 * 0.251188643150958
 
+    /// music の強弱の周期（秒）。各成分（1Hz・2Hz・0.25Hz）の周期の公倍数。
+    static let envelopePeriod = 16.0
+    /// 静かな区間（周期の中の秒）と、その深さ（dB）、出入りの傾き（秒）。
+    static let quietStart = 10.0, quietLength = 2.0, quietDepthDB = -12.0, quietRamp = 0.25
+
+    /// t 秒での強弱（dB、正規化前）。1Hz と 2Hz のアクセントの重ね合わせで ±8 dB ほど、
+    /// その振れ幅を 4 秒周期で ±25% 動かして ±6〜10 dB にする。静かな区間では全体を下げる。
+    static func envelopeRawDB(at t: Double) -> Double {
+        let twoPi = 2.0 * Double.pi
+        let swing = 5.0 * sin(twoPi * t) + 3.0 * sin(twoPi * 2 * t + 1.0)
+        let depth = 1.0 + 0.25 * sin(twoPi * t / 4)
+        let u = t.truncatingRemainder(dividingBy: envelopePeriod)
+        func smooth(_ x: Double) -> Double { let c = max(0, min(1, x)); return c * c * (3 - 2 * c) }
+        let quiet = smooth((u - quietStart) / quietRamp) * (1 - smooth((u - quietStart - quietLength) / quietRamp))
+        return swing * depth + quietDepthDB * quiet
+    }
+
+    /// 強弱の振幅の倍率。1 周期の平均パワーが 1 になるよう正規化し、さらに -0.73 dB 下げてある
+    /// （BS.1770 で測ると統合 -23.0 LUFS。静かな区間がゲートで落ちるぶん正規化だけだと +0.7 LU 高い）。
+    /// 強弱を付けてもサンプルピークは約 -7.4 dBFS で、True Peak は -1 dBTP を十分下回る。
+    static let envelopeNorm: Double = {
+        let steps = 1600
+        var power = 0.0
+        for i in 0..<steps {
+            let db = envelopeRawDB(at: envelopePeriod * Double(i) / Double(steps))
+            power += pow(10.0, db / 10.0)
+        }
+        return envelopeTrim / (power / Double(steps)).squareRoot()
+    }()
+    private static let envelopeTrim = pow(10.0, -0.73 / 20.0)
+
+    @inline(__always)
+    static func envelope(at t: Double) -> Double {
+        pow(10.0, envelopeRawDB(at: t) / 20.0) * envelopeNorm
+    }
+
     /// 決まった乱数。標本の番号から作る（確保も状態も要らない）。
     @inline(__always)
     private static func noise(_ n: Int) -> Double {
@@ -136,7 +173,7 @@ final class ETMockSource {
 
         let l = kick + snare + hat * 0.8 + bass + pad
         let r = kick + snare * 0.95 + hat * 1.2 + bass + pad * 0.9
-        let g = musicGain
+        let g = musicGain * envelope(at: t)
         return (Float(max(-1, min(1, l * g))), Float(max(-1, min(1, r * g))))
     }
 

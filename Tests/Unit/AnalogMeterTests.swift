@@ -293,11 +293,11 @@ final class AnalogMeterTests: XCTestCase {
         XCTAssertEqual(ETAnalogMeter.trimZeros("-14"), "-14")
     }
 
-    /// 赤い帯の始まりも基準と同じに強調する（DIN の 0 と -9）。
-    func testEmphasizedTicksAreReferenceAndRedStart() {
+    /// 強調するのは基準の目盛りだけ（上流 analog_meter.js:759-772）。赤い帯の始まりは強調しない。
+    func testEmphasizedTickIsOnlyTheReference() {
         let din = ETAnalogMeter.scale(mode: "PPM", settings: settings())
         XCTAssertTrue(ETAnalogMeter.isEmphasized(-9, in: din))
-        XCTAssertTrue(ETAnalogMeter.isEmphasized(0, in: din))
+        XCTAssertFalse(ETAnalogMeter.isEmphasized(0, in: din), "DIN の 0 は赤の始まりで、基準ではない")
         XCTAssertFalse(ETAnalogMeter.isEmphasized(-5, in: din))
         let peak = ETAnalogMeter.scale(mode: "Sample Peak", settings: settings())
         XCTAssertFalse(ETAnalogMeter.isEmphasized(0, in: peak), "基準も赤も無い針")

@@ -403,10 +403,10 @@ enum ETAnalogMeter {
         ("LRA", "--- LU"), ("TP", "--- dBTP"), ("Time", "0:00"),
     ]
 
-    /// 目盛りの字と線を白く太くするか。基準の目盛りと、赤い帯の始まり
-    /// （DIN の「0」は赤の始まりで、基準 -9 と並んで目に入る所）。
+    /// 目盛りの字の色と線（2 px）を強調するか。上流（analog_meter.js:759-772）どおり基準の目盛りだけ。
+    /// 字の太さは変えない。赤い帯の始まりは強調しない。
     static func isEmphasized(_ value: Double, in scale: Scale) -> Bool {
-        value == scale.reference || (scale.redFrom != nil && value == scale.redFrom)
+        value == scale.reference
     }
 
     /// 針の見出し（cellTitle、:548-557）。

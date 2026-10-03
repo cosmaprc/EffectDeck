@@ -106,6 +106,39 @@ final class MockSourceTests: XCTestCase {
         XCTAssertEqual(src.phase, 10, accuracy: 0.5)
     }
 
+    // MARK: - music の強弱
+
+    /// 強弱は周期（16 秒）で戻り、1 周期の平均パワーが musicGain のままになる（統合 -23 LUFS 前後）。
+    func testMusicEnvelopeRepeatsAndKeepsAveragePower() {
+        for t in stride(from: 0.0, to: 16.0, by: 0.37) {
+            XCTAssertEqual(ETMockSource.envelope(at: t), ETMockSource.envelope(at: t + 16 * 450), accuracy: 1e-9)
+        }
+        var power = 0.0
+        let n = 16_000
+        for i in 0..<n {
+            let a = ETMockSource.envelope(at: Double(i) / Double(n) * ETMockSource.envelopePeriod)
+            power += a * a
+        }
+        let meanDB = 10 * log10(power / Double(n))
+        XCTAssertEqual(meanDB, -0.73, accuracy: 0.05, "正規化のあとの -0.73 dB 以外に偏らない")
+    }
+
+    /// 静かでない区間では 1〜2Hz のアクセントが ±6〜10 dB で動き、静かな区間（10〜12 秒）は
+    /// そこより十分低い。VU の針が上下しバリスティクスが見える。
+    func testMusicEnvelopeHasAccentsAndAQuietSection() {
+        var loud: [Double] = []
+        var quiet: [Double] = []
+        for t in stride(from: 0.0, to: 16.0, by: 0.01) {
+            let db = 20 * log10(ETMockSource.envelope(at: t))
+            if t >= 10.3 && t < 11.9 { quiet.append(db) }
+            else if t < 9.7 || t >= 12.3 { loud.append(db) }
+        }
+        let swing = (loud.max() ?? 0) - (loud.min() ?? 0)
+        XCTAssertGreaterThan(swing, 12, "アクセントの上下（±6 dB 以上）")
+        XCTAssertLessThan(swing, 22, "アクセントの上下（±10 dB 以下）")
+        XCTAssertLessThan(quiet.max() ?? 0, (loud.max() ?? 0) - 12, "静かな区間は山より 12 dB 以上低い")
+    }
+
     // MARK: - 掃引
 
     func testSweepFrequencyRange() {

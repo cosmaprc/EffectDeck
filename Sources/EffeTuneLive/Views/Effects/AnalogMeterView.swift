@@ -197,10 +197,51 @@ private struct AnalogMeterFigure: View {
     private static let statsBand: CGFloat = 3 * statsLine + 16
     private static let bezelWidth: CGFloat = 3
 
-    /// 針 1 つぶんの縦横比（幅 / 高さ）。上流は 4:3 だが、狭い図の 2 列では 1 つが 165pt ほどしか
-    /// なく、4:3 だと弧が小さく痩せる。縦に伸ばして 1:1 にし、半径が幅の限りまで届くようにする。
-    private func cellAspect(_ layout: ETAnalogMeter.Grid) -> CGFloat {
-        width < Self.narrowWidth && layout.columns > 1 ? 1 : 4.0 / 3.0
+    /// 針 1 つの縦の寸法。広い図は上流どおり 4:3。狭い図の 2 列では 1 つが 165pt ほどしかなく
+    /// 4:3 だと弧が痩せるので、幅の限りの半径と高さがちょうど合う高さ（見出しの帯 + 目盛りの字 +
+    /// 半径 + 読み値）を幾何から出す。見出しと目盛りの字のあいだに空きの帯が出ない。
+    /// 比はおよそ VU 1.2 : 1、Loudness 1.1 : 1。
+    private func cellHeight(cellWidth: CGFloat, _ layout: ETAnalogMeter.Grid) -> CGFloat {
+        guard width < Self.narrowWidth && layout.columns > 1 else { return cellWidth * 3 / 4 }
+        let scale = ETAnalogMeter.scale(mode: ETAnalogMeter.modes[settings.mode], settings: settings)
+        let m = cellMetrics(boxWidth: cellWidth, scale: scale,
+                            loudness: settings.mode == ETAnalogMeter.loudnessMode)
+        return m.topOffset + m.widthRadius + m.bottomOffset
+    }
+
+    /// 針 1 つの寸法のうち、枠の幅と目盛りだけで決まるもの。描くとき（drawCell）と
+    /// 高さを出すとき（cellHeight）で同じ式を使う。
+    private struct CellMetrics {
+        var fontSize: CGFloat
+        var programReadout: CGFloat
+        /// 枠の上端から、弧の頂点の字の上端までの距離（見出しの帯 + 字の高さ）。
+        var topOffset: CGFloat
+        /// 軸の根元から枠の下端までの距離（読み値の背丈 + 余白）。
+        var bottomOffset: CGFloat
+        /// 幅の限りの半径。端の字が枠からはみ出さないところまで。
+        var widthRadius: CGFloat
+    }
+
+    private func cellMetrics(boxWidth: CGFloat, scale: ETAnalogMeter.Scale, loudness: Bool) -> CellMetrics {
+        let inset = Self.frameInset
+        // 狭い図（iPhone）では 9pt まで落とさず 11pt を下限にする。目盛りの字は 0.85 倍で約 9.4pt。
+        let fontFloor: CGFloat = width < Self.narrowWidth ? 11 : 9
+        let fontSize = max(fontFloor, min(14, boxWidth / 22))
+        let programReadout = min(22, max(15, boxWidth * 0.11))
+        // 軸の根元と半径は、同じ図の中でいちばん大きい読み値（Loudness は Program）で決める。
+        let pivotReadout: CGFloat = loudness ? programReadout : max(fontSize, 11)
+        // 見出しの帯。目盛りの字の上端が見出しの下に収まるところまで弧を下げる。
+        let titleBottom = inset * 2 + fontSize * 1.25
+        let labelRise = 9 + fontSize * 0.85 * 1.25
+        let redExtra: CGFloat = scale.redFrom == nil ? 0 : 2
+        // 端の字は目盛りの外へ横に張り出すので、いちばん長い字の幅ぶんを幅の限りから引く。
+        let longestLabel = scale.ticks.map { $0.label.count }.max() ?? 0
+        let sideRoom = CGFloat(longestLabel) * fontSize * 0.85 * 0.6 + 9 * CGFloat(sin(Self.arc)) + inset
+        return CellMetrics(
+            fontSize: fontSize, programReadout: programReadout,
+            topOffset: titleBottom + 3 + labelRise + redExtra,
+            bottomOffset: inset + 5 + pivotReadout * 0.75 + fontSize * 0.9,
+            widthRadius: max(8, (boxWidth / 2 - inset - sideRoom) / CGFloat(sin(Self.arc))))
     }
 
     /// 前のモードの枠は捨てる（applyReading、analog_meter.js:350）。
@@ -223,7 +264,7 @@ private struct AnalogMeterFigure: View {
         let loudness = settings.mode == ETAnalogMeter.loudnessMode
         // 統計は空いている枠に置く。無ければ針の下に帯を足す（畳んだ図には足さない）。
         let band: CGFloat = loudness && !ETAnalogMeter.hasEmptySlot(layout) && !graphOnly ? Self.statsBand : 0
-        let plotHeight = max(60, width / CGFloat(layout.columns) * CGFloat(layout.rows) / cellAspect(layout)) + band
+        let plotHeight = max(60, cellHeight(cellWidth: width / CGFloat(layout.columns), layout) * CGFloat(layout.rows)) + band
         VStack(alignment: .leading, spacing: 8) {
             Canvas { context, size in
                 draw(&context, CGRect(origin: .zero, size: size), reading: current, grid: layout, band: band)
@@ -357,11 +398,10 @@ private struct AnalogMeterFigure: View {
         // 枠。
         drawFrame(&context, box)
 
-        // 狭い図（iPhone）では 9pt まで落とさず 11pt を下限にする。目盛りの字は 0.85 倍で約 9.4pt。
-        let fontFloor: CGFloat = width < Self.narrowWidth ? 11 : 9
-        let fontSize = max(fontFloor, min(14, box.width / 22))
+        let metrics = cellMetrics(boxWidth: box.width, scale: scale, loudness: loudness)
+        let fontSize = metrics.fontSize
         // 読み値。Loudness の Program だけは主役なので大きく、他の針も 11pt を下回らない。
-        let programReadout = min(22, max(15, box.width * 0.11))
+        let programReadout = metrics.programReadout
         let readoutSize: CGFloat = loudness && channel < 0 ? programReadout : max(fontSize, 11)
         // 読み値の字の底（ベースライン）は同じ行の針で共通にする。大きい Program の読みも
         // 小さい針の読みも、-∞ も、同じ線に乗る。軸の根元は読みの背丈ぶんだけ上に置くので、
@@ -370,18 +410,9 @@ private struct AnalogMeterFigure: View {
         let pivotX = box.minX + box.width / 2
         // 軸の根元と半径は、同じ図の中でいちばん大きい読み値（Loudness は Program）で決める。
         // 針ごとに変えると、同じ行の軸と針の長さがそろわない（上流は全セル同じ形）。
-        let pivotReadout: CGFloat = loudness ? programReadout : readoutSize
-        let pivotY = readoutBaseline - pivotReadout * 0.75 - fontSize * 0.9
-        // 見出しの帯。目盛りの字の上端が見出しの下に収まるところまで弧を下げる。
-        let titleBottom = box.minY + inset * 2 + fontSize * 1.25
-        let labelRise = 9 + fontSize * 0.85 * 1.25
-        let redExtra: CGFloat = scale.redFrom == nil ? 0 : 2
-        let topLimit = titleBottom + 3 + labelRise + redExtra
-        // 端の字は目盛りの外へ横に張り出すので、いちばん長い字の幅ぶんを幅の限りから引く。
-        let longestLabel = scale.ticks.map { $0.label.count }.max() ?? 0
-        let sideRoom = CGFloat(longestLabel) * fontSize * 0.85 * 0.6 + 9 * CGFloat(sin(arc)) + inset
-        let radius = max(8, min((box.width / 2 - inset - sideRoom) / CGFloat(sin(arc)),
-                                pivotY - topLimit))
+        let pivotY = box.maxY - metrics.bottomOffset
+        let topLimit = box.minY + metrics.topOffset
+        let radius = max(8, min(metrics.widthRadius, pivotY - topLimit))
 
         func angle(_ position: Double) -> Double { -arc + 2 * arc * position }
         func point(_ position: Double, _ distance: CGFloat) -> CGPoint {
@@ -433,8 +464,7 @@ private struct AnalogMeterFigure: View {
             let a = angle(position)
             let anchor = UnitPoint(x: 0.5 - 0.5 * sin(a), y: 0.5 + 0.5 * cos(a))
             text(&context, tick.label, size: fontSize * 0.85, at: point(position, labelRadius),
-                 anchor: anchor, color: emphasized ? primary : label,
-                 weight: emphasized ? .bold : .regular)
+                 anchor: anchor, color: emphasized ? primary : label)
         }
 
         // 見出しとモード。
