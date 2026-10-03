@@ -211,15 +211,22 @@ private struct RhythmFigure: View {
                 x: .blank(), y: .blank(),
                 height: height,
                 insets: .none,
-                caption: tracker.state.snapshot == nil ? "Waiting for audio" : nil,
                 clipsContent: true,
+                showsHeader: false,
                 draw: { context, plot in
                     let painter = RhythmPainter(
                         state: tracker.state, mask: tracker.mask(), span: span,
                         showTempogram: showTempogram, showLanes: showLanes,
                         showEcho: showEcho, showLens: showLens,
                         now: ProcessInfo.processInfo.systemUptime)
-                    painter.paint(&context, rect: plot.rect)
+                    // paint は座標を動かすので、写しに描かせる（待ちの字は元の座標で描く）。
+                    var painted = context
+                    painter.paint(&painted, rect: plot.rect)
+                    if tracker.state.snapshot == nil {
+                        context.draw(Text("Waiting for audio")
+                                        .font(.system(size: 12)).foregroundStyle(.secondary),
+                                     at: CGPoint(x: plot.rect.midX, y: plot.rect.midY), anchor: .center)
+                    }
                 })
                 .frame(maxWidth: 1024)
                 .onGeometryChange(for: CGFloat.self) { proxy in

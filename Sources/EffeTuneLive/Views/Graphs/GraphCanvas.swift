@@ -91,6 +91,9 @@ struct GraphCanvas<Overlay: View>: View {
     /// 周波数軸の図すべてで鳴らしていたら、EQ の印を動かすたびに鳴った
     /// （FrequencyResponseGraph は図のどこを触っても最寄りの印を掴む）。
     var previewsFrequency: Bool
+    /// 上の値の行（readoutHeight ぶん）を取るか。図の中に見出しを自分で描く図
+    /// （Rhythm Analyzer）だけが false にして、行の分の空きを無くす。
+    var showsHeader: Bool
     var draw: (inout GraphicsContext, ETPlot) -> Void
     var overlay: (ETPlot) -> Overlay
 
@@ -104,6 +107,7 @@ struct GraphCanvas<Overlay: View>: View {
          accessory: AnyView? = nil,
          clipsContent: Bool = true,
          previewsFrequency: Bool = false,
+         showsHeader: Bool = true,
          draw: @escaping (inout GraphicsContext, ETPlot) -> Void,
          @ViewBuilder overlay: @escaping (ETPlot) -> Overlay) {
         self.x = x
@@ -116,13 +120,14 @@ struct GraphCanvas<Overlay: View>: View {
         self.accessory = accessory
         self.clipsContent = clipsContent
         self.previewsFrequency = previewsFrequency
+        self.showsHeader = showsHeader
         self.draw = draw
         self.overlay = overlay
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            header
+            if showsHeader { header }
             GeometryReader { geo in
                 ZStack {
                     Canvas { context, size in
@@ -274,10 +279,11 @@ extension GraphCanvas where Overlay == EmptyView {
          badge: String? = nil,
          clipsContent: Bool = true,
          previewsFrequency: Bool = false,
+         showsHeader: Bool = true,
          draw: @escaping (inout GraphicsContext, ETPlot) -> Void) {
         self.init(x: x, y: y, height: height, insets: insets, readout: readout,
                   caption: caption, badge: badge, clipsContent: clipsContent,
-                  previewsFrequency: previewsFrequency, draw: draw,
+                  previewsFrequency: previewsFrequency, showsHeader: showsHeader, draw: draw,
                   overlay: { _ in EmptyView() })
     }
 }

@@ -197,6 +197,12 @@ private struct AnalogMeterFigure: View {
     private static let statsBand: CGFloat = 3 * statsLine + 16
     private static let bezelWidth: CGFloat = 3
 
+    /// 針 1 つぶんの縦横比（幅 / 高さ）。上流は 4:3 だが、狭い図の 2 列では 1 つが 165pt ほどしか
+    /// なく、4:3 だと弧が小さく痩せる。縦に伸ばして 1:1 にし、半径が幅の限りまで届くようにする。
+    private func cellAspect(_ layout: ETAnalogMeter.Grid) -> CGFloat {
+        width < Self.narrowWidth && layout.columns > 1 ? 1 : 4.0 / 3.0
+    }
+
     /// 前のモードの枠は捨てる（applyReading、analog_meter.js:350）。
     private var reading: ETAnalogMeter.Reading? {
         guard let r = ETAnalogMeter.parse(telemetry.frame(tap: tapId, type: .analogMeter)),
@@ -217,7 +223,7 @@ private struct AnalogMeterFigure: View {
         let loudness = settings.mode == ETAnalogMeter.loudnessMode
         // 統計は空いている枠に置く。無ければ針の下に帯を足す（畳んだ図には足さない）。
         let band: CGFloat = loudness && !ETAnalogMeter.hasEmptySlot(layout) && !graphOnly ? Self.statsBand : 0
-        let plotHeight = max(60, width / CGFloat(layout.aspect)) + band
+        let plotHeight = max(60, width / CGFloat(layout.columns) * CGFloat(layout.rows) / cellAspect(layout)) + band
         VStack(alignment: .leading, spacing: 8) {
             Canvas { context, size in
                 draw(&context, CGRect(origin: .zero, size: size), reading: current, grid: layout, band: band)
@@ -321,6 +327,22 @@ private struct AnalogMeterFigure: View {
         context.draw(Text(s).font(font).foregroundStyle(color), at: point, anchor: anchor)
     }
 
+    /// 字の底（ベースライン）を `baseline` に置いて描く。大きさの違う字を同じ線に並べるのに使う。
+    /// `alignX` は 0 で左端、0.5 で中央、1 で右端を `x` に合わせる。描いた字の幅を返す。
+    @discardableResult
+    private func baselineText(_ context: inout GraphicsContext, _ s: String, size: CGFloat,
+                              x: CGFloat, baseline: CGFloat, alignX: CGFloat, color: Color,
+                              weight: Font.Weight = .regular, monospaced: Bool = false) -> CGFloat {
+        let font: Font = monospaced ? .system(size: size, weight: weight, design: .monospaced)
+                                    : .system(size: size, weight: weight)
+        let resolved = context.resolve(Text(s).font(font).foregroundStyle(color))
+        let room = CGSize(width: 10_000, height: 10_000)
+        let width = resolved.measure(in: room).width
+        let ascent = resolved.firstBaseline(in: room)
+        context.draw(resolved, at: CGPoint(x: x - width * alignX, y: baseline - ascent), anchor: .topLeading)
+        return width
+    }
+
     /// 1 つの針（drawCell、analog_meter.js:577-720）。
     private func drawCell(_ context: inout GraphicsContext, scale: ETAnalogMeter.Scale, box: CGRect,
                           channel: Int, reading: ETAnalogMeter.Reading?, now: Double) {
@@ -341,16 +363,21 @@ private struct AnalogMeterFigure: View {
         // 読み値。Loudness の Program だけは主役なので大きく、他の針も 11pt を下回らない。
         let programReadout = min(22, max(15, box.width * 0.11))
         let readoutSize: CGFloat = loudness && channel < 0 ? programReadout : max(fontSize, 11)
-        let largestReadout = loudness ? programReadout : readoutSize
-        let bottomSpace = fontSize * 0.8 + largestReadout * 1.25 + 4
+        // 読み値の字の底（ベースライン）は同じ行の針で共通にする。大きい Program の読みも
+        // 小さい針の読みも、-∞ も、同じ線に乗る。軸の根元は読みの背丈ぶんだけ上に置くので、
+        // 大きい読み値の空きを取るのは Program の針だけ。
+        let readoutBaseline = box.maxY - inset - 5
         let pivotX = box.minX + box.width / 2
-        let pivotY = box.maxY - inset - bottomSpace
+        let pivotY = readoutBaseline - readoutSize * 0.75 - fontSize * 0.9
         // 見出しの帯。目盛りの字の上端が見出しの下に収まるところまで弧を下げる。
         let titleBottom = box.minY + inset * 2 + fontSize * 1.25
         let labelRise = 9 + fontSize * 0.85 * 1.25
         let redExtra: CGFloat = scale.redFrom == nil ? 0 : 2
         let topLimit = titleBottom + 3 + labelRise + redExtra
-        let radius = max(8, min((box.width / 2 - inset - fontSize * 1.5) / CGFloat(sin(arc)),
+        // 端の字は目盛りの外へ横に張り出すので、いちばん長い字の幅ぶんを幅の限りから引く。
+        let longestLabel = scale.ticks.map { $0.label.count }.max() ?? 0
+        let sideRoom = CGFloat(longestLabel) * fontSize * 0.85 * 0.6 + 9 * CGFloat(sin(arc)) + inset
+        let radius = max(8, min((box.width / 2 - inset - sideRoom) / CGFloat(sin(arc)),
                                 pivotY - topLimit))
 
         func angle(_ position: Double) -> Double { -arc + 2 * arc * position }
@@ -399,8 +426,11 @@ private struct AnalogMeterFigure: View {
                            lineWidth: emphasized ? 2 : 1)
             if !major { continue }
             if let kept, !kept.contains(tick.value) { continue }
+            // 字の箱は目盛りの向きに外へ張り出す位置で止める。端の字が自分の目盛りに乗らない。
+            let a = angle(position)
+            let anchor = UnitPoint(x: 0.5 - 0.5 * sin(a), y: 0.5 + 0.5 * cos(a))
             text(&context, tick.label, size: fontSize * 0.85, at: point(position, labelRadius),
-                 anchor: .bottom, color: emphasized ? primary : label,
+                 anchor: anchor, color: emphasized ? primary : label,
                  weight: emphasized ? .bold : .regular)
         }
 
@@ -465,13 +495,11 @@ private struct AnalogMeterFigure: View {
         let readoutWeight: Font.Weight = loudness && channel < 0 ? .semibold : .regular
         if readout.contains("∞") {
             // 等幅の ∞ は数字の半分の高さで細い。通常の書体で 1.3 倍にして数字の背丈にそろえる。
-            text(&context, readout, size: readoutSize * 1.3,
-                 at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
-                 weight: readoutWeight)
+            baselineText(&context, readout, size: readoutSize * 1.3, x: pivotX, baseline: readoutBaseline,
+                         alignX: 0.5, color: primary, weight: readoutWeight)
         } else {
-            text(&context, readout, size: readoutSize,
-                 at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
-                 weight: readoutWeight, monospaced: true)
+            baselineText(&context, readout, size: readoutSize, x: pivotX, baseline: readoutBaseline,
+                         alignX: 0.5, color: primary, weight: readoutWeight, monospaced: true)
         }
     }
 
@@ -495,12 +523,33 @@ private struct AnalogMeterFigure: View {
             let top = box.midY - lineHeight * CGFloat(rows.count) / 2
             for (row, entry) in rows.enumerated() {
                 let y = top + (CGFloat(row) + 0.5) * lineHeight
-                text(&context, entry.label, size: size, at: CGPoint(x: left, y: y),
-                     anchor: .leading, color: AnalogMeterPalette.label, monospaced: true)
-                text(&context, entry.value, size: size, at: CGPoint(x: left + tableWidth, y: y),
-                     anchor: .trailing, color: AnalogMeterPalette.text, monospaced: true)
+                // 行の字の底は 1 本に。大きい ∞ も数字と同じ線に乗る。
+                let baseline = y + size * 0.35
+                baselineText(&context, entry.label, size: size, x: left, baseline: baseline,
+                             alignX: 0, color: AnalogMeterPalette.label, monospaced: true)
+                drawStatValue(&context, entry.value, size: size, right: left + tableWidth, baseline: baseline)
             }
             left += tableWidth + spacing
         }
+    }
+
+    /// 統計の値を右端 `right` にそろえて描く。"-∞ LUFS" は ∞ だけ通常の書体の 1.3 倍にして、
+    /// 単位は等幅のまま（読み値の ∞ と同じ扱い）。
+    private func drawStatValue(_ context: inout GraphicsContext, _ value: String,
+                               size: CGFloat, right: CGFloat, baseline: CGFloat) {
+        let color = AnalogMeterPalette.text
+        guard let infinity = value.firstIndex(of: "∞") else {
+            baselineText(&context, value, size: size, x: right, baseline: baseline,
+                         alignX: 1, color: color, monospaced: true)
+            return
+        }
+        let split = value.index(after: infinity)
+        let head = String(value[..<split])
+        let tail = String(value[split...])
+        let tailWidth = tail.isEmpty ? 0
+            : baselineText(&context, tail, size: size, x: right, baseline: baseline,
+                           alignX: 1, color: color, monospaced: true)
+        baselineText(&context, head, size: size * 1.3, x: right - tailWidth, baseline: baseline,
+                     alignX: 1, color: color)
     }
 }

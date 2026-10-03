@@ -77,6 +77,9 @@ final class ETMockSource {
     // MARK: music
 
     static let musicBPM = 120.0
+    /// 出力の大きさ。0.8 から -12 dB。実際の曲に近い -23 LUFS 前後・True Peak -1 dBTP 未満で、
+    /// 針の目盛り（Reference -14・Target -23）を確かめられる。撮影用の道具で、製品の音ではない。
+    static let musicGain = 0.8 * 0.251188643150958
 
     /// 決まった乱数。標本の番号から作る（確保も状態も要らない）。
     @inline(__always)
@@ -129,7 +132,8 @@ final class ETMockSource {
 
         let l = kick + snare + hat * 0.8 + bass + pad
         let r = kick + snare * 0.95 + hat * 1.2 + bass + pad * 0.9
-        return (Float(max(-1, min(1, l * 0.8))), Float(max(-1, min(1, r * 0.8))))
+        let g = musicGain
+        return (Float(max(-1, min(1, l * g))), Float(max(-1, min(1, r * g))))
     }
 
     /// t 秒での掃引の周波数。下と上を指数で往復する。
