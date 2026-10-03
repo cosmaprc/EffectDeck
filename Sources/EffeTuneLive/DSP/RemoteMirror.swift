@@ -169,6 +169,13 @@ final class RemoteMirror: ObservableObject {
     @Published private(set) var host: ETRemoteHostInfo?
     /// つながっていて、PC が telemetry を持っていない（古い EffeTune）。Mirror Analyzers を無効にして理由を出す。
     var telemetryUnsupported: Bool { isRemote && (host.map { !$0.supports("telemetry") } ?? false) }
+    /// 手元と PC の EffeTune の食い違い（効果の差と dsp の版）。つながっていない・食い違いが無いときは nil。
+    var mismatch: ETRemoteMismatch? {
+        guard isRemote else { return nil }
+        return host?.mismatch(localDSP: ETUpstreamVersion, localEffects: ETRemoteHostInfo.localEffectNames)
+    }
+    /// この効果を PC が持っていない（つながっているあいだだけ）。カードの印と、鎖に載せない段の判定。
+    func hostLacks(_ effect: String) -> Bool { isRemote && host?.lacks(effect) == true }
     /// PC が hello の features に "telemetry" を出した。
     private var serverTelemetry = false
     /// PC が hello の features に "overlays" を出した（PEQ の重ね表示の前後の枠を送れる）。
@@ -482,9 +489,9 @@ final class RemoteMirror: ObservableObject {
         let dsp = EffeTuneDSP.shared
         let loaded = items(from: state["pipeline"])
         let current = dsp.chain.map { PipelineStore.Loaded($0) }
-        let incoming = ETRemoteProjection.project(loaded).pipeline
+        let incoming = ETRemoteProjection.project(loaded, host: host).pipeline
         let same = !rebuild && ETRemotePresetSync.canonical(incoming)
-            == ETRemotePresetSync.canonical(ETRemoteProjection.project(current).pipeline)
+            == ETRemotePresetSync.canonical(ETRemoteProjection.project(current, host: host).pipeline)
 
         // 前の鎖の番号で積んだ params は、入れた後の鎖では別の段を指しうる。
         flushTask?.cancel()
@@ -510,7 +517,7 @@ final class RemoteMirror: ObservableObject {
         }
         applyingRemote = false
         // いま入れた鎖は PC と同じなので、送ったことにして控えを合わせる。
-        let projected = ETRemoteProjection.project(dsp.chain)
+        let projected = ETRemoteProjection.project(dsp.chain, host: host)
         sentForm = projected.pipeline
         sentMap = projected.remoteIndex
         refreshMirrored()
@@ -623,7 +630,7 @@ final class RemoteMirror: ObservableObject {
     }
 
     private func sendChain(_ chain: [ETChainNode]) {
-        let projected = ETRemoteProjection.project(chain)
+        let projected = ETRemoteProjection.project(chain, host: host)
         sentMap = projected.remoteIndex
         // 外部の段を足し引きすると、PC の番号の無い段が変わる。
         refreshMirrored()
@@ -846,7 +853,7 @@ final class RemoteMirror: ObservableObject {
                 // 手元の保存と同じ整え方の名前で比べる。整えると空になる名前は受けない。
                 guard !loaded.isEmpty, let key = store.savedName(for: name) else { continue }
                 pcItems[key] = loaded
-                pcCanon[key] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded).pipeline)
+                pcCanon[key] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded, host: host).pipeline)
             }
         }
         guard alive() else { return }
@@ -857,8 +864,11 @@ final class RemoteMirror: ObservableObject {
             let loaded = store.load(name)
             guard !loaded.isEmpty else { continue }
             localItems[name] = loaded
-            localCanon[name] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded).pipeline)
-            if loaded.contains(where: { !$0.externalID.isEmpty }) { blocked.insert(name) }
+            localCanon[name] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded, host: host).pipeline)
+            // 外部の段と、PC に無い効果を含むものは送らない（段を落とすと別のプリセットになる）。
+            if loaded.contains(where: { !$0.externalID.isEmpty || host?.lacks($0.spec.name) == true }) {
+                blocked.insert(name)
+            }
         }
         let presetPlan = ETRemotePresetSync.plan(pc: pcCanon, local: localCanon, localBlocked: blocked)
 
@@ -889,7 +899,7 @@ final class RemoteMirror: ObservableObject {
         for copy in presetPlan.toPC {
             guard alive() else { return }
             if let loaded = localItems[copy.source] {
-                let pipeline = ETRemoteProjection.project(loaded).pipeline
+                let pipeline = ETRemoteProjection.project(loaded, host: host).pipeline
                 if await request(["op": "savePreset", "name": copy.target, "pipeline": pipeline],
                                  reply: "ack") == nil {
                     log.notice("remote: プリセットを PC へ置けない \(copy.target, privacy: .public)")

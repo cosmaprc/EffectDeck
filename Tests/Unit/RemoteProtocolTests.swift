@@ -160,6 +160,112 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(m["build"])
     }
 
+    // MARK: - 版と効果の食い違い
+
+    /// 2.11.0 の PC が読み込める効果。手元のカタログから 2.12.0 で入った 3 つを引いたもの。
+    private var effects211: [String] {
+        let added: Set<String> = ["Analog Meter", "Rhythm Analyzer", "Tonal Balance EQ"]
+        return ETRemoteHostInfo.localEffectNames.filter { !added.contains($0) }
+    }
+
+    private func oldHost(dsp: String? = "0.11.0", effects: [String]? = nil) -> ETRemoteHostInfo {
+        var state: [String: Any] = ["app": "2.11.0", "appName": "EffeTune", "build": "abc1234",
+                                    "features": ["origin", "telemetry", "overlays"]]
+        if let dsp { state["dsp"] = dsp }
+        if let effects { state["effects"] = effects }
+        return ETRemoteHostInfo(state: state)
+    }
+
+    func testHelloCarriesOurDspVersion() {
+        XCTAssertEqual(ETRemoteHello.message(info: nil)["dsp"] as? String, ETUpstreamVersion)
+        XCTAssertEqual(ETRemoteHello.message(info: nil, dsp: "0.12.0")["dsp"] as? String, "0.12.0")
+        XCTAssertNil(ETRemoteHello.message(info: nil, dsp: "")["dsp"])
+    }
+
+    func testHostInfoReadsDspAndEffects() {
+        let info = oldHost(effects: ["Volume", "Delay"])
+        XCTAssertEqual(info.dsp, "0.11.0")
+        XCTAssertEqual(info.effects, ["Volume", "Delay"])
+        XCTAssertFalse(info.lacks("Volume"))
+        XCTAssertTrue(info.lacks("Analog Meter"))
+    }
+
+    func testHostWithoutEffectsListNeverRefuses() {
+        let info = ETRemoteHostInfo(state: ["app": "2.11.0"])
+        XCTAssertNil(info.dsp)
+        XCTAssertNil(info.effects)
+        XCTAssertFalse(info.lacks("Analog Meter"))
+        XCTAssertNil(info.mismatch(localDSP: "0.12.0", localEffects: ETRemoteHostInfo.localEffectNames))
+    }
+
+    func testMismatchNamesTheEffectsTheOldHostLacks() throws {
+        let info = oldHost(effects: effects211)
+        let m = try XCTUnwrap(info.mismatch(localDSP: "0.12.0", localEffects: ETRemoteHostInfo.localEffectNames))
+        XCTAssertEqual(m.missingOnHost, ["Analog Meter", "Rhythm Analyzer", "Tonal Balance EQ"])
+        XCTAssertTrue(m.missingHere.isEmpty)
+        XCTAssertTrue(m.dspDiffers)
+        XCTAssertEqual(m.headline, "DSP 0.11.0 on the PC, 0.12.0 here")
+        XCTAssertEqual(m.missingOnHostText, "Not on the PC: Analog Meter, Rhythm Analyzer, Tonal Balance EQ")
+    }
+
+    func testMismatchWithTheSameDspAndEffectsIsNil() {
+        let local = ETRemoteHostInfo.localEffectNames
+        let info = oldHost(dsp: "0.12.0", effects: local)
+        XCTAssertNil(info.mismatch(localDSP: "0.12.0", localEffects: local))
+    }
+
+    func testMismatchOfEffectsAloneSaysEffectsDiffer() throws {
+        let info = oldHost(dsp: "0.12.0", effects: effects211)
+        let m = try XCTUnwrap(info.mismatch(localDSP: "0.12.0", localEffects: ETRemoteHostInfo.localEffectNames))
+        XCTAssertFalse(m.dspDiffers)
+        XCTAssertEqual(m.headline, "Effects differ")
+    }
+
+    func testMismatchReportsEffectsOnlyThePcHas() throws {
+        let local = ["Volume", "Delay"]
+        let info = oldHost(dsp: "0.12.0", effects: ["Volume", "Delay", "Future Effect"])
+        let m = try XCTUnwrap(info.mismatch(localDSP: "0.12.0", localEffects: local))
+        XCTAssertEqual(m.missingHere, ["Future Effect"])
+        XCTAssertEqual(m.missingHereText, "Not here: Future Effect")
+        XCTAssertNil(m.missingOnHostText)
+    }
+
+    func testMismatchWithoutEffectsListComparesDspOnly() throws {
+        let info = oldHost(dsp: "0.11.0", effects: nil)
+        let m = try XCTUnwrap(info.mismatch(localDSP: "0.12.0", localEffects: ETRemoteHostInfo.localEffectNames))
+        XCTAssertTrue(m.missingOnHost.isEmpty)
+        XCTAssertEqual(m.headline, "DSP 0.11.0 on the PC, 0.12.0 here")
+        XCTAssertNil(oldHost(dsp: "0.12.0", effects: nil).mismatch(localDSP: "0.12.0", localEffects: []))
+        XCTAssertNil(oldHost(dsp: nil, effects: nil).mismatch(localDSP: "0.12.0", localEffects: []))
+    }
+
+    func testProjectionRefusesEffectsTheHostLacks() throws {
+        let host = oldHost(effects: effects211)
+        let chain = [try effect("VolumePlugin"),
+                     try effect("AnalogMeterPlugin"),
+                     external(inputBus: 0, outputBus: 0),
+                     try effect("RhythmAnalyzerPlugin"),
+                     try effect("DelayPlugin")]
+        let projected = ETRemoteProjection.project(chain, host: host)
+        XCTAssertEqual(projected.pipeline.map { $0["nm"] as? String },
+                       [chain[0].spec.name, chain[4].spec.name])
+        XCTAssertEqual(projected.remoteIndex, [0, nil, nil, nil, 1])
+    }
+
+    func testProjectionKeepsEverythingWithoutAnEffectsList() throws {
+        let chain = [try effect("VolumePlugin"), try effect("AnalogMeterPlugin")]
+        for host in [nil, oldHost(effects: nil)] {
+            let projected = ETRemoteProjection.project(chain, host: host)
+            XCTAssertEqual(projected.remoteIndex, [0, 1])
+        }
+    }
+
+    func testProjectionKeepsASectionTheHostKnows() throws {
+        let host = oldHost(effects: effects211)
+        let projected = ETRemoteProjection.project([section("A"), try effect("AnalogMeterPlugin")], host: host)
+        XCTAssertEqual(projected.remoteIndex, [0, nil])
+    }
+
     // MARK: - 接続先
 
     func testAddressHostPortToken() {

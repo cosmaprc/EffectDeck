@@ -8,6 +8,7 @@
 //    - RemoteScannerView       PC の画面の QR（ws://host:port/?t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
 //    - ETRemoteMeasurementDim  PC の鎖を編集しているあいだ、PC の測定値を映していない Analyzer の図を沈める
+//    - ETRemoteUnsupportedMark PC の EffeTune が持っていない効果の段に、送れないと出す（鎖には載せない）
 //
 //  **Analyzer の図を沈める訳。**編集しているあいだ鳴っているのは PC で、Analyzer の図が描くのは
 //  この端末の音（Telemetry）。PC の音の図ではないので、読めない形にして押せなくする。
@@ -144,6 +145,23 @@ struct RemoteRows: View {
         if let host = mirror.host {
             LabeledContent(host.name) {
                 Text(host.label)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        // PC の EffeTune と dsp/ の版か効果の一覧が食い違うとき。送れない効果は段にも印が付く。
+        if let mismatch = mirror.mismatch {
+            LabeledContent("Version") {
+                Text(mismatch.headline)
+                    .foregroundStyle(.orange)
+            }
+            if let text = mismatch.missingOnHostText {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let text = mismatch.missingHereText {
+                Text(text)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -321,5 +339,29 @@ struct ETRemoteMeasurementDim: ViewModifier {
     func body(content: Content) -> some View {
         content.environment(\.etMeasurementDimmed,
                             applies && mirror.isRemote && !mirror.mirroredTaps.contains(tap))
+    }
+}
+
+/// カードに掛ける。PC の鎖を編集しているあいだ、PC の EffeTune が持っていない効果の段に
+/// host.unsupportedText を出す。その段は PC へ送らない（ETRemoteProjection.project）。
+/// RemoteMirror を観測するのはここ（カードの本体は観測しない）。
+struct ETRemoteUnsupportedMark: ViewModifier {
+    let effect: String
+    @ObservedObject private var mirror = RemoteMirror.shared
+
+    init(effect: String) {
+        self.effect = effect
+    }
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 4) {
+            if mirror.hostLacks(effect), let host = mirror.host {
+                Text(host.unsupportedText)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+            }
+        }
     }
 }

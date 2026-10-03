@@ -41,15 +41,20 @@ enum ETRemoteProjection {
         var remoteIndex: [Int?]
     }
 
-    static func project(_ chain: [ETChainNode]) -> Projected {
-        project(chain.map { PipelineStore.Loaded($0) })
+    static func project(_ chain: [ETChainNode], host: ETRemoteHostInfo? = nil) -> Projected {
+        project(chain.map { PipelineStore.Loaded($0) }, host: host)
     }
 
-    static func project(_ items: [PipelineStore.Loaded]) -> Projected {
+    /// host を渡すと、**PC の EffeTune が持っていない効果の段も送らない**（番号の対応は nil）。
+    /// PC は知らない効果を含む鎖を丸ごと断る（unknown effect）ので、送れば他の段まで届かない。
+    /// host が nil のとき・PC が効果の一覧を出さない古い版のときは、何も落とさない。
+    static func project(_ items: [PipelineStore.Loaded], host: ETRemoteHostInfo? = nil) -> Projected {
         var pipeline: [[String: Any]] = []
         var map: [Int?] = []
         for item in items {
-            if let entry = entry(for: item) {
+            if item.externalID.isEmpty, host?.lacks(item.spec.name) == true {
+                map.append(nil)
+            } else if let entry = entry(for: item) {
                 map.append(pipeline.count)
                 pipeline.append(entry)
             } else {
@@ -501,17 +506,24 @@ enum ETRemoteTelemetry {
 ///
 /// **何ができるかは features で決める。版の数字は比べない**（表示だけに使う）。
 /// 古い PC は appName / build を出さない。その場合の名前は "EffeTune"、版は state の "app"。
+///
+/// **効果の有無は effects（PC が読み込める効果の名前）で決める。**出さない古い PC は nil で、
+/// 何も断らない。dsp は PC の dsp/ の版。これも出さない PC がある（nil）。
 struct ETRemoteHostInfo: Equatable {
     var name: String
     var version: String?
     var build: String?
     var features: Set<String>
+    var dsp: String?
+    var effects: Set<String>?
 
     init(state: [String: Any]) {
         name = Self.text(state["appName"]) ?? "EffeTune"
         version = Self.text(state["app"])
         build = Self.text(state["build"])
         features = Set(state["features"] as? [String] ?? [])
+        dsp = Self.text(state["dsp"])
+        effects = (state["effects"] as? [String]).map(Set.init)
     }
 
     private static func text(_ value: Any?) -> String? {
@@ -531,18 +543,74 @@ struct ETRemoteHostInfo: Equatable {
 
     func supports(_ feature: String) -> Bool { features.contains(feature) }
 
+    /// この効果を PC が持っていない。**一覧を出さない PC では偽**（分からないものは断らない）。
+    func lacks(_ effect: String) -> Bool {
+        guard let effects else { return false }
+        return !effects.contains(effect)
+    }
+
     /// 機能が無いときの一言。版が分からなければ版を省く。
     var unsupportedText: String {
         guard let version else { return "Not supported by \(name) on the PC" }
         return "Not supported by \(name) \(version) on the PC"
+    }
+
+    /// 手元が PC へ送れる効果の名前（カタログと Section）。
+    static var localEffectNames: [String] { ETCatalog.map(\.name) + [ETSection.name] }
+
+    /// 手元の EffeTune と PC の食い違い。無ければ nil。
+    ///
+    /// - effects を出す PC: 効果の名前の差と、dsp の版の差。
+    /// - effects を出さない PC: dsp の版の差だけ。dsp も出さなければ比べるものが無い（nil）。
+    func mismatch(localDSP: String, localEffects: [String]) -> ETRemoteMismatch? {
+        let dspDiffers = dsp.map { $0 != localDSP } ?? false
+        var missingOnHost: [String] = []
+        var missingHere: [String] = []
+        if let effects {
+            missingOnHost = Set(localEffects).subtracting(effects).sorted()
+            missingHere = effects.subtracting(localEffects).sorted()
+        }
+        guard dspDiffers || !missingOnHost.isEmpty || !missingHere.isEmpty else { return nil }
+        return ETRemoteMismatch(hostDSP: dsp, localDSP: localDSP,
+                                missingOnHost: missingOnHost, missingHere: missingHere)
+    }
+}
+
+/// 手元と PC の EffeTune の食い違い。Remote Control の設定に 1 行で出す。
+struct ETRemoteMismatch: Equatable {
+    var hostDSP: String?
+    var localDSP: String
+    /// 手元にあって PC に無い効果の名前（昇順）。
+    var missingOnHost: [String]
+    /// PC にあって手元に無い効果の名前（昇順）。
+    var missingHere: [String]
+
+    var dspDiffers: Bool { hostDSP != nil && hostDSP != localDSP }
+
+    /// "DSP 0.11.0 on the PC, 0.12.0 here" / "Effects differ"
+    var headline: String {
+        if let hostDSP, dspDiffers { return "DSP \(hostDSP) on the PC, \(localDSP) here" }
+        return "Effects differ"
+    }
+
+    /// "Not on the PC: Analog Meter, Rhythm Analyzer"。無ければ nil。
+    var missingOnHostText: String? {
+        missingOnHost.isEmpty ? nil : "Not on the PC: " + missingOnHost.joined(separator: ", ")
+    }
+
+    /// "Not here: Foo"。無ければ nil。
+    var missingHereText: String? {
+        missingHere.isEmpty ? nil : "Not here: " + missingHere.joined(separator: ", ")
     }
 }
 
 /// つないだ直後に送る hello。自分の名前と版を添える（PC の Remote Control の窓に出る）。
 /// 版は Info.plist から。引数にしてあるのは、テストが plist を差し替えて呼べるように。
 enum ETRemoteHello {
-    static func message(info: [String: Any]?) -> [String: Any] {
+    /// dsp は積んでいる EffeTune の dsp/ の版（ETUpstreamVersion）。PC が食い違いを出せるように添える。
+    static func message(info: [String: Any]?, dsp: String = ETUpstreamVersion) -> [String: Any] {
         var m: [String: Any] = ["op": "hello", "v": 1, "app": "EffectDeck"]
+        if !dsp.isEmpty { m["dsp"] = dsp }
         if let v = info?["CFBundleShortVersionString"] as? String, !v.isEmpty { m["version"] = v }
         if let b = info?["CFBundleVersion"] as? String, !b.isEmpty { m["build"] = b }
         return m
