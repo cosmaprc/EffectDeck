@@ -195,6 +195,8 @@ private struct RhythmFigure: View {
 
     @ETTelemetryFeed private var telemetry
     @Environment(\.etGraphOnly) private var graphOnly
+    /// 畳んだカードの高さの上限（EffectCardView.collapsedGraphHeight）。nil なら開いている。
+    @Environment(\.etGraphMaxHeight) private var collapsedHeight
     @State private var width: CGFloat = 320
 
     private static let narrowWidth: CGFloat = 500
@@ -214,10 +216,15 @@ private struct RhythmFigure: View {
                 clipsContent: true,
                 showsHeader: false,
                 draw: { context, plot in
+                    // 畳んだときは見出しと Timing lanes（Beats の帯）だけ。4 枚を低い高さに詰めると
+                    // どれも読めない帯になる。開けば表示の設定どおりに戻る。
+                    let collapsed = collapsedHeight != nil
                     let painter = RhythmPainter(
                         state: tracker.state, mask: tracker.mask(), span: span,
-                        showTempogram: showTempogram, showLanes: showLanes,
-                        showEcho: showEcho, showLens: showLens,
+                        showTempogram: collapsed ? false : showTempogram,
+                        showLanes: collapsed ? true : showLanes,
+                        showEcho: collapsed ? false : showEcho,
+                        showLens: collapsed ? false : showLens,
                         now: ProcessInfo.processInfo.systemUptime)
                     // paint は座標を動かすので、写しに描かせる（待ちの字は元の座標で描く）。
                     var painted = context
