@@ -24,6 +24,21 @@ final class ETMockSource {
         UserDefaults.standard.bool(forKey: "ETMock")
     }
 
+    /// 信号の種類。`-ETMockMode` で選ぶ（`-ETMock 1` と一緒に渡す）。
+    ///   - tone（既定）: 下の「それらしい」信号。
+    ///   - clip: 同じ信号を 0 dBFS を越えるまで持ち上げる（Analog Meter の over ランプと
+    ///     ピークホールドを撮るため。出力は ±1 で打ち切る）。
+    ///   - silence: 無音（"-∞" の読みを撮るため）。
+    ///   - music: 120 BPM のキック・スネア・ハット・ベース・和音（Rhythm Analyzer と
+    ///     VU の針の動きを撮るため）。
+    enum Mode: String {
+        case tone, clip, silence, music
+    }
+
+    static var mode: Mode {
+        Mode(rawValue: UserDefaults.standard.string(forKey: "ETMockMode") ?? "") ?? .tone
+    }
+
     /// 和音。A2 を根にした長三和音。倍音は 1/n で落とす。（周波数, 振幅）
     static let chord: [(frequency: Double, amplitude: Double)] = [
         (110.0, 0.50), (138.6, 0.32), (164.8, 0.26),
@@ -52,8 +67,69 @@ final class ETMockSource {
     /// 上へ散る（10 秒で数十 kHz、折り返して帯域全体に撒かれる）。
     private var sweepPhase: Double = 0
 
+    private let mode: Mode
+
     init(sampleRate: Double) {
         self.sampleRate = sampleRate > 0 ? sampleRate : 48000
+        self.mode = Self.mode
+    }
+
+    // MARK: music
+
+    static let musicBPM = 120.0
+
+    /// 決まった乱数。標本の番号から作る（確保も状態も要らない）。
+    @inline(__always)
+    private static func noise(_ n: Int) -> Double {
+        var x = UInt64(truncatingIfNeeded: n) &* 0x9E3779B97F4A7C15
+        x ^= x >> 29
+        x = x &* 0xBF58476D1CE4E5B9
+        x ^= x >> 32
+        return Double(x & 0xFFFFFF) / Double(0x7FFFFF) - 1.0
+    }
+
+    /// 1 標本ぶんの音楽。4 つ打ちのキック、2・4 拍のスネア、裏のハット、
+    /// 8 分のベース、2 小節ごとに変わる和音。右は左と少しだけ違う（ハットを振る）。
+    static func music(sample n: Int, sampleRate sr: Double) -> (left: Float, right: Float) {
+        let twoPi = 2.0 * Double.pi
+        let t = Double(n) / sr
+        let beat = 60.0 / musicBPM
+        let step = beat / 2                       // 8 分
+        let inBeat = t.truncatingRemainder(dividingBy: beat)
+        let beatIndex = Int(t / beat)
+        let inStep = t.truncatingRemainder(dividingBy: step)
+        let stepIndex = Int(t / step)
+
+        // キック。120Hz から 48Hz へ落とす正弦。
+        let kickPhase = twoPi * (48.0 * inBeat + 72.0 * 0.045 * (1 - exp(-inBeat / 0.045)))
+        let kick = sin(kickPhase) * exp(-inBeat / 0.16) * 0.85
+
+        // スネア（2・4 拍）。雑音と 190Hz の胴。
+        var snare = 0.0
+        if beatIndex % 2 == 1 {
+            snare = (noise(n) * 0.5 + sin(twoPi * 190 * inBeat) * 0.35) * exp(-inBeat / 0.09) * 0.55
+        }
+
+        // ハット（裏の 8 分）。高域だけの短い雑音（隣の標本との差で高域を取る）。
+        var hat = 0.0
+        if stepIndex % 2 == 1 {
+            hat = (noise(n) - noise(n - 1)) * 0.5 * exp(-inStep / 0.025) * 0.28
+        }
+
+        // ベース。8 分ごとに根音（A2 / F2 / C2 / G2）を鳴らす。
+        let roots: [Double] = [110.0, 87.31, 65.41, 98.0]
+        let bar = Int(t / (beat * 4))
+        let root = roots[(bar / 2) % roots.count]
+        let bassEnv = exp(-inStep / 0.22)
+        let bass = sin(twoPi * root * t) * bassEnv * 0.34
+
+        // 和音（根音の長三和音を 2 小節ごとに）。
+        let pad = (sin(twoPi * root * 2 * t) + 0.8 * sin(twoPi * root * 2 * 1.2599 * t)
+                   + 0.7 * sin(twoPi * root * 2 * 1.4983 * t)) * 0.07
+
+        let l = kick + snare + hat * 0.8 + bass + pad
+        let r = kick + snare * 0.95 + hat * 1.2 + bass + pad * 0.9
+        return (Float(max(-1, min(1, l * 0.8))), Float(max(-1, min(1, r * 0.8))))
     }
 
     /// t 秒での掃引の周波数。下と上を指数で往復する。
@@ -94,12 +170,31 @@ final class ETMockSource {
     /// インターリーブ（L,R,L,R…）で frames ぶん書く。
     func fill(_ out: UnsafeMutablePointer<Float>, frames: Int) {
         let sr = sampleRate
+        switch mode {
+        case .silence:
+            for i in 0..<max(0, frames * 2) { out[i] = 0 }
+            return
+        case .music:
+            // 位相は整数の標本番号で持つ（折り返しは 1085 秒だと拍が合わないので、2 時間で戻す）。
+            let base = Int(phase)
+            for i in 0..<max(0, frames) {
+                let s = Self.music(sample: base + i, sampleRate: sr)
+                out[i * 2] = s.left
+                out[i * 2 + 1] = s.right
+            }
+            phase += Double(max(0, frames))
+            if phase >= sr * 7200 { phase -= sr * 7200 }
+            return
+        case .tone, .clip:
+            break
+        }
+        let gain: Float = mode == .clip ? 4.0 : 1
         for i in 0..<max(0, frames) {
             let t = (phase + Double(i)) / sr
             let f0 = Self.sweepFrequency(at: t)
             let s = Self.frame(t: t, sweep: sweepPhase, sweepFrequency: f0)
-            out[i * 2]     = s.left
-            out[i * 2 + 1] = s.right
+            out[i * 2]     = max(-1, min(1, s.left * gain))
+            out[i * 2 + 1] = max(-1, min(1, s.right * gain))
             sweepPhase += f0 / sr
             sweepPhase -= sweepPhase.rounded(.down)
         }
