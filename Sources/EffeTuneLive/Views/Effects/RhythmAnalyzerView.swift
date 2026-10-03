@@ -360,12 +360,12 @@ private struct RhythmPainter {
             return natural > room ? size * room / natural : size
         }
         func caption(_ value: String, _ x: CGFloat, _ y: CGFloat, room: CGFloat, _ context: inout GraphicsContext) {
-            write(value, x, y, label, size: fitted(value, fontSize, room: room, context), context)
+            write(value, x, y, label, size: fitted(value, fontSize, room: room, context), &context)
         }
         func axisName(_ value: String, _ x: CGFloat, _ y: CGFloat, room: CGFloat, rotated: Bool = false,
                       _ context: inout GraphicsContext) {
             write(value, x, y, axis, align: .center, baseline: .alphabetic,
-                  size: fitted(value, axisFont, room: room, context), rotated: rotated, context)
+                  size: fitted(value, axisFont, room: room, context), rotated: rotated, &context)
         }
         let nameX: CGFloat = isNarrow ? 18 : 20
         func tickRight(_ left: CGFloat, _ labels: [String], _ context: GraphicsContext) -> CGFloat {
