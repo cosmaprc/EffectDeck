@@ -52,6 +52,9 @@ commit). App version/build numbering is unchanged; nothing is tagged or released
     a Program dial with M/S/I/LRA/TP/Time), peak hold with the over lamp, up to 4 columns
     (2 when narrow). Rows that do not act in the current mode are hidden. Reset (Loudness
     only) restarts Integrated, LRA and max True Peak.
+    Scales, behaviour and colors follow upstream's dark theme (black face, `--et-danger`
+    red); only the layout is adapted: the block is centered, and the Program statistics sit
+    in the empty grid slot (3 dials on 2 columns) or a band under the dials, at 12 pt.
   - Tonal Balance EQ (`TonalBalanceModel.swift`, `TonalBalanceEQView.swift`): the 41 ERB
     bands with target mean and spread, measured level, EQ response, withheld lift and the
     five Target adjust handles (same editing as the 5Band PEQ card), Averaging Time on a

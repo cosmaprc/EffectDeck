@@ -5,11 +5,18 @@
 //  値の計算は DSP/AnalogMeterModel.swift（目盛りの写し方・枠の読み・ピークホールド）。
 //  ここは並べて描くだけ。
 //
+//  色と目盛りは上流の暗いテーマと同じ（面は黒、赤は --et-danger、字は graph-label-soft など）。
+//  並べ方だけ iOS に合わせる。
+//
 //  上流との違い:
 //    - 行（Mode / Integration / Attack / Release / Reference / Range / PPM Scale / Peak Hold /
 //      Needle / Target / Scale）は上流と同じ順で、いまのモードで効かない行は出さない
 //      （analog_meter.js:415-421 の syncControlStates）。図は行の上に置く（このアプリの他の図と同じ）。
 //    - 針の並びは 1 行 4 つまで、狭いとき（iPhone）は 2 つまで（同 :19-20、:366-377）。
+//      幅に余りがあるときは面を中央に置く。
+//    - Loudness の Program の統計（M / S / I・LRA / TP / Time）は針の中の隅ではなく、
+//      空いている枠（針が 3 つで 2 列のときの 4 つ目）か、針の下の帯に 12pt で置く。
+//      針の見出しの下に帯を取り、目盛りの字とぶつからないようにする。
 //    - Reset（Loudness のときだけ）は et_instance_reset で、Integrated / LRA / 最大 True Peak の
 //      測定を最初からにする（上流は resetPluginState、同 :268-272）。値は変えない。
 //
@@ -78,7 +85,7 @@ struct AnalogMeterView: View {
         }
         if ETAnalogMeter.isActive("ph", settings: s) {
             ETDisplayNumberRow(title: "Peak Hold", unit: "s", value: $peakHold,
-                               range: 0...10, step: 0.1)
+                               range: 0...10, step: 0.1, trimsZeros: true)
         }
         if ETAnalogMeter.isActive("ln", settings: s) {
             ETDisplayChoiceRow(title: "Needle",
@@ -99,7 +106,7 @@ struct AnalogMeterView: View {
     @ViewBuilder
     private func dspRow(_ key: String, _ settings: ETAnalogMeter.Settings) -> some View {
         if ETAnalogMeter.isActive(key, settings: settings), let p = param(key) {
-            ParameterRow(param: p, nodeIndex: index, values: node.values, dsp: dsp)
+            ParameterRow(param: p, nodeIndex: index, values: node.values, dsp: dsp, trimsZeros: true)
         }
     }
 
@@ -139,6 +146,27 @@ struct AnalogMeterView: View {
     }
 }
 
+// MARK: - 色
+
+/// 上流の暗いテーマで針の面が読む色（analog_meter.js:597-606 の _displayPalette、
+/// effetune-theme.css の :root）。面は黒の窓で、カードの色には合わせない。
+private enum AnalogMeterPalette {
+    /// --et-text-primary
+    private static let ink = Color(red: 246 / 255, green: 248 / 255, blue: 251 / 255)
+    /// --et-graph-bg-deep
+    static let face = Color.black
+    /// 面の外の縁取り。
+    static let bezel = Color(white: 0.17)
+    /// --et-graph-grid-soft（文字色の 20%）
+    static let grid = ink.opacity(0.2)
+    /// --et-graph-label-soft（文字色の 50%）
+    static let label = ink.opacity(0.5)
+    /// --et-text-primary
+    static let text = ink
+    /// --et-danger（暗いテーマ）
+    static let danger = Color(red: 1, green: 107 / 255, blue: 107 / 255)
+}
+
 // MARK: - 図
 
 /// 針の計器を並べた面。テレメトリを観測するのはこの中だけ（つまみの行を 30Hz で作り直さない）。
@@ -151,6 +179,7 @@ private struct AnalogMeterFigure: View {
 
     @ETTelemetryFeed private var telemetry
     @Environment(\.etGraphOnly) private var graphOnly
+    @Environment(\.etGraphMaxHeight) private var maxHeight
 
     @State private var holds: [ETAnalogMeter.Hold] = []
     /// 最後に読めた枠のチャンネル数。枠が途切れても並びを変えない（analog_meter.js:350-358）。
@@ -159,9 +188,14 @@ private struct AnalogMeterFigure: View {
 
     /// 針の幅（上流の ANALOG_METER_ARC_DEGREES）。
     private static let arc = ETAnalogMeter.arcDegrees * Double.pi / 180
-    private static let danger = Color(red: 0.725, green: 0.11, blue: 0.11)
     /// 針が狭いとき 2 列にする幅（pt）。上流は CSS の mobile 幅。
     private static let narrowWidth: CGFloat = 520
+    /// 統計の字（pt）。iPhone でも 11pt を下回らない。
+    private static let statsSize: CGFloat = 12
+    private static let statsLine: CGFloat = 17
+    /// 針の下に取る統計の帯（3 行 + 上下の余白）。
+    private static let statsBand: CGFloat = 3 * statsLine + 16
+    private static let bezelWidth: CGFloat = 3
 
     /// 前のモードの枠は捨てる（applyReading、analog_meter.js:350）。
     private var reading: ETAnalogMeter.Reading? {
@@ -180,24 +214,28 @@ private struct AnalogMeterFigure: View {
     var body: some View {
         let current = reading
         let layout = grid
-        let plotHeight = max(60, width / CGFloat(layout.aspect))
+        let loudness = settings.mode == ETAnalogMeter.loudnessMode
+        // 統計は空いている枠に置く。無ければ針の下に帯を足す（畳んだ図には足さない）。
+        let band: CGFloat = loudness && !ETAnalogMeter.hasEmptySlot(layout) && !graphOnly ? Self.statsBand : 0
+        let plotHeight = max(60, width / CGFloat(layout.aspect)) + band
         VStack(alignment: .leading, spacing: 8) {
-            GraphCanvas(
-                x: .blank(), y: .blank(),
-                height: plotHeight,
-                insets: .none,
-                caption: current == nil ? "Waiting for audio" : nil,
-                clipsContent: true,
-                draw: { context, plot in
-                    draw(&context, plot, reading: current, grid: layout)
-                })
-                .frame(maxWidth: min(CGFloat(layout.columns) * 320, 1024))
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.width
-                } action: { newWidth in
-                    if newWidth > 0 && abs(newWidth - width) > 0.5 { width = newWidth }
-                }
-            if settings.mode == ETAnalogMeter.loudnessMode && !graphOnly {
+            Canvas { context, size in
+                draw(&context, CGRect(origin: .zero, size: size), reading: current, grid: layout, band: band)
+            }
+            .frame(height: min(plotHeight, maxHeight ?? plotHeight))
+            .background(AnalogMeterPalette.face)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { newWidth in
+                if newWidth > 0 && abs(newWidth - width) > 0.5 { width = newWidth }
+            }
+            .padding(Self.bezelWidth)
+            .background(AnalogMeterPalette.bezel, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            // 幅に余りがあれば中央に置く（針の数ぶんの幅で止め、左に寄せない）。
+            .frame(maxWidth: min(CGFloat(layout.columns) * 320, 1024) + Self.bezelWidth * 2)
+            .frame(maxWidth: .infinity)
+            if loudness && !graphOnly {
                 ETMeasurementButton(title: "Reset") {
                     dsp.resetState(at: index)
                     holds = []
@@ -230,22 +268,43 @@ private struct AnalogMeterFigure: View {
 
     // MARK: 描く
 
-    private func draw(_ context: inout GraphicsContext, _ plot: ETPlot,
-                      reading: ETAnalogMeter.Reading?, grid: ETAnalogMeter.Grid) {
-        let rect = plot.rect
-        let cellWidth = rect.width / CGFloat(grid.columns)
-        let cellHeight = rect.height / CGFloat(grid.rows)
+    private func draw(_ context: inout GraphicsContext, _ rect: CGRect,
+                      reading: ETAnalogMeter.Reading?, grid: ETAnalogMeter.Grid, band: CGFloat) {
+        let cells = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: max(0, rect.height - band))
+        let cellWidth = cells.width / CGFloat(grid.columns)
+        let cellHeight = cells.height / CGFloat(grid.rows)
         let modeName = ETAnalogMeter.modes[settings.mode]
         let scale = ETAnalogMeter.scale(mode: modeName, settings: settings)
         let loudness = settings.mode == ETAnalogMeter.loudnessMode
         let now = ProcessInfo.processInfo.systemUptime
+        func box(_ cell: Int) -> CGRect {
+            CGRect(x: cells.minX + CGFloat(cell % grid.columns) * cellWidth,
+                   y: cells.minY + CGFloat(cell / grid.columns) * cellHeight,
+                   width: cellWidth, height: cellHeight)
+        }
         for cell in 0..<grid.cells {
-            let box = CGRect(x: rect.minX + CGFloat(cell % grid.columns) * cellWidth,
-                             y: rect.minY + CGFloat(cell / grid.columns) * cellHeight,
-                             width: cellWidth, height: cellHeight)
-            drawCell(&context, scale: scale, box: box, channel: loudness ? cell - 1 : cell,
+            drawCell(&context, scale: scale, box: box(cell), channel: loudness ? cell - 1 : cell,
                      reading: reading, now: now)
         }
+        guard loudness, let reading, let program = reading.program else { return }
+        let rows = ETAnalogMeter.statRows(program: program, integratedValid: reading.integratedValid,
+                                          lraValid: reading.lraValid)
+        if ETAnalogMeter.hasEmptySlot(grid) {
+            let slot = box(grid.cells)
+            drawFrame(&context, slot)
+            drawStats(&context, rows: [rows], in: slot)
+        } else if band > 0 {
+            let strip = CGRect(x: rect.minX, y: cells.maxY, width: rect.width, height: band)
+            drawFrame(&context, strip)
+            drawStats(&context, rows: [Array(rows[0..<3]), Array(rows[3..<6])], in: strip)
+        }
+    }
+
+    private static let frameInset: CGFloat = 4
+
+    private func drawFrame(_ context: inout GraphicsContext, _ box: CGRect) {
+        context.stroke(Path(box.insetBy(dx: Self.frameInset, dy: Self.frameInset)),
+                       with: .color(AnalogMeterPalette.grid), lineWidth: 1)
     }
 
     private func text(_ context: inout GraphicsContext, _ s: String, size: CGFloat,
@@ -259,23 +318,32 @@ private struct AnalogMeterFigure: View {
     /// 1 つの針（drawCell、analog_meter.js:577-720）。
     private func drawCell(_ context: inout GraphicsContext, scale: ETAnalogMeter.Scale, box: CGRect,
                           channel: Int, reading: ETAnalogMeter.Reading?, now: Double) {
-        let inset: CGFloat = 4
+        let inset = Self.frameInset
         let arc = Self.arc
-        let grid = Color.secondary.opacity(0.35)
-        let label = Color.secondary
-        let primary = Color.primary
-        let danger = Self.danger
+        let grid = AnalogMeterPalette.grid
+        let label = AnalogMeterPalette.label
+        let primary = AnalogMeterPalette.text
+        let danger = AnalogMeterPalette.danger
+        let loudness = settings.mode == ETAnalogMeter.loudnessMode
 
         // 枠。
-        context.stroke(Path(box.insetBy(dx: inset, dy: inset)), with: .color(grid), lineWidth: 1)
+        drawFrame(&context, box)
 
         let fontSize = max(9, min(14, box.width / 22))
-        let bottomSpace = 1.8 * fontSize * 1.25
+        // 読み値。Loudness の Program だけは主役なので大きく、他の針も 11pt を下回らない。
+        let programReadout = min(22, max(15, box.width * 0.11))
+        let readoutSize: CGFloat = loudness && channel < 0 ? programReadout : max(fontSize, 11)
+        let largestReadout = loudness ? programReadout : readoutSize
+        let bottomSpace = fontSize * 0.8 + largestReadout * 1.25 + 4
         let pivotX = box.minX + box.width / 2
         let pivotY = box.maxY - inset - bottomSpace
-        let topSpace = fontSize * 3.2
+        // 見出しの帯。目盛りの字の上端が見出しの下に収まるところまで弧を下げる。
+        let titleBottom = box.minY + inset * 2 + fontSize * 1.25
+        let labelRise = 9 + fontSize * 0.85 * 1.25
+        let redExtra: CGFloat = scale.redFrom == nil ? 0 : 2
+        let topLimit = titleBottom + 3 + labelRise + redExtra
         let radius = max(8, min((box.width / 2 - inset - fontSize * 1.5) / CGFloat(sin(arc)),
-                                pivotY - (box.minY + inset + topSpace)))
+                                pivotY - topLimit))
 
         func angle(_ position: Double) -> Double { -arc + 2 * arc * position }
         func point(_ position: Double, _ distance: CGFloat) -> CGPoint {
@@ -315,36 +383,42 @@ private struct AnalogMeterFigure: View {
         for tick in scale.ticks {
             let position = scale.valuePosition(tick.value)
             let major = !tick.label.isEmpty
-            let isReference = tick.value == scale.reference
+            let emphasized = ETAnalogMeter.isEmphasized(tick.value, in: scale)
             var mark = Path()
             mark.move(to: point(position, radius))
             mark.addLine(to: point(position, radius + (major ? 7 : 4)))
-            context.stroke(mark, with: .color(isReference ? primary : label),
-                           lineWidth: isReference ? 2 : 1)
+            context.stroke(mark, with: .color(emphasized ? primary : label),
+                           lineWidth: emphasized ? 2 : 1)
             if !major { continue }
             if let kept, !kept.contains(tick.value) { continue }
             text(&context, tick.label, size: fontSize * 0.85, at: point(position, labelRadius),
-                 anchor: .bottom, color: isReference ? primary : label)
+                 anchor: .bottom, color: emphasized ? primary : label,
+                 weight: emphasized ? .bold : .regular)
         }
 
         // 見出しとモード。
         let holdMode = ETAnalogMeter.holdsPeak(mode: settings.mode)
         let channelCount = reading?.channelCount ?? self.channelCount
-        text(&context, ETAnalogMeter.cellTitle(channel: channel, mode: settings.mode,
-                                               channelCount: channelCount),
-             size: fontSize, at: CGPoint(x: box.minX + inset * 2, y: box.minY + inset * 2),
+        let title = ETAnalogMeter.cellTitle(channel: channel, mode: settings.mode, channelCount: channelCount)
+        text(&context, title, size: fontSize, at: CGPoint(x: box.minX + inset * 2, y: box.minY + inset * 2),
              anchor: .topLeading, color: primary, weight: .bold)
         let modeLabel: String
-        if settings.mode == ETAnalogMeter.loudnessMode {
+        if loudness {
             modeLabel = settings.needle == 1 ? "Short-term" : "Momentary"
         } else if ETAnalogMeter.modes[settings.mode] == "PPM" {
             modeLabel = "PPM \(ETAnalogMeter.ppmScales[settings.ppmScale])"
         } else {
             modeLabel = ETAnalogMeter.modes[settings.mode]
         }
-        text(&context, modeLabel, size: fontSize * 0.85,
-             at: CGPoint(x: box.maxX - inset * 2 - (holdMode ? fontSize * 1.2 : 0), y: box.minY + inset * 2),
-             anchor: .topTrailing, color: label)
+        // 狭い針では見出しとぶつかるので、入らないときはモードを出さない。
+        let lampWidth = holdMode ? fontSize * 1.2 : 0
+        let titleWidth = CGFloat(title.count) * fontSize * 0.62
+        let modeWidth = CGFloat(modeLabel.count) * fontSize * 0.85 * 0.55
+        if titleWidth + modeWidth + lampWidth + inset * 4 + fontSize <= box.width {
+            text(&context, modeLabel, size: fontSize * 0.85,
+                 at: CGPoint(x: box.maxX - inset * 2 - lampWidth, y: box.minY + inset * 2),
+                 anchor: .topTrailing, color: label)
+        }
 
         // ピークホールドと 0 dBFS を越えたときのランプ。
         let hold: ETAnalogMeter.Hold? = channel >= 0 && holds.indices.contains(channel) ? holds[channel] : nil
@@ -379,54 +453,37 @@ private struct AnalogMeterFigure: View {
                      with: .color(primary))
 
         // 読み値。
-        text(&context, db.map { scale.readout($0) } ?? "---", size: fontSize,
+        text(&context, db.map { scale.readout($0) } ?? "---", size: readoutSize,
              at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
-             monospaced: true)
-        if channel < 0, let program = reading?.program, let reading {
-            drawProgramStats(&context, program: program, reading: reading, box: box, inset: inset,
-                             fontSize: fontSize)
-        }
+             weight: loudness && channel < 0 ? .semibold : .regular, monospaced: true)
     }
 
-    /// Program の針の下の両隅に出す M / S / I と LRA / TP / Time（drawProgramStats、:722-766）。
-    private func drawProgramStats(_ context: inout GraphicsContext, program: ETAnalogMeter.Program,
-                                  reading: ETAnalogMeter.Reading, box: CGRect, inset: CGFloat,
-                                  fontSize: CGFloat) {
-        func lufs(_ v: Double) -> String { v <= ETAnalogMeter.silenceDB ? "-∞" : String(format: "%.1f", v) }
-        let tables: [[(String, String)]] = [
-            [("M", "\(lufs(program.momentary)) LUFS"),
-             ("S", "\(lufs(program.shortTerm)) LUFS"),
-             ("I", "\(reading.integratedValid ? lufs(program.integrated) : "---") LUFS")],
-            [("LRA", "\(reading.lraValid ? String(format: "%.1f", program.lra) : "---") LU"),
-             ("TP", "\(lufs(program.maxTruePeak)) dBTP"),
-             ("Time", ETAnalogMeter.duration(program.integratedSeconds))],
-        ]
-        let margin = inset + fontSize * 0.5
-        var size = fontSize * 0.9
-        // 等幅なので 1 字は約 0.6 em。固定幅の見本で、読み値が変わっても表が動かない。
-        func measure(_ s: String, _ size: CGFloat) -> CGFloat { CGFloat(s.count) * size * 0.6 }
-        let labelWidths = tables.map { rows in rows.map { measure($0.0, size) }.max() ?? 0 }
-        let valueWidths = tables.map { rows in rows.map { measure($0.1, size) }.max() ?? 0 }
-        let gap = size * 0.6
-        let tableWidth = max(labelWidths[0] + valueWidths[0], labelWidths[1] + valueWidths[1]) + gap
-        let readoutHalf = measure("-88.8 LUFS", fontSize) / 2
-        let available = box.width / 2 - margin - readoutHalf - fontSize * 0.6
-        guard available > 0 else { return }
-        // 狭い針では、表が読み値にぶつからないよう縮める。
-        let fit = tableWidth > available ? available / tableWidth : 1
-        size *= fit
-        let scaledWidth = tableWidth * fit
-        let lineHeight = size * 1.3
-        let bottom = box.maxY - inset * 2
-        for (tableIndex, rows) in tables.enumerated() {
-            let left = tableIndex == 0 ? box.minX + margin : box.maxX - margin - scaledWidth
+    /// Program の統計。上流の drawProgramStats（:722-766）は針の下の両隅だが、狭いと
+    /// 読めないので、空いた枠か針の下の帯に固定の大きさで出す。見本の幅で組むので、
+    /// 値が変わっても表は動かない。
+    /// `rows` が 1 つなら 6 行の表を枠の中央に、2 つなら 3 行ずつを横に並べて中央に置く。
+    private func drawStats(_ context: inout GraphicsContext,
+                           rows tables: [[(label: String, value: String)]], in box: CGRect) {
+        let size = Self.statsSize
+        func measure(_ s: String) -> CGFloat { CGFloat(s.count) * size * 0.6 }
+        let lineHeight = min(Self.statsLine, (box.height - Self.frameInset * 2) / (CGFloat(tables[0].count) + 0.6))
+        let labelWidth = measure("Time")
+        let valueWidth = measure("-88.8 LUFS")
+        let gap = size * 0.7
+        let tableWidth = labelWidth + gap + valueWidth
+        let spacing = size * 2.4
+        let total = tableWidth * CGFloat(tables.count) + spacing * CGFloat(tables.count - 1)
+        var left = box.midX - total / 2
+        for rows in tables {
+            let top = box.midY - lineHeight * CGFloat(rows.count) / 2
             for (row, entry) in rows.enumerated() {
-                let y = bottom - CGFloat(rows.count - 1 - row) * lineHeight
-                text(&context, entry.0, size: size, at: CGPoint(x: left, y: y),
-                     anchor: .bottomLeading, color: .secondary, monospaced: true)
-                text(&context, entry.1, size: size, at: CGPoint(x: left + scaledWidth, y: y),
-                     anchor: .bottomTrailing, color: .primary, monospaced: true)
+                let y = top + (CGFloat(row) + 0.5) * lineHeight
+                text(&context, entry.label, size: size, at: CGPoint(x: left, y: y),
+                     anchor: .leading, color: AnalogMeterPalette.label, monospaced: true)
+                text(&context, entry.value, size: size, at: CGPoint(x: left + tableWidth, y: y),
+                     anchor: .trailing, color: AnalogMeterPalette.text, monospaced: true)
             }
+            left += tableWidth + spacing
         }
     }
 }
