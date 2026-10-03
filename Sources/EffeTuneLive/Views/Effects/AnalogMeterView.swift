@@ -286,9 +286,15 @@ private struct AnalogMeterFigure: View {
             drawCell(&context, scale: scale, box: box(cell), channel: loudness ? cell - 1 : cell,
                      reading: reading, now: now)
         }
-        guard loudness, let reading, let program = reading.program else { return }
-        let rows = ETAnalogMeter.statRows(program: program, integratedValid: reading.integratedValid,
+        guard loudness else { return }
+        // 読みが無いときも表は出す（空の枠にしない・読みが来ても大きさが変わらない）。
+        let rows: [(label: String, value: String)]
+        if let reading, let program = reading.program {
+            rows = ETAnalogMeter.statRows(program: program, integratedValid: reading.integratedValid,
                                           lraValid: reading.lraValid)
+        } else {
+            rows = ETAnalogMeter.emptyStatRows
+        }
         if ETAnalogMeter.hasEmptySlot(grid) {
             let slot = box(grid.cells)
             drawFrame(&context, slot)
@@ -329,7 +335,9 @@ private struct AnalogMeterFigure: View {
         // 枠。
         drawFrame(&context, box)
 
-        let fontSize = max(9, min(14, box.width / 22))
+        // 狭い図（iPhone）では 9pt まで落とさず 11pt を下限にする。目盛りの字は 0.85 倍で約 9.4pt。
+        let fontFloor: CGFloat = width < Self.narrowWidth ? 11 : 9
+        let fontSize = max(fontFloor, min(14, box.width / 22))
         // 読み値。Loudness の Program だけは主役なので大きく、他の針も 11pt を下回らない。
         let programReadout = min(22, max(15, box.width * 0.11))
         let readoutSize: CGFloat = loudness && channel < 0 ? programReadout : max(fontSize, 11)
@@ -453,9 +461,18 @@ private struct AnalogMeterFigure: View {
                      with: .color(primary))
 
         // 読み値。
-        text(&context, db.map { scale.readout($0) } ?? "---", size: readoutSize,
-             at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
-             weight: loudness && channel < 0 ? .semibold : .regular, monospaced: true)
+        let readout = db.map { scale.readout($0) } ?? "---"
+        let readoutWeight: Font.Weight = loudness && channel < 0 ? .semibold : .regular
+        if readout.contains("∞") {
+            // 等幅の ∞ は数字の半分の高さで細い。通常の書体で 1.3 倍にして数字の背丈にそろえる。
+            text(&context, readout, size: readoutSize * 1.3,
+                 at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
+                 weight: readoutWeight)
+        } else {
+            text(&context, readout, size: readoutSize,
+                 at: CGPoint(x: pivotX, y: pivotY + fontSize * 0.8), anchor: .top, color: primary,
+                 weight: readoutWeight, monospaced: true)
+        }
     }
 
     /// Program の統計。上流の drawProgramStats（:722-766）は針の下の両隅だが、狭いと

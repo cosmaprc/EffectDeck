@@ -201,8 +201,9 @@ private struct RhythmFigure: View {
 
     var body: some View {
         let isNarrow = width < Self.narrowWidth
-        // 横長は 3:2、縦長（狭い）は 3:4（createResponsiveGraph の aspectRatio / mobileAspectRatio）。
-        let height = max(160, width * (isNarrow ? 4.0 / 3.0 : 2.0 / 3.0))
+        // 横長は 3:2（createResponsiveGraph の aspectRatio）。縦長（狭い）は上流の 3:4 より
+        // 縦に伸ばして 3:5 にする。3:4 では 3 本の帯が 55pt ほどで、見出しと目盛りが印にかぶる。
+        let height = max(160, width * (isNarrow ? 5.0 / 3.0 : 2.0 / 3.0))
         // 枠が来たら入れる。入れたあとの知らせで描き直す（tracker の objectWillChange）。
         let sequence = telemetry.frame(tap: tapId, type: .rhythmAnalyzer)?.sequence
         VStack(alignment: .leading, spacing: 8) {

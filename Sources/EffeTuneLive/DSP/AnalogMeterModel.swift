@@ -396,6 +396,13 @@ enum ETAnalogMeter {
         ]
     }
 
+    /// Program の読みがまだ無いときの表（上流の無効値の字。M・S・I は "---"、Time は 0:00）。
+    /// 表を消さずに出しておくので、読みが来ても帯の大きさは変わらない。
+    static let emptyStatRows: [(label: String, value: String)] = [
+        ("M", "--- LUFS"), ("S", "--- LUFS"), ("I", "--- LUFS"),
+        ("LRA", "--- LU"), ("TP", "--- dBTP"), ("Time", "0:00"),
+    ]
+
     /// 目盛りの字と線を白く太くするか。基準の目盛りと、赤い帯の始まり
     /// （DIN の「0」は赤の始まりで、基準 -9 と並んで目に入る所）。
     static func isEmphasized(_ value: Double, in scale: Scale) -> Bool {
