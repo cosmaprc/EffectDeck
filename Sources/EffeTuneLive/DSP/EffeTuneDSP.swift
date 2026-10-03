@@ -135,6 +135,32 @@ final class EffeTuneDSP: ObservableObject {
         et_engine_reset(engine)
     }
 
+    /// この段のカーネルが積み上げた状態だけを捨てる。
+    ///
+    /// 上流の `resetPluginState`（plugins/audio-processor.js:1763、_resetTemporalPlugin）に当たる。
+    /// Analog Meter の Integrated / LRA / 最大 True Peak、Tonal Balance EQ の測定、
+    /// Rhythm Analyzer の解析がこれで最初からになる。パラメータは変えない。
+    ///
+    /// **音のスレッドを締め出してから呼ぶ。** et_instance_reset は kernel->reset() を直に呼ぶだけで
+    /// 段取りが無く（engine.cpp:409-421）、process の最中に走るとカーネルの状態を書き合う。
+    /// パラメータは staging を通るので同じ心配が無いが、これは通らない。素通しが一瞬入る（Reset を押した
+    /// ときだけ）。こちらの鎖は graph でなく pipeline 経路（ETPipeline）なので graphOwned にならず、ET_OK で返る。
+    /// 送り直すと sequence が 0 から数え直しになるので、枠の番号は単調と思わないこと。
+    @discardableResult
+    func resetState(at index: Int) -> Bool {
+        guard engine != 0, ready, chain.indices.contains(index) else { return false }
+        let instance = chain[index].instance
+        guard instance != 0 else { return false }
+        var status = Int32(ET_ERR_STATE)
+        AssetUpload.holdOffAudioThread {
+            status = Int32(et_instance_reset(engine, instance))
+        }
+        if status != Int32(ET_OK) {
+            log.error("et_instance_reset が \(status) を返した \(self.chain[index].spec.type, privacy: .public)")
+        }
+        return status == Int32(ET_OK)
+    }
+
     /// 可視化の枠を出す速さ。**0 にすると書かなくなる**（engine.cpp:552）。
     ///
     /// 誰も汲んでいないあいだ書き続けると輪（telemetryRingBytes）が溢れて
@@ -839,6 +865,23 @@ final class EffeTuneDSP: ObservableObject {
     func setDisplay(_ raw: String, key: String, at index: Int) {
         guard chain.indices.contains(index), chain[index].display[key] != raw else { return }
         chain[index].display[key] = raw
+        persistSoon()
+    }
+
+    /// プリセットが運んできた表示の設定（DisplayParams）を当てる。**書かれていない鍵は今のまま**
+    /// （上流の setParameters は `if (params.xx !== undefined)` の形）。音には伝えない。
+    ///
+    /// 画面は .etSaved で現れたときにしか display を読まないので、変わったら作り直させる
+    /// （Node.resetCount。resetParams と同じ）。
+    func applyDisplay(from params: [String: Any], at index: Int) {
+        guard chain.indices.contains(index) else { return }
+        let incoming = ETDisplayParam.read(params, type: chain[index].spec.type)
+        guard !incoming.isEmpty else { return }
+        var display = chain[index].display
+        for (key, value) in incoming { display[key] = value }
+        guard display != chain[index].display else { return }
+        chain[index].display = display
+        chain[index].resetCount &+= 1
         persistSoon()
     }
 

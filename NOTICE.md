@@ -97,3 +97,17 @@ following restrictions:
 2. Altered source versions must be plainly marked as such, and must not be misrepresented
    as being the original source code.
 3. This notice may not be removed or altered from any source distribution.
+
+## fdlibm
+
+EffeTune's Rhythm Analyzer (`Vendor/effetune/dsp/plugins/analyzer/rhythm_analyzer/g2_math.h`)
+carries `atan` and `atan2` derived from fdlibm 5.3 (`s_atan.c`, `e_atan2.c`). The notice is
+in the file's header. `Licenses/fdlibm.LICENSE` is a copy of it, which
+`Tools/gen_licenses.py` reads and checks against the header.
+
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+Developed at SunSoft, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.

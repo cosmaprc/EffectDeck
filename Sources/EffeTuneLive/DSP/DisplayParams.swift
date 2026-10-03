@@ -8,6 +8,8 @@
 //      pitch_meter.js:96-107         ly / cl
 //      stereo_meter.js:271-279       gn
 //      chroma_spiral.js:92-96        dm / lo / hi / ft / lr / df
+//      analog_meter.js:295-311       rl / rg / sc / ph / ln / tg / ls（v2.12.0）
+//      rhythm_analyzer.js:151-165    sp / vt / vm / ve / vl（v2.12.0。mn / mx / ck は DSP 側）
 //  **画面で使っていないもの（kb）も表に入れる。**
 //  入れないと web 版から来た値が往復で消える。
 //
@@ -52,9 +54,52 @@ enum ETDisplayParam {
             // dm はここでは数（0/1/2）。上流は `=== 0` で比べる（chroma_spiral.js:103）。
             return ["dm": .number, "lo": .number, "hi": .number,
                     "ft": .number, "lr": .number, "df": .number]
+        case "AnalogMeterPlugin":
+            // 全部数。sc（PPM Scale 0/1/2）・ln（Needle 0/1）・ls（Scale 0/1）は
+            // 上流が数のまま持つ（analog_meter.js:14-16、:323-336 の Number.isInteger・=== 0/1）。
+            // 保存形式で文字にすると上流は読まない。
+            return ["rl": .number, "rg": .number, "sc": .number, "ph": .number,
+                    "ln": .number, "tg": .number, "ls": .number]
+        case "RhythmAnalyzerPlugin":
+            // sp は 4/6/8/12/16 のどれか（上流は最寄りへ寄せる、rhythm_analyzer.js:10・:179-187）。
+            return ["sp": .number, "vt": .flag, "vm": .flag, "ve": .flag, "vl": .flag]
         default:
             return [:]
         }
+    }
+
+    /// 上流の既定（constructor の値）。**プリセットとの一致を見るために持つ**
+    /// （display に鍵が無いのは「触っていない＝既定」）。持つのは、プリセットが表示の設定を運ぶ型だけ。
+    /// Analog Meter の 17 個の出荷時プリセットは、Mode のほかは全部この表示の設定の違い
+    /// （analog_meter.js:15-17 の ANALOG_METER_DEFAULTS と 26-46 の analogMeterPreset）。
+    static func defaults(for type: String) -> [String: String] {
+        switch type {
+        case "AnalogMeterPlugin":
+            return ["rl": "-14.0", "rg": "40.0", "sc": "0.0", "ph": "1.0",
+                    "ln": "0.0", "tg": "-23.0", "ls": "0.0"]
+        case "RhythmAnalyzerPlugin":
+            return ["sp": "8.0", "vt": "true", "vm": "true", "ve": "true", "vl": "true"]
+        default:
+            return [:]
+        }
+    }
+
+    /// プリセットの表示の設定が、いまの display と一致するか。
+    /// 上流の一致は「プリセットが書いた鍵だけ」を比べる（plugin-preset-dialog.js:64-72）。
+    /// 既定を持たない型・鍵は比べない（比べられないものを不一致にしない）。
+    static func matches(_ presetParams: [String: Any], display: [String: String], type: String) -> Bool {
+        let fallback = defaults(for: type)
+        for (key, kind) in table(for: type) {
+            guard let raw = presetParams[key], let want = decode(raw, kind: kind),
+                  let have = display[key] ?? fallback[key] else { continue }
+            switch kind {
+            case .number:
+                guard let a = Double(want), let b = Double(have), abs(a - b) < 1e-9 else { return false }
+            default:
+                if want != have { return false }
+            }
+        }
+        return true
     }
 
     /// 持っている文字列を、上流の型へ。

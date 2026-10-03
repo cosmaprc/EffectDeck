@@ -118,12 +118,23 @@ struct ETNoteDisplay: Equatable {
     var repaintKey: String { "\(color.rawValue)/\(resolution.rawValue)/\(volume)" }
 }
 
-/// 鍵盤の寸法。note_spectrogram.js:29-30。
+/// 鍵盤の寸法。上流 2.12.0 は実物のピアノの比（白鍵の幅 23.5mm・長さ 150mm・黒鍵 95mm、
+/// 長さは実物の半分）で決める（plugins/frequency-axis.js:39-57 の keyboardDepths）。
+/// 2.11.0 までは 28 × 1.6 = 44.8 の固定だった。
 enum ETNoteKeyboard {
-    /// 鍵盤の帯の幅（css px）。28 × 1.6。
-    static let gutter: CGFloat = 44.8
-    /// 黒鍵の深さに対する帯の幅の比。
-    static let blackRatio: CGFloat = 1.6
+    /// 1 オクターブの長さに対する鍵盤の深さ。150 / (7 × 23.5) / 2。
+    static let depthPerOctave: CGFloat = 150 / (7 * 23.5) / 2
+    /// 白鍵の深さに対する黒鍵の深さ。95 / 150。
+    static let blackDepthRatio: CGFloat = 95 / 150
+
+    /// 鍵盤の深さと黒鍵の深さ。深さは図の短い側（交差する軸）の半分で頭を打つ
+    /// （拡大しすぎても図が残るように）。
+    static func depths(octaveLength: CGFloat, crossLength: CGFloat) -> (gutter: CGFloat, blackDepth: CGFloat) {
+        let depth = octaveLength * depthPerOctave
+        let gutter = depth < crossLength / 2 ? depth : crossLength / 2
+        return (gutter, gutter * blackDepthRatio)
+    }
+
     /// 白鍵の音名。note_spectrogram.js:33。
     static let whiteClasses = [0, 2, 4, 5, 7, 9, 11]
     /// 黒鍵の音名。同 :32。
@@ -556,12 +567,13 @@ private struct NoteSpectrogramGraph: View {
             draw: { context, plot in
                 let frame = ETNoteRollFrame(rect: plot.rect,
                                             horizontal: display.layout == .horizontal)
-                // 鍵盤の帯。上流は 44.8pt で固定だが、Horizontal では時間の側が
-                // 170pt しかなく帯だけで 1/4 を超えるので、そこで頭を打つ。
-                let gutter = min(ETNoteKeyboard.gutter, frame.width * 0.25)
+                // 鍵盤の帯。上流 2.12.0 と同じ比（ETNoteKeyboard.depths）。音の行の高さから決まり、
+                // 狭い面では図の半分で頭を打つ。
+                let rowHeight = frame.height / CGFloat(range.count)
+                let gutter = ETNoteKeyboard.depths(octaveLength: 12 * rowHeight,
+                                                   crossLength: frame.width).gutter
                 let rollWidth = frame.width - gutter
                 guard rollWidth > 0, frame.height > 0 else { return }
-                let rowHeight = frame.height / CGFloat(range.count)
 
                 context.drawLayer { layer in
                     frame.apply(&layer)
@@ -694,7 +706,7 @@ private struct NoteSpectrogramGraph: View {
     /// 点灯は .tint の濃さで出す。
     private func drawKeys(_ context: inout GraphicsContext, frame: ETNoteRollFrame,
                           rollWidth: CGFloat, gutter: CGFloat, rowHeight: CGFloat) {
-        let blackDepth = gutter / ETNoteKeyboard.blackRatio
+        let blackDepth = gutter * ETNoteKeyboard.blackDepthRatio
         let whiteHeight = 12 * rowHeight / 7
         var white = Path()
         var black = Path()
@@ -768,7 +780,10 @@ private struct NoteSpectrogramGraph: View {
     /// C の字を鍵の上に置く。上流 :1203-1212。白鍵の真ん中に来る。
     private func drawOctaveLabels(_ context: inout GraphicsContext, frame: ETNoteRollFrame,
                                   rollWidth: CGFloat, gutter: CGFloat, rowHeight: CGFloat) {
-        let blackDepth = gutter / ETNoteKeyboard.blackRatio
+        let blackDepth = gutter * ETNoteKeyboard.blackDepthRatio
+        // 白鍵の見える部分（黒鍵の奥）が字より狭いなら書かない。2.12.0 の鍵盤は浅く、iPhone の幅では
+        // 数 pt になる。
+        guard gutter - blackDepth >= ETGraphMetrics.labelSize * 1.5 else { return }
         let x = rollWidth + (blackDepth + gutter) / 2
         let whiteHeight = 12 * rowHeight / 7
         for midi in range where midi >= 24 && midi % 12 == 0 {
@@ -787,9 +802,9 @@ private struct NoteSpectrogramGraph: View {
     private func sample(at location: CGPoint, plot: ETPlot, slots: Int) -> ETNoteProbe {
         let frame = ETNoteRollFrame(rect: plot.rect, horizontal: display.layout == .horizontal)
         let local = frame.local(location)
-        let gutter = min(ETNoteKeyboard.gutter, frame.width * 0.25)
-        let rollWidth = frame.width - gutter
         let rowHeight = frame.height / CGFloat(range.count)
+        let gutter = ETNoteKeyboard.depths(octaveLength: 12 * rowHeight, crossLength: frame.width).gutter
+        let rollWidth = frame.width - gutter
 
         let row = rowHeight > 0 ? Int((local.y / rowHeight).rounded(.down)) : 0
         let midi = min(max(range.upperBound - row, range.lowerBound), range.upperBound)
@@ -1194,22 +1209,40 @@ final class ETNoteBand: ObservableObject {
             let thickness = min(Self.divisions,
                                 max(1, Int((1 + Double(Self.divisions - 1) * level).rounded())))
             // 1/60 では一番強い細分の位置、1/12 では行の真ん中に置く（上流 :881-885）。
-            let center = (Self.notes - 1 - note) * Self.divisions
-                + (display.resolution == .high ? (Self.divisions - 1 - best)
-                                               : Self.divisions / 2)
-            let start = center - (thickness - 1) / 2
+            // 2.12.0 から 1/60 は、隣の細分との放物線で山の頂点を細分の間へ寄せる（_peakOffset）。
+            // 位置は細分の行の単位の小数で持ち、rowScale 倍した行へ写す。
+            let rowTop = Double((Self.notes - 1 - note) * Self.divisions)
+            let centerRows: Double
+            if display.resolution == .high {
+                centerRows = rowTop + Double(Self.divisions - 1 - best) + 0.5
+                    - peakOffset(pitch: first + best, column: column)
+            } else {
+                centerRows = rowTop + Double(Self.divisions / 2) + 0.5
+            }
+            let scaledThickness = thickness * rowScale
+            let start = Int((centerRows * Double(rowScale) - Double(scaledThickness) / 2).rounded())
             // 細分の行も rowScale 倍に写す（paintConfidence と同じ理由）。
-            for row in start..<(start + thickness) {
-                for k in 0..<rowScale {
-                    let at = row * rowScale + k
-                    guard at >= 0, at < rows else { continue }
-                    write(row: at, column: column, value: value,
-                          color: display.resolution == .high
-                              ? fineColor(pitch: first + best)
-                              : noteColor(note: note))
-                }
+            for at in start..<(start + scaledThickness) {
+                guard at >= 0, at < rows else { continue }
+                write(row: at, column: column, value: value,
+                      color: display.resolution == .high
+                          ? fineColor(pitch: first + best)
+                          : noteColor(note: note))
             }
         }
+    }
+
+    /// 細分の確からしさの山の頂点が、一番強い細分から細分何本ぶんずれているか（-0.5〜0.5、正は高い方）。
+    /// 上流 2.12.0 の _peakOffset（note_spectrogram.js:919-929）。隣り合う 3 本を放物線で補間する。
+    /// 山が上に凸でなければ（平ら・谷）0。両端の細分は隣が片側しか無いので 0。
+    private func peakOffset(pitch: Int, column: Int) -> Double {
+        guard pitch > 0, pitch < Self.pitches - 1 else { return 0 }
+        let below = Double(fine[(pitch - 1) * Self.columns + column])
+        let peak = Double(fine[pitch * Self.columns + column])
+        let above = Double(fine[(pitch + 1) * Self.columns + column])
+        let curvature = below - 2 * peak + above
+        guard curvature < 0 else { return 0 }
+        return min(max(0.5 * (below - above) / curvature, -0.5), 0.5)
     }
 
     /// **どちらの塗り分けでも色を持つ。**

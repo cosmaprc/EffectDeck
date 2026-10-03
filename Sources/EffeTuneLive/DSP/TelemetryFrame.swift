@@ -29,6 +29,9 @@ enum ETFrameType: UInt16 {
     case tubeSimulator      = 19
     case phaseSelectMap     = 20
     case pitchMeter         = 26
+    case analogMeter        = 27
+    case rhythmAnalyzer     = 28
+    case tonalBalance       = 29
 }
 
 struct ETFrame {

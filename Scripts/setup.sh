@@ -215,14 +215,19 @@ gen_ok "${PIPESTATUS[0]}" gen_effect_presets.py
 python3 Tools/gen_licenses.py 2>&1 | tail -1
 gen_ok "${PIPESTATUS[0]}" gen_licenses.py
 
-echo "--- Note Spectrogram のモデルを埋め込む ---"
-# upstream の models.cmake と同じことをする。
+echo "--- 解析のモデルを埋め込む ---"
+# upstream の tree_models/models.cmake と同じことをする。
 # kernel.cpp が読む *.generated.h と、中身を持つアセンブリを吐く。
-NS="Vendor/effetune/dsp/plugins/analyzer/note_spectrogram"
+# 2.12.0 で embed_models.py が analyzer/tree_models/ に移り、Note Spectrogram の 3 本に
+# Rhythm Analyzer の 5 本が加わった。出力先は Generated/note-models のまま（名前を変えると
+# project.yml・check_release_binary・.gitignore が動く）。
+AN="Vendor/effetune/dsp/plugins/analyzer"
 rm -rf Generated/note-models && mkdir -p Generated/note-models
-for m in learned_model fine_model octave_model; do
-  python3 "$NS/embed_models.py" "$NS/$m.json" Generated/note-models --target macho 2>&1 | tail -2
-  gen_ok "${PIPESTATUS[0]}" "embed_models.py $m"
+for entry in note_spectrogram/learned_model note_spectrogram/fine_model note_spectrogram/octave_model \
+             rhythm_analyzer/rhythm_d_low rhythm_analyzer/rhythm_d_mid rhythm_analyzer/rhythm_d_high \
+             rhythm_analyzer/g2_level rhythm_analyzer/g2_hazard; do
+  python3 "$AN/tree_models/embed_models.py" "$AN/$entry.json" Generated/note-models --target macho 2>&1 | tail -2
+  gen_ok "${PIPESTATUS[0]}" "embed_models.py $entry"
 done
 ls Generated/note-models
 

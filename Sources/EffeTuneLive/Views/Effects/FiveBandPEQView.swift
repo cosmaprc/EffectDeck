@@ -227,7 +227,7 @@ private struct PEQ5Layout {
 
 /// 名前・数値欄・スライダーの 2 段。ParameterRow と同じ形だが、
 /// 触る先が「選んでいるバンド」なので別に持っている。
-private struct PEQ5SliderRow: View {
+struct PEQ5SliderRow: View {
     let title: String
     let value: Double
     let range: ClosedRange<Double>

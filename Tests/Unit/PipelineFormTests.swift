@@ -42,7 +42,9 @@ final class PipelineFormTests: XCTestCase {
     private func altered(_ spec: ETEffect) -> [Float] {
         var v = spec.defaults
         for p in spec.params {
-            let value: Float
+            // 保存形式に書かない実行時の旗（Tonal Balance EQ の mp）は往復しない。
+            if p.runtimeOnly { continue }
+            var value: Float
             switch p.kind {
             case .number(_, let hi, _, _, let isInteger):
                 if let allowed = ETAllowedValues.upstream(type: spec.type, key: p.key), let last = allowed.last {
@@ -55,6 +57,8 @@ final class PipelineFormTests: XCTestCase {
             case .toggle:
                 value = p.defaultValue >= 0.5 ? 0 : 1
             }
+            // Tonal Balance EQ のシェルフ（ta の最後 = hs）の Q は 2 までに寄る。上限の 10 は戻らない。
+            if spec.type == "TonalBalanceEQPlugin" && p.key == "qa" { value = 2 }
             for i in 0..<p.count where v.indices.contains(p.offset + i) {
                 v[p.offset + i] = value
             }
