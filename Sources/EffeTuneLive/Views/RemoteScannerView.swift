@@ -3,8 +3,8 @@
 //
 //    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
 //                              つなぐ・切るはここでしない。状態（つなぎたい・つなぎ中・つながった）だけを絵で見せる
-//    - RemotePanelView         アイコンから開くシート。中身は RemoteContent。入口はツールバーのアイコン・Remote Control の帯・設定画面の Remote Control の行
-//    - RemoteContent           List と題と QR の読み取り。シートと設定画面の行き先で共有する
+//    - RemotePanelView         アイコンから開くシート。中身は RemoteContent。入口はツールバーのアイコン・Remote Control の帯。設定画面では Remote の面（RemoteSections）
+//    - RemoteContent           List と題と QR の読み取り（シート用）
 //    - RemoteRows              状態（ETRemoteIntent.layout）ごとの行。**入切のスイッチは無い。**
 //                              情報（PC）・設定（Options）・操作（Connect / Scan QR Code / Disconnect / Forget）を別の Section に分ける
 //    - RemoteScannerView       PC の画面の QR（http://host:port/?t=…）を読む。VisionKit の
@@ -92,7 +92,7 @@ struct RemoteStatusSlot: View {
 
 // MARK: - シート
 
-/// アイコンから開くシート。中身は RemoteContent（設定画面から押して進む先と同じ）。
+/// アイコンから開くシート。中身は RemoteContent（節は設定画面の Remote の面と同じ RemoteRows）。
 struct RemotePanelView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -111,6 +111,21 @@ struct RemotePanelView: View {
 /// Remote Control の画面の中身（List・題・QR の読み取り）。NavigationStack の中に置く。
 /// ツールバーのシート（RemotePanelView）と、設定画面の Remote Control の行の行き先が同じ中身を出す。
 /// QR の読み取りはここで出す（画面の上に重なる）。
+/// 設定画面の Remote の面に置く節。List の中に直に並べる（RemoteContent は自前の List を持つ）。
+struct RemoteSections: View {
+    @State private var scanning = false
+
+    var body: some View {
+        RemoteRows(scan: { scanning = true })
+            .sheet(isPresented: $scanning) {
+                RemoteScannerView { url in
+                    scanning = false
+                    RemoteMirror.shared.pair(url)
+                }
+            }
+    }
+}
+
 struct RemoteContent: View {
     @State private var scanning = false
 

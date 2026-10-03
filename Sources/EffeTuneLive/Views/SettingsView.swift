@@ -32,11 +32,12 @@ struct SettingsView: View {
     /// 下位画面へ押し出すと、よく見る Status まで 1 タップ遠くなる。
     /// バーの真ん中でセグメントを切り替える形なら、どちらも起きない。
     enum Pane: String, CaseIterable, Identifiable {
-        case audio, about
+        case audio, remote, about
         var id: String { rawValue }
         var label: String {
             switch self {
             case .audio:  return "Audio"
+            case .remote: return "Remote"
             case .about:  return "About"
             }
         }
@@ -62,11 +63,10 @@ struct SettingsView: View {
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
                     DetailsSection(io: io, dsp: dsp, prefs: prefs)
-                    // PC の EffeTune を操る画面（ツールバーのシートと同じ中身）。
-                    // 行は 1 つだけ。音の節の間には混ぜず、末尾から押して進む。
-                    Section {
-                        NavigationLink("Remote Control") { RemoteContent() }
-                    }
+                case .remote:
+                    // PC の EffeTune を操る設定（ツールバーのシートと同じ節）。音の設定ではないので
+                    // Audio に混ぜず、面を分ける。面の名前は Remote（EffeTune では何の面か読めない）。
+                    RemoteSections()
                 case .about:
                     about
                 }
