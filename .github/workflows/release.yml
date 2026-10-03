@@ -1,4 +1,4 @@
-# 配布: 書庫 → 書き出し（クラウド署名）→ 検査 → App Store Connect へ上げる。
+# 配布: 書庫（ad-hoc）→ 書き出し（手動署名）→ 検査 → App Store Connect へ上げる。
 #
 #   tf-YYYY.MM.DD-NN のタグを push    Beta（紫・ET_BETA）を TestFlight へ。タグの日付 = MARKETING_VERSION
 #   Actions → Release → Run workflow   flavor=beta|store、dry_run（既定 true）。main からだけ
@@ -11,14 +11,20 @@
 #   gate     秘密を使わない。コミットが origin/main の上にあり、その同じコミットの CI（ci.yml）が緑なこと。
 #            Environment の承認より前に走るので、通らないものは承認の画面にも出ない。
 #   release  Environment "release"（必須レビュアー = 本人）の承認を待ってから、署名・アップロードをする。
-#            秘密（ASC_KEY_ID・ASC_ISSUER_ID・ASC_KEY_P8）は Environment の secret で、このジョブだけが読む。
+#            秘密（ASC_KEY_ID・ASC_ISSUER_ID・ASC_KEY_P8 と、配布用証明書の DIST_P12_BASE64・
+#            DIST_P12_PASSWORD）は Environment の secret で、このジョブだけが読む。
 #            ビルド番号は ASC の最大 + 1（コミットせず、ビルド時に CURRENT_PROJECT_VERSION で渡す）。
 #
-# 署名: 書庫は Scripts/archive.sh（自動署名 + API キー。runner の login キーチェーンに "Apple Development:
-# Created via API" の証明書ができる）。書き出しは Scripts/ExportOptions-ci.plist のクラウド署名
-# （Apple Distribution の秘密鍵は runner に置かない）。開発用証明書が回ごとに増えるのを避けたいときは、
-# dispatch の archive_signing=adhoc（書庫を ad-hoc 署名にして、書き出しが署名し直す）。
-# 回の前後で証明書の一覧を取って、増えたものを step summary に出す。
+# 署名は手動。Apple Distribution の秘密鍵は Environment の secret（p12）にあり、回の間だけ使い捨ての
+# キーチェーンに入れる。App Store のプロファイル（3 つ）は API キーで Tools/asc.py profile が取り、
+# 回の間だけ置く。
+#   書庫     Scripts/archive.sh を ad-hoc 署名（ET_ARCHIVE_ADHOC=1）で。開発用証明書は要らず、
+#            "Apple Development: Created via API" も増えない。
+#   書き出し Scripts/ExportOptions-ci.plist（manual。Mac の ~/signing/export.plist と同じ中身）。
+#            API キー（-allowProvisioningUpdates）は渡さず、Apple 側に何も作らせない。
+#            ログに "Cloud signing" が出たら（Xcode が自動署名に落ちた）止める。
+# 回の前後で証明書の一覧を取り、増減があれば警告と step summary に出す。キーチェーン・プロファイル・
+# API キーは回の最後に必ず消す（キーチェーンの検索リストと既定も元へ戻す）。
 #
 # **ipa と xcarchive は artifact にしない**（このリポジトリは公開。ログインした人なら artifact を落とせる）。
 # 残すのはログと書き出しの plist だけ。API キーは回の最後に必ず消す。
@@ -40,11 +46,6 @@ on:
         description: 上げずに、書庫・書き出し・検査まで（既定 true）
         type: boolean
         default: true
-      archive_signing:
-        description: 書庫の署名。auto は自動署名、adhoc は ad-hoc（証明書が増えるとき）
-        type: choice
-        options: [auto, adhoc]
-        default: auto
 
 permissions:
   contents: read
@@ -68,7 +69,6 @@ jobs:
       flavor: ${{ steps.inputs.outputs.flavor }}
       config: ${{ steps.inputs.outputs.config }}
       dry_run: ${{ steps.inputs.outputs.dry_run }}
-      signing: ${{ steps.inputs.outputs.signing }}
       version: ${{ steps.inputs.outputs.version }}
     steps:
       - uses: actions/checkout@v7
@@ -79,17 +79,16 @@ jobs:
         env:
           IN_FLAVOR: ${{ inputs.flavor }}
           IN_DRY_RUN: ${{ inputs.dry_run }}
-          IN_SIGNING: ${{ inputs.archive_signing }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             if [ "$GITHUB_REF" != refs/heads/main ]; then
               echo "::error::手で回すのは main から（いまの ref: $GITHUB_REF）"
               exit 1
             fi
-            flavor="$IN_FLAVOR"; dry_run="$IN_DRY_RUN"; signing="$IN_SIGNING"
+            flavor="$IN_FLAVOR"; dry_run="$IN_DRY_RUN"
           else
             # タグの push は Beta の本番。
-            flavor=beta; dry_run=false; signing=auto
+            flavor=beta; dry_run=false
           fi
           case "$flavor" in
             beta)  config=Beta ;;
@@ -97,7 +96,6 @@ jobs:
             *) echo "::error::flavor は beta か store（$flavor）"; exit 1 ;;
           esac
           case "$dry_run" in true|false) ;; *) echo "::error::dry_run が true/false でない（$dry_run）"; exit 1 ;; esac
-          case "$signing" in auto|adhoc) ;; *) echo "::error::archive_signing は auto か adhoc（$signing）"; exit 1 ;; esac
           version=$(sed -n 's/^ *MARKETING_VERSION: "\([^"]*\)".*/\1/p' project.yml | head -1)
           if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
             echo "::error::project.yml の MARKETING_VERSION が読めない（$version）"
@@ -120,10 +118,9 @@ jobs:
             echo "flavor=$flavor"
             echo "config=$config"
             echo "dry_run=$dry_run"
-            echo "signing=$signing"
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
-          echo "flavor=$flavor config=$config dry_run=$dry_run signing=$signing version=$version sha=$GITHUB_SHA"
+          echo "flavor=$flavor config=$config dry_run=$dry_run version=$version sha=$GITHUB_SHA"
       - name: コミットが origin/main の上にある
         run: |
           git fetch --no-tags origin main
@@ -175,7 +172,6 @@ jobs:
       CONFIG: ${{ needs.gate.outputs.config }}
       FLAVOR: ${{ needs.gate.outputs.flavor }}
       DRY_RUN: ${{ needs.gate.outputs.dry_run }}
-      SIGNING: ${{ needs.gate.outputs.signing }}
       VERSION: ${{ needs.gate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
@@ -309,22 +305,83 @@ jobs:
         env:
           ET_BUILD_NUMBER: ${{ steps.bn.outputs.n }}
           ET_XCODEBUILD_LOG: ${{ runner.temp }}/logs/xcodebuild-archive.log
+          # 書庫は ad-hoc 署名。配布用に署名するのは書き出し（手動署名）。
+          ET_ARCHIVE_ADHOC: 1
         run: |
-          if [ "$SIGNING" = adhoc ]; then export ET_ARCHIVE_ADHOC=1; fi
           rc=0
           bash Scripts/archive.sh EffeTuneLive || rc=$?
           cp archive.log "$LOGS/archive.log" || true
           tail -n 30 archive.log || true
           exit "$rc"
-      - name: 書き出し（クラウド署名）
+      # 配布用の鍵は回の間だけ。キーチェーンは使い捨て（ランダムなパスワード、6 時間で自動ロック）。
+      # 元の検索リストと既定のキーチェーンは控えておき、最後の always() の段が戻す。
+      - name: 配布用証明書を一時キーチェーンへ
+        env:
+          DIST_P12_BASE64: ${{ secrets.DIST_P12_BASE64 }}
+          DIST_P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
+        # set -x は使わない。p12 もパスワードも表示しない。
         run: |
-          . Scripts/asc_auth.sh
+          [ -n "$DIST_P12_BASE64" ] && [ -n "$DIST_P12_PASSWORD" ] \
+            || { echo "::error::Environment release の secret（DIST_P12_BASE64・DIST_P12_PASSWORD）が足りない"; exit 1; }
+          umask 077
+          kc="$RUNNER_TEMP/release.keychain-db"
+          p12="$RUNNER_TEMP/dist.p12"
+          kcpw=$(openssl rand -base64 24)
+          echo "::add-mask::$kcpw"
+          # 戻す先を先に控える（以降の失敗でも always() の段が戻せるように）。
+          security default-keychain -d user | sed 's/^ *"//; s/"$//' > "$RUNNER_TEMP/default-keychain.txt"
+          security list-keychains -d user | sed 's/^ *"//; s/"$//' > "$RUNNER_TEMP/keychain-list.txt"
+          printf '%s' "$DIST_P12_BASE64" | base64 -D > "$p12"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          security import "$p12" -k "$kc" -P "$DIST_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+          # 先頭に足す（元の検索リストは残す）。
+          tr '\n' '\0' < "$RUNNER_TEMP/keychain-list.txt" | xargs -0 security list-keychains -d user -s "$kc"
+          security default-keychain -d user -s "$kc"
+          identities=$(security find-identity -v -p codesigning "$kc")
+          echo "$identities"
+          grep -q '"Apple Distribution: Masahiro Sato (C82ST8T9MN)"' <<<"$identities" \
+            || { echo "::error::一時キーチェーンに Apple Distribution の署名鍵が見えない"; exit 1; }
+          echo "KEYCHAIN=$kc" >> "$GITHUB_ENV"
+      - name: App Store のプロファイルを置く（API で取る）
+        run: |
+          stage="$RUNNER_TEMP/profiles"
+          rm -rf "$stage"
+          rm -f "$RUNNER_TEMP/profile-uuids.txt"
+          mkdir -p "$stage"
+          # Scripts/ExportOptions-ci.plist の provisioningProfiles と同じ 3 つ。
+          for pair in "EffeTuneLive-AppStore ai.nemut.effetune" \
+                      "EffeTuneLiveExt-AppStore ai.nemut.effetune.extension" \
+                      "EffectDeckShare-AppStore ai.nemut.effetune.share"; do
+            name=${pair% *}; bundle=${pair#* }
+            uuid=$(python3 Tools/asc.py profile "$name" "$bundle" "$stage") \
+              || { echo "::error::プロファイル $name を取れない（asc.py profile）"; exit 1; }
+            echo "$uuid" >> "$RUNNER_TEMP/profile-uuids.txt"
+            echo "プロファイル $name → $uuid"
+          done
+          # Xcode が見る場所は版で違う。両方に置く。
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$stage"/*.mobileprovision "$dir/"
+          done
+          [ "$(wc -l < "$RUNNER_TEMP/profile-uuids.txt" | tr -d ' ')" = 3 ] \
+            || { echo "::error::置いたプロファイルが 3 つでない"; exit 1; }
+      - name: 書き出し（手動署名）
+        # -allowProvisioningUpdates と API キーは渡さない（Apple 側に何も作らせない）。
+        run: |
           rm -rf "$EXPORT_DIR"
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_DIR/EffeTuneLive.xcarchive" \
             -exportPath "$EXPORT_DIR" \
-            -exportOptionsPlist Scripts/ExportOptions-ci.plist \
-            "${PROVISIONING[@]}" 2>&1 | tee "$LOGS/export.log"
+            -exportOptionsPlist Scripts/ExportOptions-ci.plist 2>&1 | tee "$LOGS/export.log"
+          if grep -qi 'cloud signing' "$LOGS/export.log"; then
+            echo "::error::書き出しのログに Cloud signing が出た（手動署名で通っていない）"
+            exit 1
+          fi
           test -f "$EXPORT_DIR/EffectDeck.ipa" || { echo "::error::EffectDeck.ipa ができていない"; ls -la "$EXPORT_DIR"; exit 1; }
           ls -lh "$EXPORT_DIR/EffectDeck.ipa"
       - name: ipa の版とビルド番号
@@ -350,7 +407,8 @@ jobs:
             if diff "$LOGS/certs-before.txt" "$LOGS/certs-after.txt" > "$LOGS/certs.diff"; then
               echo "増減なし"
             else
-              echo '増減あり（"Created via API" が増えたら archive_signing=adhoc を考える）'
+              echo "::warning::証明書の一覧が回の前後で変わった（certs.diff）"
+              echo '増減あり（手動署名なら増減しないはず）'
               echo '```'
               cat "$LOGS/certs.diff"
               echo '```'
@@ -420,6 +478,27 @@ jobs:
             ${{ runner.temp }}/export/*.log
           retention-days: 30
           if-no-files-found: ignore
+      - name: キーチェーン・プロファイルを消す
+        if: always()
+        run: |
+          # 検索リストと既定を戻してから、使い捨てのキーチェーンを消す（元のものは触らない）。
+          if [ -s "$RUNNER_TEMP/keychain-list.txt" ]; then
+            tr '\n' '\0' < "$RUNNER_TEMP/keychain-list.txt" | xargs -0 security list-keychains -d user -s || true
+          fi
+          if [ -s "$RUNNER_TEMP/default-keychain.txt" ]; then
+            security default-keychain -d user -s "$(cat "$RUNNER_TEMP/default-keychain.txt")" || true
+          fi
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/dist.p12"
+          # 置いたプロファイルだけ（uuid で）。ほかのものは触らない。
+          if [ -f "$RUNNER_TEMP/profile-uuids.txt" ]; then
+            while read -r uuid; do
+              [ -n "$uuid" ] || continue
+              rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision" \
+                    "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$uuid.mobileprovision"
+            done < "$RUNNER_TEMP/profile-uuids.txt"
+          fi
+          rm -rf "$RUNNER_TEMP/profiles"
       - name: 鍵を消す
         if: always()
         run: |

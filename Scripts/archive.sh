@@ -6,17 +6,18 @@
 #   CONFIG=Release bash Scripts/archive.sh             同上（構成名で直接選ぶ）
 #
 # ふだんの配布は GitHub Actions（.github/workflows/release.yml。tf-* のタグで Beta、
-# 手動で store）で、そこもこのスクリプトを呼ぶ。ローカルの非常用は Scripts/ship.sh。
+# 手動で store）で、そこもこのスクリプトを呼ぶ（ad-hoc 署名で）。ローカルの非常用は Scripts/ship.sh。
 # どちらも project.yml の同じ構成（Beta / Release）を読む。
 #
 # 環境変数（どれも省略できる）:
 #   ET_BUILD_NUMBER=N      ビルド番号（CURRENT_PROJECT_VERSION）をコマンドラインで上書きする。
 #                          release.yml が ASC の最大 + 1 を渡す（コミットはしない）。数字だけ。
 #   ET_XCODEBUILD_LOG=path xcodebuild の出力を丸ごとそこへも残す（archive.log は絞った行だけ）。
-#   ET_ARCHIVE_ADHOC=1     書庫を ad-hoc 署名（-）で作る。GitHub の runner には開発用証明書の
-#                          秘密鍵が無く、自動署名だと毎回 "Created via API" の証明書が増えるときの
-#                          逃げ道。権限（entitlements）は ad-hoc 署名にも埋まり、書き出し
-#                          （Scripts/ExportOptions-ci.plist のクラウド署名）が配布用に署名し直す。
+#   ET_ARCHIVE_ADHOC=1     書庫を ad-hoc 署名（-）で作る。release.yml はいつもこれ。GitHub の runner には
+#                          開発用証明書の秘密鍵が無く、自動署名だと毎回 "Created via API" の証明書が
+#                          増えるため。権限（entitlements）は ad-hoc 署名にも埋まり、書き出し
+#                          （Scripts/ExportOptions-ci.plist の手動署名。配布用証明書とプロファイルは
+#                          release.yml が用意する）が配布用に署名し直す。
 #                          署名なし（CODE_SIGNING_ALLOWED=NO）にしない。書き出しが権限をプロファイルから
 #                          取り、本体の media-device-extension の空配列が消える。
 #

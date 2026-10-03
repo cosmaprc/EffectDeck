@@ -266,7 +266,7 @@ TestFlight (purple, `Beta` configuration):
    equal `MARKETING_VERSION`.
 4. Approve the run in GitHub (the `release` environment has a required reviewer). Until then
    nothing is signed or uploaded.
-5. The workflow archives, exports with cloud signing (the App Store Connect API key), runs
+5. The workflow archives (ad-hoc signed), exports with manual signing (see below), runs
    `Tools/check_release_binary.py`, uploads, waits for processing and adds the build to the
    internal group "Internal". The build number is the highest in App Store Connect plus one; it
    is not committed.
@@ -276,9 +276,23 @@ App Store build (blue, `Release`): Actions, Release, Run workflow on `main` with
 but uploads nothing. Untick it to upload.
 
 Adding a build to Public Beta, attaching it to a version and submitting for review stay manual
-(`python3 Tools/asc.py attach …`). The key lives only in the `release` environment secrets
-(`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`) and is deleted at the end of every run. The
-ipa and the archive are never uploaded as artifacts, because the repository is public.
+(`python3 Tools/asc.py attach …`). The ipa and the archive are never uploaded as artifacts,
+because the repository is public.
+
+Signing is manual, with the same options as `~/signing/export.plist` used by `Scripts/ship.sh`
+(`Scripts/ExportOptions-ci.plist`). The archive is ad-hoc signed, so no "Apple Development: Created
+via API" certificate is made. The export is signed with the Apple Distribution certificate, which lives
+as a p12 in the `release` environment secrets (`DIST_P12_BASE64`, `DIST_P12_PASSWORD`) and goes
+into a throwaway keychain for the run. The three App Store profiles are fetched at run time with
+`python3 Tools/asc.py profile <name> <bundle-id> <dir>` (it requires exactly one ACTIVE profile that
+includes that certificate), so they are not stored. The export gets no API key and the run fails if
+its log says "Cloud signing". The API key (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`) is also
+only in the `release` environment. At the end of every run the keychain (with the search list and
+default restored), the installed profiles and the key are removed. The certificate lists before and
+after the run are compared and a change is a warning.
+
+When the Apple Distribution certificate is renewed (it is valid to 2027-09-15), update `DIST_P12_*`
+and `DIST_CERT_ID` in `Tools/asc.py`, and regenerate the profiles in the developer portal.
 
 `.github/workflows/dsp.yml` runs upstream's own DSP test suite on `Vendor/effetune` with
 our patches applied, in Debug and with ASan+UBSan. It runs nightly and when `Patches/`,

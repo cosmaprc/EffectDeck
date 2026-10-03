@@ -21,6 +21,9 @@
 # 書いている（2026-09-27 に読んだ。検索リストは絞っていない）。手順は同じなので、
 # 呼ぶ側は unlock と検索リストの後に `bash Scripts/ship.sh` だけにできる。
 #
+# GitHub Actions の release.yml も書き出しは同じ手動署名（Scripts/ExportOptions-ci.plist は
+# ~/signing/export.plist と同じ中身。証明書は p12 の secret、プロファイルは Tools/asc.py profile）。
+#
 # 署名の準備は API キー（Scripts/asc_auth.sh）。書き出しの設定は ~/signing/export.plist
 # （/tmp は再起動で消えるので置かない）。**鍵を渡すと書き出しがビルド番号を上げる**
 # （書庫の 26 が 27 で出た）。止めたいときは export.plist に
