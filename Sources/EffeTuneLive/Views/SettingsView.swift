@@ -32,12 +32,13 @@ struct SettingsView: View {
     /// 下位画面へ押し出すと、よく見る Status まで 1 タップ遠くなる。
     /// バーの真ん中でセグメントを切り替える形なら、どちらも起きない。
     enum Pane: String, CaseIterable, Identifiable {
-        case audio, about
+        case audio, effetune, about
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .audio:  return "Audio"
-            case .about:  return "About"
+            case .audio:    return "Audio"
+            case .effetune: return "EffeTune"
+            case .about:    return "About"
             }
         }
     }
@@ -58,13 +59,14 @@ struct SettingsView: View {
                     power
                     graphs
                     plugins
-                    // **StatusSection の中に置かない。**あちらは 3.3Hz で作り直されるので、
-                    // 行が作り直されて、開いている QR の読み取りが閉じる。
-                    RemoteSection()
                     // **音の数字は Audio に置く。**レート・バッファ・遅延の内訳・
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
                     DetailsSection(io: io, dsp: dsp, prefs: prefs)
+                case .effetune:
+                    // PC の EffeTune を操る設定。音の設定ではないので Audio に混ぜない。
+                    // StatusSection（3.3Hz で作り直される）とも別の面なので、QR の読み取りは閉じない。
+                    RemoteSection()
                 case .about:
                     about
                 }
