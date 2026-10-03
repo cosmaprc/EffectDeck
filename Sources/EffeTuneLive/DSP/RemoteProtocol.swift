@@ -304,11 +304,19 @@ enum ETRemotePresetSync {
 /// 入れ替えの本体は PresetStoreCore.mirrorFolder（PresetFolderMirror.plan）。ここはフォルダの名前だけ決める。
 enum ETRemotePresetMirror {
 
+    /// フォルダの名前の長さの上限（PC から来る字なので切っておく）。
+    static let maxFolderName = 64
+
     /// フォルダの名前。PC のホスト名（state の host）、無ければつなぎ先の host。
-    /// `/` は落とす（入れ子は作らない）。決まらなければ空（写さない）。
+    /// `/` と制御文字は落とし、長すぎれば切る（入れ子は作らない）。決まらなければ空（写さない）。
+    /// これは元の名前で、同じ名前の人のフォルダが在れば実際は `名前 2` へ入る（PresetStoreCore.mirrorTarget）。
     static func folderName(hostName: String?, address: String) -> String {
         for candidate in [hostName, ETRemoteAddress.parse(address)?.host] {
-            let clean = ETUserPresetName.clean(candidate ?? "")
+            var scalars = String.UnicodeScalarView()
+            scalars.append(contentsOf: (candidate ?? "").unicodeScalars.filter {
+                !CharacterSet.controlCharacters.contains($0)
+            })
+            let clean = ETUserPresetName.clean(String(String(scalars).prefix(maxFolderName)))
             if !clean.isEmpty { return clean }
         }
         return ""

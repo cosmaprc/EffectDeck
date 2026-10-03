@@ -42,8 +42,10 @@ final class PresetStoreTests: XCTestCase {
         }
     }
 
-    private func presets(_ initial: [String: Any] = [:]) -> PresetStoreCore {
+    /// `remote` は前に写したことにする PC の写しのフォルダ。
+    private func presets(_ initial: [String: Any] = [:], remote: [String] = []) -> PresetStoreCore {
         if !initial.isEmpty { device.set(initial, forKey: PresetStoreCore.key) }
+        if !remote.isEmpty { device.set(remote, forKey: PresetStoreCore.remoteFoldersKey) }
         return PresetStoreCore(storage: device, patch: patch())
     }
 
@@ -287,11 +289,13 @@ final class PresetStoreTests: XCTestCase {
 
     /// フォルダの中だけ足す・上書き・消す。直下とほかのフォルダは 1 本も動かない。
     func testMirrorFolderReplacesOnlyThatFolder() {
-        let store = presets(["WIN-SE/Old": form(1), "WIN-SE/Keep": form(2), "Root": form(3), "Mine/x": form(4)])
+        let store = presets(["WIN-SE/Old": form(1), "WIN-SE/Keep": form(2), "Root": form(3), "Mine/x": form(4)],
+                            remote: ["WIN-SE"])
         patched = []
 
         let r = store.mirrorFolder("WIN-SE", incoming: pc(["Keep": 20, "New": 5]))
 
+        XCTAssertEqual(r.folder, "WIN-SE")
         XCTAssertEqual(r.written, 2)
         XCTAssertEqual(r.deleted, 1)
         XCTAssertEqual(store.names, ["Mine/x", "Root", "WIN-SE/Keep", "WIN-SE/New"])
@@ -322,7 +326,7 @@ final class PresetStoreTests: XCTestCase {
 
     /// フォルダの中を手元で直しても、次の入れ替えで PC のものに戻る。手元で足したものは消える。
     func testMirrorFolderOverwritesLocalEditsInside() {
-        let store = presets(["WIN-SE/A": form(1)])
+        let store = presets()
         store.mirrorFolder("WIN-SE", incoming: pc(["A": 1]))
         XCTAssertTrue(store.save("WIN-SE/A", form: form(99)) != nil)
         XCTAssertTrue(store.save("WIN-SE/Mine", form: form(7)) != nil)
@@ -335,7 +339,7 @@ final class PresetStoreTests: XCTestCase {
 
     /// PC のプリセットが 0 本でもフォルダは見える。中身が入れば空のフォルダの記録は隠れる。
     func testMirrorFolderEmptyPCStillShowsTheFolder() {
-        let store = presets(["WIN-SE/Old": form(1)])
+        let store = presets(["WIN-SE/Old": form(1)], remote: ["WIN-SE"])
 
         store.mirrorFolder("WIN-SE", incoming: [:])
 
@@ -347,7 +351,7 @@ final class PresetStoreTests: XCTestCase {
 
     /// 取れなかった PC の名前は、今ある写しを消さずに残す。
     func testMirrorFolderKeepsUnreadable() {
-        let store = presets(["WIN-SE/Bad": form(1), "WIN-SE/Gone": form(2)])
+        let store = presets(["WIN-SE/Bad": form(1), "WIN-SE/Gone": form(2)], remote: ["WIN-SE"])
 
         store.mirrorFolder("WIN-SE", incoming: pc(["A": 3]), unreadable: ["Bad"])
 
@@ -373,6 +377,57 @@ final class PresetStoreTests: XCTestCase {
         XCTAssertEqual(store.mirrorFolder("a/b", incoming: [:]).deleted, 0)
 
         XCTAssertEqual(store.names, ["Root"])
+    }
+
+    /// **ホスト名と同じ名前の人のフォルダは消さない・書かない。**写しは `名前 2` へ入り、次からもそこ。
+    func testMirrorFolderNeverTouchesUserFolderOfSameName() {
+        let store = presets(["WIN-SE/Mine": form(1), "WIN-SE/A": form(2)])
+        patched = []
+
+        let r = store.mirrorFolder("WIN-SE", incoming: pc(["A": 10, "B": 11]))
+
+        XCTAssertEqual(r.folder, "WIN-SE 2")
+        XCTAssertEqual(store.names, ["WIN-SE 2/A", "WIN-SE 2/B", "WIN-SE/A", "WIN-SE/Mine"])
+        XCTAssertEqual(tag(devicePresets()["WIN-SE/Mine"]), 1, "人のフォルダを消した")
+        XCTAssertEqual(tag(devicePresets()["WIN-SE/A"]), 2, "人のフォルダを上書きした")
+        XCTAssertFalse(patched.flatMap(\.paths).contains { $0.first?.hasPrefix("WIN-SE/") == true },
+                       "人のフォルダを iCloud で触った")
+        XCTAssertFalse(store.isRemoteFolder("WIN-SE"))
+        XCTAssertTrue(store.isRemoteFolder("WIN-SE 2"))
+
+        // 人のフォルダが消えても、写しは前に写したほう（`WIN-SE 2`）に留まる。
+        store.remove("WIN-SE/Mine")
+        store.remove("WIN-SE/A")
+        XCTAssertEqual(store.mirrorFolder("WIN-SE", incoming: pc(["A": 10])).folder, "WIN-SE 2")
+        XCTAssertEqual(store.names, ["WIN-SE 2/A"])
+    }
+
+    /// 写したフォルダが消えたら PC のものではなくなる。後から人が同じ名前で作ったフォルダは入れ替えない。
+    func testRemoteFolderIsReleasedWhenItIsGone() {
+        let store = presets()
+        store.mirrorFolder("WIN-SE", incoming: pc(["A": 1]))
+        XCTAssertEqual(store.remoteFolders, ["WIN-SE"])
+
+        store.remove("WIN-SE/A")
+        store.removeFolder("WIN-SE")
+        XCTAssertEqual(store.remoteFolders, [])
+        XCTAssertNotNil(store.save("WIN-SE/Mine", form: form(7)))
+
+        XCTAssertEqual(store.mirrorFolder("WIN-SE", incoming: pc(["A": 1])).folder, "WIN-SE 2")
+        XCTAssertEqual(tag(devicePresets()["WIN-SE/Mine"]), 7)
+    }
+
+    /// 写したフォルダの名前を人が替えたら、それは人のフォルダ。次の写しは元の名前で作り直す。
+    func testRenamedRemoteFolderBecomesTheUsers() {
+        let store = presets()
+        store.mirrorFolder("WIN-SE", incoming: pc(["A": 1]))
+
+        XCTAssertTrue(store.renameFolder("WIN-SE", to: "Kept"))
+        XCTAssertFalse(store.isRemoteFolder("Kept"))
+
+        let r = store.mirrorFolder("WIN-SE", incoming: pc(["B": 2]))
+        XCTAssertEqual(r.folder, "WIN-SE")
+        XCTAssertEqual(store.names, ["Kept/A", "WIN-SE/B"])
     }
 
     /// 決め方だけ（入れ物に触らない）。PC の名前 → 入れ物の名前・書くもの・消すもの。

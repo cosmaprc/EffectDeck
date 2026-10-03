@@ -68,13 +68,17 @@ final class PresetStore: ObservableObject {
         reload()
     }
 
-    /// フォルダを PC のプリセットの写しにする（PresetStoreCore.mirrorFolder。DSP/RemoteMirror.swift）。
+    /// PC のホスト名のフォルダを PC のプリセットの写しにする（PresetStoreCore.mirrorFolder。DSP/RemoteMirror.swift）。
+    /// 同じ名前の人のフォルダには触らず `名前 2` へ入れる。返すのは入れたフォルダと変えた本数。
     @discardableResult
-    func mirrorFolder(_ folder: String, incoming: [String: [[String: Any]]],
-                      unreadable: Set<String> = []) -> (written: Int, deleted: Int) {
+    func mirrorFolder(_ hostName: String, incoming: [String: [[String: Any]]],
+                      unreadable: Set<String> = []) -> (folder: String, written: Int, deleted: Int) {
         defer { reload() }
-        return core.mirrorFolder(folder, incoming: incoming, unreadable: unreadable)
+        return core.mirrorFolder(hostName, incoming: incoming, unreadable: unreadable)
     }
+
+    /// そのフォルダが PC の写しか（PC へ送り返さない）。
+    func isRemoteFolder(_ name: String) -> Bool { core.isRemoteFolder(name) }
 
     /// save が書く名前（空になるなら nil）。押す前の「もう在る」はこれで確かめる。
     /// save は名前を整えるので、打ったままの名前では在るものを見落とす。

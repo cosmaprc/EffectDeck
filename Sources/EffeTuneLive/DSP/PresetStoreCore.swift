@@ -26,6 +26,15 @@ final class PresetStoreCore {
     /// 空の入れ物を端末間で合わせる意味が薄い。
     static let emptyFoldersKey = "presetEmptyFolders"
 
+    /// PC の写しのフォルダ（mirrorFolder が作った・中を入れ替えてよいもの）を覚えておく鍵。
+    ///
+    /// **名前だけで「PC のもの」と決めない。**PC のホスト名と同じ名前のフォルダを人が
+    /// 前から持っていたら、丸ごと入れ替えると人のプリセットが消える。写したことのある
+    /// フォルダだけをここに持ち、ここに無い同じ名前のフォルダには触らない（mirrorTarget）。
+    /// **iCloud へは写さない**（emptyFoldersKey と同じ）。入れ直して iCloud から戻った
+    /// 写しは人のフォルダの扱いになり、次の写しは `名前 2` へ入る（消えるより良い）。
+    static let remoteFoldersKey = "presetRemoteFolders"
+
     private let storage: ETKeyValueStorage
     private let patch: CloudPatch
 
@@ -70,6 +79,7 @@ final class PresetStoreCore {
     func removeFolder(_ name: String) {
         let list = storedEmptyFolders().filter { $0 != name }
         storage.set(list, forKey: Self.emptyFoldersKey)
+        pruneRemoteFolders()
     }
 
     /// フォルダの名前を替える。**中のプリセットを全部付け替える。**
@@ -117,22 +127,53 @@ final class PresetStoreCore {
             removeFolder(old)
             addFolder(target)
         }
+        // 付け替えた先は人のフォルダ。前に同じ名前を写していても、もう PC のものにしない。
+        releaseRemoteFolder(target)
+        pruneRemoteFolders()
         return true
     }
 
     // MARK: - フォルダの写し
 
-    /// フォルダを丸ごと `incoming` の写しにする（PC の EffeTune のプリセット。DSP/RemoteMirror.swift）。
+    /// PC の写しのフォルダ（並べ替え済み）。今も在るものだけ。
+    var remoteFolders: [String] {
+        let existing = existingFolders()
+        return storedRemoteFolders().filter(existing.contains).sorted()
+    }
+
+    /// そのフォルダが PC の写しか（中が PC に入れ替えられる・PC へ送り返さない）。
+    func isRemoteFolder(_ name: String) -> Bool {
+        !name.isEmpty && storedRemoteFolders().contains(name) && folderExists(name)
+    }
+
+    /// PC のホスト名 `base` の写しを入れるフォルダ。**人のフォルダは選ばない。**
+    ///   1. `base`・`base 2` … のうち、前に写した（PC のもの）で今も在るもの
+    ///   2. 無ければ、前に写したか、まだ無いもののうち最初
+    /// 同じ名前の人のフォルダが在れば `base 2` へずれる。決まらなければ nil。
+    func mirrorTarget(for base: String) -> String? {
+        let clean = ETUserPresetName.clean(base)
+        guard !clean.isEmpty else { return nil }
+        let owned = Set(storedRemoteFolders())
+        let existing = existingFolders()
+        let candidates = [clean] + (2...99).map { "\(clean) \($0)" }
+        if let mine = candidates.first(where: { owned.contains($0) && existing.contains($0) }) {
+            return mine
+        }
+        return candidates.first { owned.contains($0) || !existing.contains($0) }
+    }
+
+    /// PC のホスト名 `base` のフォルダを丸ごと `incoming` の写しにする（PC の EffeTune のプリセット。
+    /// DSP/RemoteMirror.swift）。入れる先は mirrorTarget（**同じ名前の人のフォルダには触らない**）。
     /// 中身はそのフォルダの中だけ足す・上書き・消す。**ほかのフォルダと直下には触らない。**
     /// 決め方は PresetFolderMirror.plan。手元へ 1 回、iCloud へは変わった名前だけ 1 本ずつ当てる。
-    /// 返すのは変えた本数（入れ替えた・足した / 消した）。
+    /// 返すのは入れたフォルダ（入れなかったら空）と変えた本数（入れ替えた・足した / 消した）。
     @discardableResult
-    func mirrorFolder(_ folder: String, incoming: [String: [[String: Any]]],
-                      unreadable: Set<String> = []) -> (written: Int, deleted: Int) {
-        let clean = ETUserPresetName.clean(folder)
-        guard !clean.isEmpty else { return (0, 0) }
+    func mirrorFolder(_ base: String, incoming: [String: [[String: Any]]],
+                      unreadable: Set<String> = []) -> (folder: String, written: Int, deleted: Int) {
+        guard let folder = mirrorTarget(for: base) else { return ("", 0, 0) }
+        claimRemoteFolder(folder)
         var d = dict()
-        let plan = PresetFolderMirror.plan(folder: clean, incoming: incoming, existing: d,
+        let plan = PresetFolderMirror.plan(folder: folder, incoming: incoming, existing: d,
                                            unreadable: unreadable)
         if !plan.write.isEmpty || !plan.delete.isEmpty {
             for name in plan.delete { d.removeValue(forKey: name) }
@@ -147,8 +188,8 @@ final class PresetStoreCore {
             }
         }
         // 空の PC でもフォルダは見えるようにする（中身が入れば名前の側に現れる）。
-        if !folderExists(clean) { addFolder(clean) }
-        return (plan.write.count, plan.delete.count)
+        if !folderExists(folder) { addFolder(folder) }
+        return (folder, plan.write.count, plan.delete.count)
     }
 
     // MARK: - 1 本ずつ
@@ -166,6 +207,7 @@ final class PresetStoreCore {
         write(d)
         patch(Self.key, [CloudChange(path: [old], value: nil),
                          CloudChange(path: [target], value: form)])
+        pruneRemoteFolders()
         return true
     }
 
@@ -209,6 +251,7 @@ final class PresetStoreCore {
         d.removeValue(forKey: name)
         write(d)
         patch(Self.key, [CloudChange(path: [name], value: nil)])
+        pruneRemoteFolders()
     }
 
     // MARK: - ファイルとのやり取り（ETBackup）
@@ -247,6 +290,38 @@ final class PresetStoreCore {
 
     private func storedEmptyFolders() -> [String] {
         storage.object(forKey: Self.emptyFoldersKey) as? [String] ?? []
+    }
+
+    /// 在るフォルダ全部（プリセットが入っているものと、空のもの）。
+    private func existingFolders() -> Set<String> {
+        Set(names.map(ETUserPresetName.folder)).subtracting([""]).union(storedEmptyFolders())
+    }
+
+    private func storedRemoteFolders() -> [String] {
+        storage.object(forKey: Self.remoteFoldersKey) as? [String] ?? []
+    }
+
+    private func claimRemoteFolder(_ name: String) {
+        var list = storedRemoteFolders()
+        guard !list.contains(name) else { return }
+        list.append(name)
+        storage.set(list, forKey: Self.remoteFoldersKey)
+    }
+
+    private func releaseRemoteFolder(_ name: String) {
+        let list = storedRemoteFolders()
+        guard list.contains(name) else { return }
+        storage.set(list.filter { $0 != name }, forKey: Self.remoteFoldersKey)
+    }
+
+    /// 消えたフォルダを PC のものから外す。**後で人が同じ名前のフォルダを作っても、
+    /// それを PC の写しと取り違えて入れ替えない。**
+    private func pruneRemoteFolders() {
+        let list = storedRemoteFolders()
+        guard !list.isEmpty else { return }
+        let existing = existingFolders()
+        let kept = list.filter(existing.contains)
+        if kept.count != list.count { storage.set(kept, forKey: Self.remoteFoldersKey) }
     }
 
     /// 手元へ書く。**iCloud へは写さない。**

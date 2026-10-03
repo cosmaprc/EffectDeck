@@ -20,6 +20,8 @@
 //                     フォルダの中を手元で直しても次の入れ替えで PC のものに戻る
 //    EffectDeck → PC  足すだけ。同じ名前で中身が違えば `名前 (iPad)`（ETRemotePresetSync）。PC にはフォルダが無い。
 //                     PC の写しのフォルダは送り返さない
+//  **写しのフォルダは写したことがあるものだけ入れ替える**（PresetStoreCore.remoteFoldersKey）。
+//  ホスト名と同じ名前の人のフォルダが前から在れば触らず、`名前 2` へ写す。
 //  iCloud へは今までどおり PresetStoreCore が触った名前だけ当てる（鎖の persist() の門とは別）。
 //
 //  つなぎ先: ws://<host>:47300/?t=<token>（ETRemoteAddress）。トークンが違うと PC は
@@ -952,14 +954,15 @@ final class RemoteMirror: ObservableObject {
         mirrorTicket += 1
         let ticket = mirrorTicket
         guard let pc = await fetchPCPresets(generation: gen) else { return nil }
-        let folder = presetMirrorFolder()
-        if ticket > mirroredTicket, !folder.isEmpty {
+        let base = presetMirrorFolder()
+        if ticket > mirroredTicket, !base.isEmpty {
             mirroredTicket = ticket
             var forms: [String: [[String: Any]]] = [:]
             for (name, loaded) in pc.items { forms[name] = PipelineStore.shortForm(loaded) }
-            let changed = PresetStore.shared.mirrorFolder(folder, incoming: forms, unreadable: pc.unreadable)
+            // 同じ名前の人のフォルダが在れば `名前 2` へ入る（PresetStoreCore.mirrorTarget）。
+            let changed = PresetStore.shared.mirrorFolder(base, incoming: forms, unreadable: pc.unreadable)
             if changed.written > 0 || changed.deleted > 0 {
-                log.notice("remote: プリセットの写し \(folder, privacy: .public) +\(changed.written)/-\(changed.deleted)")
+                log.notice("remote: プリセットの写し \(changed.folder, privacy: .public) +\(changed.written)/-\(changed.deleted)")
             }
         }
         return pc
@@ -985,7 +988,6 @@ final class RemoteMirror: ObservableObject {
         // --- プリセット ---
         // PC → EffectDeck は写し（ホスト名のフォルダ）。EffectDeck → PC は足すだけ。
         let store = PresetStore.shared
-        let mirrorFolder = presetMirrorFolder()
         var pcCanon: [String: String] = [:]
         var pcRead = false
         if let pc = await fetchAndMirrorPresets(generation: gen) {
@@ -1004,8 +1006,9 @@ final class RemoteMirror: ObservableObject {
         var localCanon: [String: String] = [:]
         var blocked: Set<String> = []
         for name in store.names {
-            // PC の写しのフォルダは PC のもの。送り返さない。
-            if !mirrorFolder.isEmpty, ETUserPresetName.folder(name) == mirrorFolder { continue }
+            // PC の写しのフォルダ（どの PC のものも）は送らない。名前でなく、写したことがあるかで見る。
+            // 同じ名前の人のフォルダは人のものとして送る。
+            if store.isRemoteFolder(ETUserPresetName.folder(name)) { continue }
             let loaded = store.load(name)
             guard !loaded.isEmpty else { continue }
             localItems[name] = loaded

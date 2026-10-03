@@ -434,6 +434,10 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: nil, address: "192.168.1.10:47300/ab12cd34"), "192.168.1.10")
         XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: "  ", address: "192.168.1.10/ab12cd34"), "192.168.1.10")
         XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: nil, address: ""), "")
+        // PC から来る字なので、制御文字は落として長さを切る。
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: "WIN\n-SE\u{7}", address: ""), "WIN-SE")
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: String(repeating: "a", count: 200), address: "").count,
+                       ETRemotePresetMirror.maxFolderName)
     }
 
     func testHelloAsksForPresetsChangedAndHostInfoReadsHostName() {
