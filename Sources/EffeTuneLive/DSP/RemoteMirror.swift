@@ -15,6 +15,7 @@
 //  **つないでいるあいだも足し合わせ直す**（syncIRsLive）。PC が irsChanged を送ってきたとき（hello の
 //  sync: 1。PC が sync1 のとき）と、手元の IR が増えたとき（IRLibrary.entries）。どちらも 1 秒まとめてから、
 //  PC の一覧（listIRs）と見比べて、足りない分だけ取る・送る。消さない。切れたら捨てる。
+//  **前に見たときから増えた分だけ**。片方で消したものを、もう片方の写しから戻さない（ETRemoteIRSync.livePlan）。
 //
 //  **プリセットは向きで扱いが違う。**
 //    PC → EffectDeck  PC のホスト名のフォルダが PC の写し。つないだ直後と、PC が presetsChanged を
@@ -193,8 +194,12 @@ final class RemoteMirror: ObservableObject {
     private var irSyncBusy = false
     /// 走っているあいだにまた頼まれた。終わったら見直す。
     private var irSyncAgain = false
-    /// 前の足し合わせの終わりに手元にあった IR の鍵。これに無い鍵が出たら手元で増えたとみなす。
-    private var irKnown: Set<String> = []
+    /// 前に見た PC の IR の一覧（と、そのあと送れた鍵）。ライブではこれに無い PC の鍵だけ取る
+    /// （手元で消した IR を取り直さない）。nil はまだ見ていない（ETRemoteIRSync.livePlan）。
+    private var irKnownPC: Set<String>?
+    /// 前に見た手元の IR の一覧（と、そのあと取れた鍵。手元で消した鍵は抜く）。これに無い鍵が出たら
+    /// 手元で増えたとみなし、それだけ送る（PC で消した IR を送り直さない）。
+    private var irKnownLocal: Set<String>?
     /// このつなぎの中で失敗した IR の鍵。変わるたびに同じものを取り直さない。
     private var irFailed: Set<String> = []
     private var irSink: AnyCancellable?
@@ -423,7 +428,8 @@ final class RemoteMirror: ObservableObject {
         irSink = nil
         irSyncBusy = false
         irSyncAgain = false
-        irKnown.removeAll()
+        irKnownPC = nil
+        irKnownLocal = nil
         irFailed.removeAll()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -1053,7 +1059,13 @@ final class RemoteMirror: ObservableObject {
         irSyncBusy = true
         defer { finishIRSync(generation: gen) }
         // PC の一覧が取れなかったときは何も足さない（空の一覧と取り違えて全部送らない）。
-        let irPlan = await fetchIRPlan(generation: gen, skip: []) ?? (download: [], upload: [])
+        // 見た一覧は覚えておく（ライブの足し合わせ直しは、これより増えた分だけ）。取れなければ nil のまま。
+        var irPlan: (download: [String], upload: [String]) = ([], [])
+        if let lists = await fetchIRLists(generation: gen) {
+            irPlan = ETRemoteIRSync.plan(pc: lists.pc, local: lists.local)
+            irKnownPC = Set(lists.pc)
+            irKnownLocal = Set(lists.local)
+        }
         guard alive() else { return }
 
         let total = toPC.count + irPlan.download.count + irPlan.upload.count
@@ -1078,33 +1090,43 @@ final class RemoteMirror: ObservableObject {
 
         await applyIRPlan(irPlan, generation: gen, step: step)
         guard alive() else { return }
-        irKnown = Set(IRLibrary.shared.entries.map(\.id))
         log.notice("remote: 足し合わせ済み プリセット →\(toPC.count) IR +\(irPlan.download.count)/→\(irPlan.upload.count)")
     }
 
-    /// PC の IR の一覧と見比べた、取る鍵と送る鍵。一覧が取れなければ nil（空と取り違えない）。
-    private func fetchIRPlan(generation gen: Int, skip: Set<String>) async -> (download: [String], upload: [String])? {
+    /// PC の IR の一覧と、そのときの手元の一覧。PC の一覧が取れなければ nil（空と取り違えない）。
+    private func fetchIRLists(generation gen: Int) async -> (pc: [String], local: [String])? {
         guard let list = await request(["op": "listIRs"], reply: "irs"),
               let entries = list["items"] as? [[String: Any]] else { return nil }
         guard remoteAlive(gen) else { return nil }
-        let pcIRs = entries.compactMap { $0["id"] as? String }
-        return ETRemoteIRSync.plan(pc: pcIRs, local: IRLibrary.shared.entries.map(\.id), skip: skip)
+        return (entries.compactMap { $0["id"] as? String }, IRLibrary.shared.entries.map(\.id))
     }
 
     /// 取る・送るを順に 1 本ずつ。失敗した鍵は覚えておく（このつなぎの中では取り直さない）。
+    /// 取れた鍵は手元の既知へ、送れた鍵は PC の既知へすぐ入れる（取り込みで手元が増えたのを
+    /// 「手元で増えた」と取り違えない・あとで PC で消されても送り直さない）。
     private func applyIRPlan(_ plan: (download: [String], upload: [String]), generation gen: Int,
                              step: () -> Void) async {
-        var fetched = false
+        var fetched: Set<String> = []
         for id in plan.download {
             guard remoteAlive(gen) else { return }
-            if await download(id) { fetched = true } else { irFailed.insert(id) }
+            if await download(id) {
+                fetched.insert(id)
+                irKnownLocal?.insert(id)
+            } else {
+                irFailed.insert(id)
+            }
             step()
         }
-        // PC の鎖の IR Reverb が指していた素材が、いま手元に来た。
-        if fetched, remoteAlive(gen) { EffeTuneDSP.shared.reloadAssets() }
+        // PC の鎖の IR Reverb が指していた素材が、いま手元に来た。来た鍵を指す段だけ入れ直す
+        // （鳴っている最中に、ほかの IR の段まで組み直さない）。
+        if !fetched.isEmpty, remoteAlive(gen) { EffeTuneDSP.shared.reloadAssets(ids: fetched) }
         for id in plan.upload {
             guard remoteAlive(gen) else { return }
-            if !(await upload(id)) { irFailed.insert(id) }
+            if await upload(id, generation: gen) {
+                irKnownPC?.insert(id)
+            } else {
+                irFailed.insert(id)
+            }
             step()
         }
     }
@@ -1129,9 +1151,12 @@ final class RemoteMirror: ObservableObject {
     }
 
     /// 手元の IR が変わった。増えたときだけ PC へ足す（消したことは伝えない）。
+    /// 消した鍵は既知から抜く（あとで入れ直したら、また増えた分として送る）。
     private func localIRsChanged() {
-        guard isRemote,
-              ETRemoteIRSync.hasAdditions(known: irKnown, current: IRLibrary.shared.entries.map(\.id)) else { return }
+        guard isRemote else { return }
+        let current = IRLibrary.shared.entries.map(\.id)
+        irKnownLocal?.formIntersection(current)
+        guard ETRemoteIRSync.hasAdditions(known: irKnownLocal ?? [], current: current) else { return }
         scheduleIRSync()
     }
 
@@ -1165,7 +1190,13 @@ final class RemoteMirror: ObservableObject {
         }
         irSyncBusy = true
         defer { finishIRSync(generation: gen) }
-        guard let plan = await fetchIRPlan(generation: gen, skip: irFailed), remoteAlive(gen) else { return }
+        guard let lists = await fetchIRLists(generation: gen), remoteAlive(gen) else { return }
+        // 前に見たときから増えた分だけ（片方で消したものを、もう片方から戻さない）。
+        let plan = ETRemoteIRSync.livePlan(pc: lists.pc, local: lists.local,
+                                           knownPC: irKnownPC, knownLocal: irKnownLocal, skip: irFailed)
+        // 一覧を見た時点を既知にする。このあと手元で入れたものは既知に無いので、次の見直しで送る。
+        irKnownPC = Set(lists.pc)
+        irKnownLocal = Set(lists.local)
         if !plan.download.isEmpty || !plan.upload.isEmpty {
             let total = plan.download.count + plan.upload.count
             var done = 0
@@ -1178,7 +1209,6 @@ final class RemoteMirror: ObservableObject {
             guard remoteAlive(gen) else { return }
             log.notice("remote: IR 足し合わせ直し +\(plan.download.count)/→\(plan.upload.count)")
         }
-        irKnown = Set(IRLibrary.shared.entries.map(\.id))
     }
 
     /// PC の IR を 1 本取って置き場へ入れる。**鍵が合わなければ入れない。**
@@ -1254,7 +1284,7 @@ final class RemoteMirror: ObservableObject {
 
     /// 手元の IR を 1 本 PC へ送る。塊ごとに ack を待つ（詰め込みすぎない）。
     @discardableResult
-    private func upload(_ id: String) async -> Bool {
+    private func upload(_ id: String, generation gen: Int) async -> Bool {
         guard let entry = IRLibrary.shared.entry(id: id) else { return false }
         let url = entry.url
         // 読むのと鍵の確かめはメインの外で。置き場のファイルが差し替えられていたら送らない。
@@ -1275,7 +1305,8 @@ final class RemoteMirror: ObservableObject {
         let ext = url.pathExtension
         let ranges = ETRemoteIRSync.chunks(data.count)
         for (index, range) in ranges.enumerated() {
-            guard isRemote, task != nil else { return false }
+            // つなぎ直した先へ、前のつなぎの途中の塊を流さない。
+            guard remoteAlive(gen), task != nil else { return false }
             let message: [String: Any] = [
                 "op": "putIR", "id": id, "name": name, "ext": ext,
                 "index": index, "total": ranges.count, "bytes": data.count,

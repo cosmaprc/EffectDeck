@@ -579,6 +579,14 @@ final class EffeTuneDSP: ObservableObject {
         // （素材が入って初めてカーネルがその段を有効と数えるため）。
     }
 
+    /// 鍵が `ids` に入っている段だけ入れ直す。PC から IR が届いたとき（RemoteMirror）。
+    /// 鳴っている最中に、届いた IR と関係ない段まで組み直さない。
+    func reloadAssets(ids: Set<String>) {
+        for i in chain.indices where !chain[i].irId.isEmpty && ids.contains(chain[i].irId) {
+            reloadAsset(at: i)
+        }
+    }
+
     /// 1 段だけ入れ直す。
     ///
     /// 送れたら、そのときの 1 行（「4ch True Stereo / 48000 Hz / 1.23 s」）を

@@ -349,6 +349,22 @@ enum ETRemoteIRSync {
         return (p.subtracting(l).subtracting(skip).sorted(), l.subtracting(p).subtracting(skip).sorted())
     }
 
+    /// つないでいるあいだの足し合わせ直し。**前に見たときから増えた分だけ**を足す。
+    /// `knownPC` は前に見た PC の一覧（と、そのあと送れた鍵）、`knownLocal` は前に見た手元の一覧
+    /// （と、そのあと取れた鍵。手元で消した鍵は抜いておく）。
+    /// 片方で消したものを、もう片方の写しから送り直す・取り直すと、消したことがすぐ打ち消される
+    /// （PC で消した IR がつないでいるかぎり戻ってくる）。消したものはつなぎ直したとき
+    /// （plan、足し合わせの決まりのまま）に戻る。nil は「まだ見ていない」で、その側は plan と同じに扱う。
+    static func livePlan(pc: [String], local: [String], knownPC: Set<String>?, knownLocal: Set<String>?,
+                         skip: Set<String>) -> (download: [String], upload: [String]) {
+        let p = Set(pc), l = Set(local)
+        var download = p.subtracting(l).subtracting(skip)
+        var upload = l.subtracting(p).subtracting(skip)
+        if let knownPC { download.subtract(knownPC) }
+        if let knownLocal { upload.subtract(knownLocal) }
+        return (download.sorted(), upload.sorted())
+    }
+
     /// 手元の IR が増えたか。`known` は前の足し合わせの終わりに手元にあった鍵。
     /// 減っただけ（消した・足し合わせで自分が取り込んだ分）なら足し合わせ直さない。
     /// **消すことは PC へ伝えない**（足すだけ）ので、減ったことは見ない。

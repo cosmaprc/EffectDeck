@@ -499,6 +499,36 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertTrue(none.download.isEmpty && none.upload.isEmpty)
     }
 
+    func testIRLivePlanDoesNotUndoDeletions() {
+        // PC で消した IR を手元の写しから送り直さない（前に見た手元の一覧に在った）。
+        let pcDeleted = ETRemoteIRSync.livePlan(pc: ["a"], local: ["a", "b"],
+                                                knownPC: ["a", "b"], knownLocal: ["a", "b"], skip: [])
+        XCTAssertEqual(pcDeleted.upload, [])
+        XCTAssertEqual(pcDeleted.download, [])
+        // 手元で消した IR を PC から取り直さない（前に見た PC の一覧に在った）。
+        let localDeleted = ETRemoteIRSync.livePlan(pc: ["a", "b"], local: ["a"],
+                                                   knownPC: ["a", "b"], knownLocal: ["a"], skip: [])
+        XCTAssertEqual(localDeleted.download, [])
+        XCTAssertEqual(localDeleted.upload, [])
+        // 増えた分は両方向に足す。
+        let added = ETRemoteIRSync.livePlan(pc: ["a", "p"], local: ["a", "l"],
+                                            knownPC: ["a"], knownLocal: ["a"], skip: [])
+        XCTAssertEqual(added.download, ["p"])
+        XCTAssertEqual(added.upload, ["l"])
+        // 失敗した鍵は増えた分でも飛ばす。
+        let skipped = ETRemoteIRSync.livePlan(pc: ["a", "p"], local: ["a", "l"],
+                                              knownPC: ["a"], knownLocal: ["a"], skip: ["p", "l"])
+        XCTAssertTrue(skipped.download.isEmpty && skipped.upload.isEmpty)
+        // まだ見ていない側（つないだ直後に一覧が取れなかった）は plan と同じ。
+        let unseen = ETRemoteIRSync.livePlan(pc: ["a", "p"], local: ["a", "l"],
+                                             knownPC: nil, knownLocal: nil, skip: [])
+        XCTAssertEqual(unseen.download, ["p"])
+        XCTAssertEqual(unseen.upload, ["l"])
+        // 同じ中身は名前が違っても鍵が同じなので、どちらへも動かない。
+        let same = ETRemoteIRSync.livePlan(pc: ["k"], local: ["k"], knownPC: [], knownLocal: [], skip: [])
+        XCTAssertTrue(same.download.isEmpty && same.upload.isEmpty)
+    }
+
     func testIRLocalAdditionsOnly() {
         // 手元で増えたときだけ足し合わせ直す。消した・減っただけ・同じなら何もしない。
         XCTAssertTrue(ETRemoteIRSync.hasAdditions(known: ["a"], current: ["a", "b"]))
