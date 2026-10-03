@@ -248,7 +248,7 @@ extension AssetUpload {
     /// bypass を上げて、音のスレッドが engine に触らなくなってから body を回す。
     /// engine.cpp:902-907 のとおり、master_bypass のときは instance を 1 つも引かない。
     @MainActor
-    private static func holdOffAudioThread(_ body: () -> Void) {
+    static func holdOffAudioThread(_ body: () -> Void) {
         // 利用者が入れている bypass は壊さない。
         let userBypass = EffeTuneDSP.shared.bypass
         ETPipeline_SetBypass(1)

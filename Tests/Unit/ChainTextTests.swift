@@ -460,8 +460,10 @@ final class ChainTextTests: XCTestCase {
             let spec = try XCTUnwrap(ETCatalog.first { $0.name == name }, "\(name) がカタログに無い")
             XCTAssertEqual(e["type"] as? String, spec.type, name)
             let params = try XCTUnwrap(e["params"] as? [[String: Any]], name)
-            XCTAssertEqual(params.count, spec.params.count, name)
-            for (entry, p) in zip(params, spec.params) {
+            // 保存形式に出さないもの（Tonal Balance EQ の mp。ETParam.runtimeOnly）は語彙にも載せない。
+            let written = spec.params.filter { !$0.runtimeOnly }
+            XCTAssertEqual(params.count, written.count, name)
+            for (entry, p) in zip(params, written) {
                 let label = "\(name).\(p.key)"
                 XCTAssertEqual(entry["key"] as? String, jsonKey(p), label)
                 XCTAssertEqual(entry["shape"] as? String, shape(p), label)
@@ -479,9 +481,9 @@ final class ChainTextTests: XCTestCase {
                 let allowed = (entry["allowed"] as? [NSNumber])?.map(\.floatValue)
                 XCTAssertEqual(allowed, ETAllowedValues.upstream(type: spec.type, key: p.key), label)
                 // 語彙が印を付けたものだけを、取り込むときに見た目の数から直す（ETChainText.scaled）。
-                let written = ETChainText.scale(type: spec.type, param: p)
-                XCTAssertEqual(entry["scale"] as? String, written?.rawValue, label)
-                if p.scale == .naturalExp { XCTAssertEqual(written, .lnHz, label) }
+                let scaled = ETChainText.scale(type: spec.type, param: p)
+                XCTAssertEqual(entry["scale"] as? String, scaled?.rawValue, label)
+                if p.scale == .naturalExp { XCTAssertEqual(scaled, .lnHz, label) }
             }
         }
     }

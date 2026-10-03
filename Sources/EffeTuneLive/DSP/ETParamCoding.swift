@@ -270,9 +270,55 @@ enum ETUpstreamNormalize {
         switch type {
         case "BassManagementPlugin":
             return bassManagement(params: params, previous: previous, values: values, from: dict)
+        case "RhythmAnalyzerPlugin":
+            return rhythmAnalyzer(params: params, previous: previous, values: values, from: dict)
+        case "TonalBalanceEQPlugin":
+            return tonalBalance(params: params, previous: previous, values: values)
         default:
             return values
         }
+    }
+
+    /// plugins/analyzer/rhythm_analyzer.js:167-178 の setParameters（Min / Max BPM）。
+    /// 規則は ETRhythmBPMRange（RhythmAnalyzerModel.swift）が持つ。カーネルも同じ規則で
+    /// 狭すぎる範囲を捨てる（kMinimumSpan = 1.25）ので、読み込みの時点で上流と同じ所へ着地させる。
+    private static func rhythmAnalyzer(params: [ETParam], previous: [Float],
+                                       values input: [Float],
+                                       from dict: [String: Any]) -> [Float] {
+        var values = input
+        guard let mn = params.first(where: { $0.key == "mn" }),
+              let mx = params.first(where: { $0.key == "mx" }),
+              values.indices.contains(mn.offset), values.indices.contains(mx.offset),
+              previous.indices.contains(mn.offset), previous.indices.contains(mx.offset) else {
+            return values
+        }
+        let range = ETRhythmBPMRange.normalize(
+            previousMin: Double(previous[mn.offset]), previousMax: Double(previous[mx.offset]),
+            requestedMin: dict["mn"] == nil ? nil : Double(values[mn.offset]),
+            requestedMax: dict["mx"] == nil ? nil : Double(values[mx.offset]))
+        values[mn.offset] = Float(range.min)
+        values[mx.offset] = Float(range.max)
+        return values
+    }
+
+    /// plugins/eq/tonal_balance_eq.js:326-337 の setParameters。**シェルフ（ls / hs）の Q は
+    /// 2 までで、型を変えれば寄せ直す。** peaking だけが 10 まで。カーネルも同じ上限で寄せる。
+    /// 数でない値は前の値のまま（parseFiniteNumber）。
+    private static func tonalBalance(params: [ETParam], previous: [Float],
+                                     values input: [Float]) -> [Float] {
+        var values = input
+        guard let type = params.first(where: { $0.key == "ta" }),
+              let q = params.first(where: { $0.key == "qa" }) else { return values }
+        for band in 0..<min(type.count, q.count) {
+            let t = type.offset + band, k = q.offset + band
+            guard values.indices.contains(t), values.indices.contains(k) else { continue }
+            // **Int(_:) にしない。**ここの値は bounded の前で、1e30 も来る（Int の外で落ちる）。
+            // 0 = pk、それ以外 = ls / hs。
+            let shelf = values[t].rounded() != 0
+            let old = previous.indices.contains(k) ? previous[k] : q.defaultValue
+            values[k] = values[k].isFinite ? min(max(values[k], 0.1), shelf ? 2 : 10) : old
+        }
+        return values
     }
 
     /// plugins/basics/bass_management.js:142-179 の setParameters。

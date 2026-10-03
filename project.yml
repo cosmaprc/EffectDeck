@@ -312,6 +312,14 @@ targets:
       - path: Sources/EffeTuneLive/DSP/ETChainText.swift
       - path: Sources/EffeTuneLive/DSP/SectionSupport.swift
       - path: Sources/EffeTuneLive/DSP/DisplayParams.swift
+      # 2.12.0 の解析 3 種（Analog Meter・Tonal Balance EQ・Rhythm Analyzer）の枠の読みと計算。
+      # Foundation だけ。枠は ETFrame / ETPayload で読むので、その 2 本も入れる
+      # （AnalogMeterTests・TonalBalanceTests・RhythmAnalyzerTests）。
+      - path: Sources/EffeTuneLive/DSP/TelemetryFrame.swift
+      - path: Sources/EffeTuneLive/Views/Graphs/TelemetryPayloads.swift
+      - path: Sources/EffeTuneLive/DSP/AnalogMeterModel.swift
+      - path: Sources/EffeTuneLive/DSP/TonalBalanceModel.swift
+      - path: Sources/EffeTuneLive/DSP/RhythmAnalyzerModel.swift
       - path: Sources/EffeTuneLive/DSP/ETChannel.swift
       - path: Sources/EffeTuneLive/Generated/SystemPresets.swift
       - path: Sources/EffeTuneLive/Generated/UpstreamVersion.swift
