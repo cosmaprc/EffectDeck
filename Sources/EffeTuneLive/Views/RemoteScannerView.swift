@@ -354,7 +354,9 @@ struct ETRemoteUnsupportedMark: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .bottom, spacing: 4) {
+        // safeAreaInset は中身が空でも spacing ぶん空けるので、出さないときは何も足さない。
+        VStack(spacing: 4) {
+            content
             if mirror.hostLacks(effect), let host = mirror.host {
                 Text(host.unsupportedText)
                     .font(.caption)

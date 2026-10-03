@@ -840,6 +840,7 @@ struct PipelineView: View {
                 RemoteBanner(openRemote: { presentSheet(.remote) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
+                    .padding(.bottom, 8)
             } else if !hasPeer {
                 ConnectBanner(openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
