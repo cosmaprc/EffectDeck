@@ -120,6 +120,37 @@ final class PresetStoreCore {
         return true
     }
 
+    // MARK: - フォルダの写し
+
+    /// フォルダを丸ごと `incoming` の写しにする（PC の EffeTune のプリセット。DSP/RemoteMirror.swift）。
+    /// 中身はそのフォルダの中だけ足す・上書き・消す。**ほかのフォルダと直下には触らない。**
+    /// 決め方は PresetFolderMirror.plan。手元へ 1 回、iCloud へは変わった名前だけ 1 本ずつ当てる。
+    /// 返すのは変えた本数（入れ替えた・足した / 消した）。
+    @discardableResult
+    func mirrorFolder(_ folder: String, incoming: [String: [[String: Any]]],
+                      unreadable: Set<String> = []) -> (written: Int, deleted: Int) {
+        let clean = ETUserPresetName.clean(folder)
+        guard !clean.isEmpty else { return (0, 0) }
+        var d = dict()
+        let plan = PresetFolderMirror.plan(folder: clean, incoming: incoming, existing: d,
+                                           unreadable: unreadable)
+        if !plan.write.isEmpty || !plan.delete.isEmpty {
+            for name in plan.delete { d.removeValue(forKey: name) }
+            for (name, form) in plan.write { d[name] = form }
+            write(d)
+            if !plan.delete.isEmpty {
+                patch(Self.key, plan.delete.sorted().map { CloudChange(path: [$0], value: nil) })
+            }
+            // 1 本ずつ当てる（merge と同じ。まとめると、大きさの上限に当たったときに 1 本も写らない）。
+            for name in plan.write.keys.sorted() {
+                patch(Self.key, [CloudChange(path: [name], value: plan.write[name])])
+            }
+        }
+        // 空の PC でもフォルダは見えるようにする（中身が入れば名前の側に現れる）。
+        if !folderExists(clean) { addFolder(clean) }
+        return (plan.write.count, plan.delete.count)
+    }
+
     // MARK: - 1 本ずつ
 
     /// 名前を付け替える。**フォルダの出し入れもこれ。**
@@ -224,5 +255,61 @@ final class PresetStoreCore {
     /// 手元の分が iCloud の分を置き換えて、別の端末に在るものが消える。
     private func write(_ d: [String: Any]) {
         storage.set(d, forKey: Self.key)
+    }
+}
+
+/// フォルダを PC の写しにするときの決め方。**入れ物に触らない純粋な関数**（PresetStoreTests）。
+enum PresetFolderMirror {
+
+    struct Plan {
+        /// 書く名前（`フォルダ/名前`）→ ショート形式。変わらないものは入れない。
+        var write: [String: [[String: Any]]] = [:]
+        /// 消す名前（`フォルダ/名前`）。フォルダの中だけ。
+        var delete: [String] = []
+    }
+
+    /// 入れ物に入る名前。`フォルダ/名前` の名前の側は `/` を落とす（入れ子は作らない）。
+    /// 名前が空になるものは nil。
+    static func storeName(folder: String, leaf: String) -> String? {
+        let name = ETUserPresetName.clean(leaf)
+        return name.isEmpty ? nil : ETUserPresetName.normalized(folder + "/" + name)
+    }
+
+    /// - Parameters:
+    ///   - folder: フォルダの名前（整えてあるもの。空なら何もしない）
+    ///   - incoming: PC のプリセット（PC の名前 → ショート形式）
+    ///   - existing: 入れ物の中身（名前 → ショート形式。全部）
+    ///   - unreadable: 一覧には在ったが読めなかった PC の名前。**今ある写しを消さずに残す**
+    ///
+    /// 入れ物の名前が重なる PC の名前（`A/B` と `A B` はどちらも `PC/A B`）は、並びの先のほうだけ入れる。
+    /// 中身が同じなら書かない（iCloud へ無駄に当てない）。
+    static func plan(folder: String, incoming: [String: [[String: Any]]], existing: [String: Any],
+                     unreadable: Set<String> = []) -> Plan {
+        var plan = Plan()
+        guard !folder.isEmpty else { return plan }
+        var keep = Set<String>()
+        for leaf in unreadable {
+            if let name = storeName(folder: folder, leaf: leaf) { keep.insert(name) }
+        }
+        var target = Set<String>()
+        for leaf in incoming.keys.sorted() {
+            guard let form = incoming[leaf], !form.isEmpty,
+                  let name = storeName(folder: folder, leaf: leaf),
+                  target.insert(name).inserted else { continue }
+            if let there = existing[name], same(there, form) { continue }
+            plan.write[name] = form
+        }
+        plan.delete = existing.keys
+            .filter { ETUserPresetName.folder($0) == folder && !target.contains($0) && !keep.contains($0) }
+            .sorted()
+        return plan
+    }
+
+    /// 中身が同じか。鍵の順を固定した JSON で比べる（NSNumber の型の違いは値で見る）。
+    private static func same(_ a: Any, _ b: Any) -> Bool {
+        guard JSONSerialization.isValidJSONObject(a), JSONSerialization.isValidJSONObject(b),
+              let x = try? JSONSerialization.data(withJSONObject: a, options: [.sortedKeys]),
+              let y = try? JSONSerialization.data(withJSONObject: b, options: [.sortedKeys]) else { return false }
+        return x == y
     }
 }

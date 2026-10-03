@@ -68,11 +68,12 @@ final class PresetStore: ObservableObject {
         reload()
     }
 
-    /// 読み込んだ段からそのまま残す（PC の EffeTune から取ったプリセット。DSP/RemoteMirror.swift）。
-    func save(_ name: String, items: [PipelineStore.Loaded]) {
-        guard !items.isEmpty else { return }
-        core.save(name, form: PipelineStore.shortForm(items))
-        reload()
+    /// フォルダを PC のプリセットの写しにする（PresetStoreCore.mirrorFolder。DSP/RemoteMirror.swift）。
+    @discardableResult
+    func mirrorFolder(_ folder: String, incoming: [String: [[String: Any]]],
+                      unreadable: Set<String> = []) -> (written: Int, deleted: Int) {
+        defer { reload() }
+        return core.mirrorFolder(folder, incoming: incoming, unreadable: unreadable)
     }
 
     /// save が書く名前（空になるなら nil）。押す前の「もう在る」はこれで確かめる。

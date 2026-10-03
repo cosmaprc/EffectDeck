@@ -371,50 +371,81 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertFalse(ETRemoteStateFilter.follows(origin: nil, seq: nil, ours: ours))
     }
 
-    // MARK: - v2: プリセットの足し合わせ
+    // MARK: - v2: プリセットの足し合わせ（EffectDeck → PC）
 
-    func testPresetUnionCopiesMissingBothWays() {
+    func testPresetPushCopiesOnlyWhatPCLacks() {
         let plan = ETRemotePresetSync.plan(pc: ["A": "a", "Same": "s"],
                                            local: ["B": "b", "Same": "s"])
-        XCTAssertEqual(plan.toLocal, [.init(source: "A", target: "A")])
-        XCTAssertEqual(plan.toPC, [.init(source: "B", target: "B")])
+        XCTAssertEqual(plan, [.init(source: "B", target: "B")])
     }
 
-    func testPresetNameClashGetsATagOnTheOtherSide() {
+    func testPresetNameClashGetsATagOnPC() {
         let plan = ETRemotePresetSync.plan(pc: ["N": "pc"], local: ["N": "pad"])
-        XCTAssertEqual(plan.toLocal, [.init(source: "N", target: "N (PC)")])
-        XCTAssertEqual(plan.toPC, [.init(source: "N", target: "N (iPad)")])
+        XCTAssertEqual(plan, [.init(source: "N", target: "N (iPad)")])
     }
 
     func testPresetTaggedNameThatIsTakenCountsUp() {
-        let plan = ETRemotePresetSync.plan(pc: ["N": "pc"], local: ["N": "pad", "N (PC)": "other"])
-        XCTAssertEqual(plan.toLocal, [.init(source: "N", target: "N (PC 2)")])
+        let plan = ETRemotePresetSync.plan(pc: ["N": "pc", "N (iPad)": "other"], local: ["N": "pad"])
+        XCTAssertEqual(plan, [.init(source: "N", target: "N (iPad 2)")])
     }
 
     func testPresetBlockedLocalIsNotSent() {
         let plan = ETRemotePresetSync.plan(pc: [:], local: ["AU": "x", "Plain": "y"], localBlocked: ["AU"])
-        XCTAssertEqual(plan.toPC, [.init(source: "Plain", target: "Plain")])
+        XCTAssertEqual(plan, [.init(source: "Plain", target: "Plain")])
     }
 
-    /// 1 回目の結果を両側へ当てて、2 回目は何もしない。
-    func testPresetUnionIsIdempotent() {
+    /// PC には何も戻さない（PC → EffectDeck は plan に無い。写しのフォルダ）。
+    func testPresetPushNeverTouchesTheLocalSide() {
+        let plan = ETRemotePresetSync.plan(pc: ["OnlyPC": "p"], local: [:])
+        XCTAssertEqual(plan, [])
+    }
+
+    /// 1 回目の結果を PC へ当てて、2 回目は何もしない。
+    func testPresetPushIsIdempotent() {
         var pc = ["N": "pc", "OnlyPC": "p"]
-        var local = ["N": "pad", "OnlyPad": "q", "AU": "x"]
+        let local = ["N": "pad", "OnlyPad": "q", "AU": "x"]
         let first = ETRemotePresetSync.plan(pc: pc, local: local, localBlocked: ["AU"])
-        for copy in first.toLocal { local[copy.target] = pc[copy.source] }
-        for copy in first.toPC { pc[copy.target] = local[copy.source] }
-        let second = ETRemotePresetSync.plan(pc: pc, local: local, localBlocked: ["AU"])
-        XCTAssertEqual(second, ETRemotePresetSync.Plan())
-        XCTAssertEqual(Set(local.keys), ["N", "N (PC)", "OnlyPC", "OnlyPad", "AU"])
+        for copy in first { pc[copy.target] = local[copy.source] }
+        XCTAssertEqual(ETRemotePresetSync.plan(pc: pc, local: local, localBlocked: ["AU"]), [])
         XCTAssertEqual(Set(pc.keys), ["N", "N (iPad)", "OnlyPC", "OnlyPad"])
     }
 
     func testPresetTagSplit() {
-        XCTAssertEqual(ETRemotePresetSync.split("Rock (PC)")?.base, "Rock")
         XCTAssertEqual(ETRemotePresetSync.split("Rock (iPad 3)")?.tag, "iPad")
+        XCTAssertEqual(ETRemotePresetSync.split("Rock (iPad)")?.base, "Rock")
+        // 前の版が作った `(PC)` も読む（PC へ送り返さないため）。
+        XCTAssertEqual(ETRemotePresetSync.split("Rock (PC)")?.base, "Rock")
         XCTAssertNil(ETRemotePresetSync.split("Rock (live)"))
         XCTAssertNil(ETRemotePresetSync.split("Rock (PC 1)"))
         XCTAssertNil(ETRemotePresetSync.split("Rock"))
+    }
+
+    /// 前の版が手元に残した `Rock (PC)` が PC の `Rock` と同じ中身なら、PC へ送り返さない。
+    func testLegacyPCCopyIsNotSentBack() {
+        let plan = ETRemotePresetSync.plan(pc: ["Rock": "r"], local: ["Rock (PC)": "r", "Rock (PC) 2": "z"])
+        XCTAssertEqual(plan, [.init(source: "Rock (PC) 2", target: "Rock (PC) 2")])
+    }
+
+    // MARK: - v2: プリセットの写し（PC → EffectDeck）
+
+    func testMirrorFolderNameIsHostNameThenAddressHost() {
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: "WIN-SE", address: "192.168.1.10:47300/ab12cd34"), "WIN-SE")
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: " a/b ", address: "192.168.1.10/ab12cd34"), "a b")
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: nil, address: "192.168.1.10:47300/ab12cd34"), "192.168.1.10")
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: "  ", address: "192.168.1.10/ab12cd34"), "192.168.1.10")
+        XCTAssertEqual(ETRemotePresetMirror.folderName(hostName: nil, address: ""), "")
+    }
+
+    func testHelloAsksForPresetsChangedAndHostInfoReadsHostName() {
+        XCTAssertEqual(ETRemoteHello.message(info: nil)["sync"] as? Int, 1)
+        let info = ETRemoteHostInfo(state: ["host": " WIN-SE ", "features": ["origin", "sync1"]])
+        XCTAssertEqual(info.hostName, "WIN-SE")
+        XCTAssertTrue(ETRemotePresetMirror.isLive(info))
+        // sync1 を持たない PC は presetsChanged を送らない。host も無い。
+        let old = ETRemoteHostInfo(state: ["features": ["origin", "telemetry"]])
+        XCTAssertNil(old.hostName)
+        XCTAssertFalse(ETRemotePresetMirror.isLive(old))
+        XCTAssertFalse(ETRemotePresetMirror.isLive(nil))
     }
 
     /// PC の字（0.1）と、手元に保存して読み戻したもの（Float を経た 0.10000000149…）が同じ中身になる。

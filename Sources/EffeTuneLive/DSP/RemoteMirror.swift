@@ -10,12 +10,22 @@
 //  iCloud は手元の鎖のまま残るので、途中でアプリが落ちても次の起動は手元の鎖から始まる。
 //  退避が残ったまま起動したら、つながっていなくても戻して消す（start）。
 //
-//  つないだ直後に、プリセットと IR を両方向へ足し合わせる（syncAll）。消さない・上書きしない。
-//  決まりは RemoteProtocol.swift（ETRemotePresetSync・ETRemoteIRSync）。
+//  つないだ直後に、IR を両方向へ足し合わせる（syncAll）。消さない・上書きしない。
+//  決まりは RemoteProtocol.swift（ETRemoteIRSync）。
+//
+//  **プリセットは向きで扱いが違う。**
+//    PC → EffectDeck  PC のホスト名のフォルダが PC の写し。つないだ直後と、PC が presetsChanged を
+//                     送るたび（hello の sync: 1。PC が sync1 のとき）に丸ごと入れ替える。
+//                     フォルダの中だけ足す・上書き・消す（PresetStoreCore.mirrorFolder）。
+//                     フォルダの中を手元で直しても次の入れ替えで PC のものに戻る
+//    EffectDeck → PC  足すだけ。同じ名前で中身が違えば `名前 (iPad)`（ETRemotePresetSync）。PC にはフォルダが無い。
+//                     PC の写しのフォルダは送り返さない
+//  iCloud へは今までどおり PresetStoreCore が触った名前だけ当てる（鎖の persist() の門とは別）。
 //
 //  つなぎ先: ws://<host>:47300/?t=<token>（ETRemoteAddress）。トークンが違うと PC は
 //  コード 4401 で閉じるので、その場合は再接続しない（繰り返しても通らない）。
-//  PC の画面の QR（http://host:port/?t=…。ws:// も読む）を読んだら pair(_:) が控えてつなぐ。
+//  PC の画面の QR（http://host:port/?t=…。ws:// も読む）をアプリの中の読み取り（RemoteScannerView）で読んだら
+//  pair(_:) が控えてつなぐ（入口はツールバーのアイコン・帯・設定画面の Remote Control の行）。
 //
 //  **入切のスイッチは無い。**QR を読む（pair）か Connect でつなぎ、Disconnect で切る。
 //  Disconnect しなければ、起動のたびに控えた PC へつなぎ直す（Preferences.remoteWantsConnection）。
@@ -27,7 +37,7 @@
 //    chain       鎖ごと入れ替え。並び・入切・バス・段の中身が変わったとき
 //    params      1 段のパラメータ。つまみ操作。30 Hz でまとめ、段ごとに最後の値だけ送る
 //    bypass      全体のバイパス
-//    listPresets / getPreset / savePreset   つないだ直後のプリセットの足し合わせ
+//    listPresets / getPreset / savePreset   PC のプリセットの写し（presetsChanged でも）と、PC への足し込み
 //    listIRs / getIR / putIR               同じく IR。512 KiB ずつ base64 で
 //    telemetry   PC のアナライザの測定値を受ける入切（Mirror Analyzers）。受けた枠は Telemetry へ差し込む
 //                PC が overlays を持てば PEQ の重ね表示の前後も受け、手元の探りの tap へ差し込む
@@ -171,6 +181,12 @@ final class RemoteMirror: ObservableObject {
     /// 起動したときに退避が残っていた。restore() が済んだら戻す。
     private var pendingRestore = false
     private var syncTask: Task<Void, Never>?
+    /// PC が presetsChanged を送ってから写し直すまで少し待つ（続けて保存されても 1 回で済ませる）。
+    private var presetMirrorTask: Task<Void, Never>?
+    /// 写しの取得を始めるたびに進める番号と、入れ替えに使った一番新しい番号。
+    /// 先に始めた取得が後から終わっても、新しい取得の結果を古いもので上書きしない。
+    private var mirrorTicket = 0
+    private var mirroredTicket = 0
 
     // MARK: PC のアナライザの測定値
 
@@ -235,7 +251,7 @@ final class RemoteMirror: ObservableObject {
     }
 
     /// PC の QR の接続先（http://host:port/?t=…。前の形の ws:// も）。読めたら控えてつなぐ。
-    /// PipelineView の onOpenURL と、アプリの中の読み取り（RemoteScannerView）から。
+    /// アプリの中の読み取り（RemoteScannerView）から。
     /// つないでいる最中でも、新しい PC へつなぎ直す（apply が先に切って手元の鎖を戻す）。
     @discardableResult
     func pair(_ url: URL) -> Bool {
@@ -383,6 +399,8 @@ final class RemoteMirror: ObservableObject {
         followTask = nil
         syncTask?.cancel()
         syncTask = nil
+        presetMirrorTask?.cancel()
+        presetMirrorTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         sentForm = nil
@@ -734,6 +752,10 @@ final class RemoteMirror: ObservableObject {
             receiveTelemetry(object)
             return
         }
+        if op == "presetsChanged" {
+            presetsChangedOnPC()
+            return
+        }
         guard op == "state", isRemote else { return }
         guard ETRemoteStateFilter.follows(origin: object["origin"] as? String, seq: n, ours: ours) else { return }
         // 手元のコマンドが PC に着く前の形かもしれない。着いた後の state（自分の seq）は上で捨てる。
@@ -876,27 +898,105 @@ final class RemoteMirror: ObservableObject {
         return ETShareLink.parse(text, catalog: ETCatalog)
     }
 
-    // MARK: - プリセットと IR の足し合わせ
+    // MARK: - プリセット（PC の写し・PC への足し込み）と IR の足し合わせ
+
+    /// 取れた PC のプリセット。
+    private struct PCPresets {
+        /// PC の名前 → 段（手元で読めたもの）。
+        var items: [String: [PipelineStore.Loaded]] = [:]
+        /// 一覧には在ったが取れなかった（切れた・時間切れ・断られた）。写しの今ある分は消さない。
+        var unreadable: Set<String> = []
+        /// 取れたが手元の効果で 1 段も読めなかった。写しには入れない。
+        var unrepresentable: Set<String> = []
+
+        /// 中身が分からない PC の名前。同じ名前で送って上書きしないよう、PC に在る扱いにする。
+        var opaque: Set<String> { unreadable.union(unrepresentable) }
+    }
+
+    /// 中身が分からない PC のプリセットの canonical の代わり（どの手元の中身とも違う）。
+    private static let opaqueCanon = "\u{0}opaque"
+
+    private func remoteAlive(_ gen: Int) -> Bool {
+        gen == generation && isRemote && !Task.isCancelled
+    }
+
+    /// PC のプリセットの写しのフォルダ。決まらなければ空。
+    private func presetMirrorFolder() -> String {
+        ETRemotePresetMirror.folderName(hostName: host?.hostName, address: Preferences.shared.remoteAddress)
+    }
+
+    /// listPresets → getPreset で全部取る。**一覧が取れなければ nil**（写しを消さないため。空の一覧とは別）。
+    private func fetchPCPresets(generation gen: Int) async -> PCPresets? {
+        guard let list = await request(["op": "listPresets"], reply: "presets"),
+              let names = list["names"] as? [String] else { return nil }
+        var result = PCPresets()
+        for name in names {
+            guard remoteAlive(gen) else { return nil }
+            guard let reply = await request(["op": "getPreset", "name": name], reply: "preset") else {
+                result.unreadable.insert(name)
+                continue
+            }
+            let loaded = items(from: reply["pipeline"])
+            if loaded.isEmpty {
+                result.unrepresentable.insert(name)
+            } else {
+                result.items[name] = loaded
+            }
+        }
+        return remoteAlive(gen) ? result : nil
+    }
+
+    /// PC のプリセットを取って、ホスト名のフォルダを丸ごとその写しにする。取れたものを返す（取れなければ nil）。
+    /// 取得の途中で別の取得が先に入れ替えていたら、古いほうは入れ替えずに取れたものだけ返す。
+    private func fetchAndMirrorPresets(generation gen: Int) async -> PCPresets? {
+        mirrorTicket += 1
+        let ticket = mirrorTicket
+        guard let pc = await fetchPCPresets(generation: gen) else { return nil }
+        let folder = presetMirrorFolder()
+        if ticket > mirroredTicket, !folder.isEmpty {
+            mirroredTicket = ticket
+            var forms: [String: [[String: Any]]] = [:]
+            for (name, loaded) in pc.items { forms[name] = PipelineStore.shortForm(loaded) }
+            let changed = PresetStore.shared.mirrorFolder(folder, incoming: forms, unreadable: pc.unreadable)
+            if changed.written > 0 || changed.deleted > 0 {
+                log.notice("remote: プリセットの写し \(folder, privacy: .public) +\(changed.written)/-\(changed.deleted)")
+            }
+        }
+        return pc
+    }
+
+    /// PC が presetsChanged を送ってきた（hello の sync: 1 を受けた PC だけ）。少し待って写し直す。
+    private func presetsChangedOnPC() {
+        guard isRemote, ETRemotePresetMirror.isLive(host) else { return }
+        presetMirrorTask?.cancel()
+        let gen = generation
+        presetMirrorTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self, self.remoteAlive(gen) else { return }
+            _ = await self.fetchAndMirrorPresets(generation: gen)
+        }
+    }
 
     private func syncAll(generation gen: Int) async {
-        func alive() -> Bool { gen == generation && isRemote && !Task.isCancelled }
+        func alive() -> Bool { remoteAlive(gen) }
         progress = "Syncing"
         defer { if gen == generation { progress = nil } }
 
         // --- プリセット ---
+        // PC → EffectDeck は写し（ホスト名のフォルダ）。EffectDeck → PC は足すだけ。
         let store = PresetStore.shared
-        var pcItems: [String: [PipelineStore.Loaded]] = [:]
+        let mirrorFolder = presetMirrorFolder()
         var pcCanon: [String: String] = [:]
-        if let list = await request(["op": "listPresets"], reply: "presets"),
-           let names = list["names"] as? [String] {
-            for name in names {
-                guard alive() else { return }
-                guard let reply = await request(["op": "getPreset", "name": name], reply: "preset") else { continue }
-                let loaded = items(from: reply["pipeline"])
+        var pcRead = false
+        if let pc = await fetchAndMirrorPresets(generation: gen) {
+            pcRead = true
+            for (name, loaded) in pc.items {
                 // 手元の保存と同じ整え方の名前で比べる。整えると空になる名前は受けない。
-                guard !loaded.isEmpty, let key = store.savedName(for: name) else { continue }
-                pcItems[key] = loaded
+                guard let key = store.savedName(for: name) else { continue }
                 pcCanon[key] = ETRemotePresetSync.canonical(ETRemoteProjection.project(loaded, host: host).pipeline)
+            }
+            for name in pc.opaque {
+                if let key = store.savedName(for: name) { pcCanon[key] = Self.opaqueCanon }
             }
         }
         guard alive() else { return }
@@ -904,6 +1004,8 @@ final class RemoteMirror: ObservableObject {
         var localCanon: [String: String] = [:]
         var blocked: Set<String> = []
         for name in store.names {
+            // PC の写しのフォルダは PC のもの。送り返さない。
+            if !mirrorFolder.isEmpty, ETUserPresetName.folder(name) == mirrorFolder { continue }
             let loaded = store.load(name)
             guard !loaded.isEmpty else { continue }
             localItems[name] = loaded
@@ -913,7 +1015,8 @@ final class RemoteMirror: ObservableObject {
                 blocked.insert(name)
             }
         }
-        let presetPlan = ETRemotePresetSync.plan(pc: pcCanon, local: localCanon, localBlocked: blocked)
+        // PC の一覧が取れなかったときは何も送らない（空の一覧と取り違えて全部送らない）。
+        let toPC = pcRead ? ETRemotePresetSync.plan(pc: pcCanon, local: localCanon, localBlocked: blocked) : []
 
         // --- IR ---
         let library = IRLibrary.shared
@@ -925,8 +1028,7 @@ final class RemoteMirror: ObservableObject {
         guard alive() else { return }
         let irPlan = ETRemoteIRSync.plan(pc: pcIRs, local: library.entries.map(\.id))
 
-        let total = presetPlan.toLocal.count + presetPlan.toPC.count
-            + irPlan.download.count + irPlan.upload.count
+        let total = toPC.count + irPlan.download.count + irPlan.upload.count
         var done = 0
         func step() {
             done += 1
@@ -934,12 +1036,7 @@ final class RemoteMirror: ObservableObject {
         }
         if total > 0 { progress = "Syncing 0/\(total)" }
 
-        for copy in presetPlan.toLocal {
-            guard alive() else { return }
-            if let loaded = pcItems[copy.source] { store.save(copy.target, items: loaded) }
-            step()
-        }
-        for copy in presetPlan.toPC {
+        for copy in toPC {
             guard alive() else { return }
             if let loaded = localItems[copy.source] {
                 let pipeline = ETRemoteProjection.project(loaded, host: host).pipeline
@@ -964,7 +1061,7 @@ final class RemoteMirror: ObservableObject {
             await upload(id)
             step()
         }
-        log.notice("remote: 足し合わせ済み プリセット +\(presetPlan.toLocal.count)/→\(presetPlan.toPC.count) IR +\(irPlan.download.count)/→\(irPlan.upload.count)")
+        log.notice("remote: 足し合わせ済み プリセット →\(toPC.count) IR +\(irPlan.download.count)/→\(irPlan.upload.count)")
     }
 
     /// PC の IR を 1 本取って置き場へ入れる。**鍵が合わなければ入れない。**

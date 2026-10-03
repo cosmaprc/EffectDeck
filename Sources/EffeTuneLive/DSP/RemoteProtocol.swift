@@ -221,31 +221,29 @@ enum ETRemoteStateFilter {
     }
 }
 
-/// プリセットの足し合わせ（つないだ瞬間に 1 回）。**消さない・上書きしない。**
+/// EffectDeck → PC のプリセットの足し合わせ（つないだ瞬間に 1 回）。**消さない・上書きしない。**
+/// PC → EffectDeck は足し合わせでなく、PC のホスト名のフォルダへの写し（ETRemotePresetMirror）。
 ///
 /// 中身は canonical（ショート形式を鍵の順を固定した JSON）で比べる。両側とも同じ読み書き
 /// （ETShareLink.parse → ETRemoteProjection.project）を通してから比べるので、
 /// 数の表し方（0.1 と 0.10000000149）の違いでは「違う」にならない。
 ///
-/// 名前が同じで中身が違えば、相手側に `名前 (PC)` / `名前 (iPad)` で置く。空いていなければ
-/// `名前 (PC 2)` …。**何度つないでも増えない**ように、次の 2 つは写さない:
-///   - 相手に同じ名前・同じ中身が在る（付け足した名前のほうも含めて）
-///   - 自分が前に相手へ置いた写し（`名前 (iPad)` が PC に在り、その中身が手元の `名前` と同じ）
+/// PC のプリセットにはフォルダが無いので、手元のフォルダの名前（`Rock/Heavy`）は PC では
+/// そのまま 1 本の名前になる。名前が同じで中身が違えば、PC に `名前 (iPad)` で置く。空いていなければ
+/// `名前 (iPad 2)` …。**何度つないでも増えない**ように、次の 2 つは送らない:
+///   - PC に同じ名前・同じ中身が在る（付け足した名前のほうも含めて）
+///   - 前に送った写し（`名前 (iPad)` が PC に在り、その中身が手元の `名前` と同じ）
 enum ETRemotePresetSync {
 
-    static let pcTag = "PC"
     static let localTag = "iPad"
+    /// 前の版が手元に作った `名前 (PC)`。もう作らないが、残っているものを PC へ送り返さないために読む。
+    static let legacyPCTag = "PC"
 
     struct Copy: Equatable {
-        /// 元の側での名前。
+        /// 手元での名前。
         let source: String
-        /// 置く側での名前。
+        /// PC に置く名前。
         let target: String
-    }
-
-    struct Plan: Equatable {
-        var toLocal: [Copy] = []
-        var toPC: [Copy] = []
     }
 
     static func canonical(_ pipeline: [[String: Any]]) -> String {
@@ -254,12 +252,12 @@ enum ETRemotePresetSync {
         return text
     }
 
-    /// `名前 (PC)` / `名前 (iPad 3)` を（名前, "PC"）へ分ける。付け足しが無ければ nil。
+    /// `名前 (iPad)` / `名前 (iPad 3)` / `名前 (PC)` を（名前, タグ）へ分ける。付け足しが無ければ nil。
     static func split(_ name: String) -> (base: String, tag: String)? {
         guard name.hasSuffix(")"), let open = name.range(of: " (", options: .backwards) else { return nil }
         let inner = name[open.upperBound..<name.index(before: name.endIndex)]
         let words = inner.split(separator: " ")
-        guard let first = words.first, [pcTag, localTag].contains(String(first)),
+        guard let first = words.first, [localTag, legacyPCTag].contains(String(first)),
               words.count <= 2 else { return nil }
         if words.count == 2 {
             guard let n = Int(words[1]), n >= 2 else { return nil }
@@ -267,44 +265,58 @@ enum ETRemotePresetSync {
         return (String(name[name.startIndex..<open.lowerBound]), String(first))
     }
 
+    /// PC へ送るもの。
     /// - Parameters:
     ///   - pc: PC のプリセット（手元の名前の整え方に寄せた名前 → canonical）
-    ///   - local: 手元のプリセット（名前 → canonical）
+    ///   - local: 手元のプリセット（名前 → canonical）。**PC の写しのフォルダは入れない**（PC のものを返さない）
     ///   - localBlocked: PC へ送らない手元のプリセット（AU / JSFX の段を持つもの）
     static func plan(pc: [String: String], local: [String: String],
-                     localBlocked: Set<String> = []) -> Plan {
-        var plan = Plan()
-        var localAfter = local
-        for name in pc.keys.sorted() {
-            guard let content = pc[name] else { continue }
-            if let s = split(name), s.tag == localTag, local[s.base] == content { continue }
-            if let target = place(name, content, tag: pcTag, in: &localAfter) {
-                plan.toLocal.append(Copy(source: name, target: target))
-            }
-        }
+                     localBlocked: Set<String> = []) -> [Copy] {
+        var copies: [Copy] = []
         var pcAfter = pc
         for name in local.keys.sorted() where !localBlocked.contains(name) {
             guard let content = local[name] else { continue }
-            if let s = split(name), s.tag == pcTag, pc[s.base] == content { continue }
-            if let target = place(name, content, tag: localTag, in: &pcAfter) {
-                plan.toPC.append(Copy(source: name, target: target))
+            if let s = split(name), pc[s.base] == content { continue }
+            if let target = place(name, content, in: &pcAfter) {
+                copies.append(Copy(source: name, target: target))
             }
         }
-        return plan
+        return copies
     }
 
     /// 置く名前。同じ中身がもう在れば nil。
-    private static func place(_ name: String, _ content: String, tag: String,
+    private static func place(_ name: String, _ content: String,
                               in existing: inout [String: String]) -> String? {
         var candidate = name
         var n = 1
         while let there = existing[candidate] {
             if there == content { return nil }
-            candidate = n == 1 ? "\(name) (\(tag))" : "\(name) (\(tag) \(n))"
+            candidate = n == 1 ? "\(name) (\(localTag))" : "\(name) (\(localTag) \(n))"
             n += 1
         }
         existing[candidate] = content
         return candidate
+    }
+}
+
+/// PC → EffectDeck のプリセット。**PC のホスト名のフォルダを PC の写しにする。**
+/// 中身は丸ごと入れ替える（そのフォルダの中だけ足す・上書き・消す。ほかのフォルダと直下には触らない）。
+/// 入れ替えの本体は PresetStoreCore.mirrorFolder（PresetFolderMirror.plan）。ここはフォルダの名前だけ決める。
+enum ETRemotePresetMirror {
+
+    /// フォルダの名前。PC のホスト名（state の host）、無ければつなぎ先の host。
+    /// `/` は落とす（入れ子は作らない）。決まらなければ空（写さない）。
+    static func folderName(hostName: String?, address: String) -> String {
+        for candidate in [hostName, ETRemoteAddress.parse(address)?.host] {
+            let clean = ETUserPresetName.clean(candidate ?? "")
+            if !clean.isEmpty { return clean }
+        }
+        return ""
+    }
+
+    /// PC が presetsChanged を送るのは hello に sync: 1 を載せた接続だけ。それを受けられる PC（sync1）か。
+    static func isLive(_ info: ETRemoteHostInfo?) -> Bool {
+        info?.supports("sync1") == true
     }
 }
 
@@ -524,6 +536,8 @@ struct ETRemoteHostInfo: Equatable {
     var features: Set<String>
     var dsp: String?
     var effects: Set<String>?
+    /// PC のホスト名（state の host。sync1 の PC だけ。os.hostname()）。プリセットのフォルダの名前になる。
+    var hostName: String?
 
     init(state: [String: Any]) {
         name = Self.text(state["appName"]) ?? "EffeTune"
@@ -532,6 +546,7 @@ struct ETRemoteHostInfo: Equatable {
         features = Set(state["features"] as? [String] ?? [])
         dsp = Self.text(state["dsp"])
         effects = (state["effects"] as? [String]).map(Set.init)
+        hostName = Self.text(state["host"])
     }
 
     private static func text(_ value: Any?) -> String? {
@@ -617,7 +632,9 @@ struct ETRemoteMismatch: Equatable {
 enum ETRemoteHello {
     /// dsp は積んでいる EffeTune の dsp/ の版（ETUpstreamVersion）。PC が食い違いを出せるように添える。
     static func message(info: [String: Any]?, dsp: String = ETUpstreamVersion) -> [String: Any] {
-        var m: [String: Any] = ["op": "hello", "v": 1, "app": "EffectDeck"]
+        // sync: 1 は「プリセットが変わったら presetsChanged を送って」の申し込み（remote-v1 の sync1）。
+        // 古い PC は知らない字として読み捨てる。
+        var m: [String: Any] = ["op": "hello", "v": 1, "app": "EffectDeck", "sync": 1]
         if !dsp.isEmpty { m["dsp"] = dsp }
         if let v = info?["CFBundleShortVersionString"] as? String, !v.isEmpty { m["version"] = v }
         if let b = info?["CFBundleVersion"] as? String, !b.isEmpty { m["build"] = b }
