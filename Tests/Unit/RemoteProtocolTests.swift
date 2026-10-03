@@ -118,6 +118,48 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(ETRemoteProjection.params(for: external(inputBus: 0, outputBus: 0)))
     }
 
+    // MARK: - PC の版
+
+    func testHostInfoOfANewHost() {
+        let info = ETRemoteHostInfo(state: ["app": "2.11.0", "appName": "EffeTune", "build": "abc1234",
+                                            "features": ["origin", "telemetry", "overlays"]])
+        XCTAssertEqual(info.name, "EffeTune")
+        XCTAssertEqual(info.label, "2.11.0 (abc1234)")
+        XCTAssertTrue(info.supports("telemetry"))
+        XCTAssertTrue(info.supports("overlays"))
+    }
+
+    func testHostInfoOfAnOldHostWithoutTelemetry() {
+        let info = ETRemoteHostInfo(state: ["app": "2.11.0", "features": ["origin", "savePreset", "irSync"]])
+        XCTAssertEqual(info.name, "EffeTune")
+        XCTAssertEqual(info.label, "2.11.0")
+        XCTAssertFalse(info.supports("telemetry"))
+        XCTAssertEqual(info.unsupportedText, "Not supported by EffeTune 2.11.0 on the PC")
+    }
+
+    func testHostInfoWithoutAnyVersionFields() {
+        let info = ETRemoteHostInfo(state: [:])
+        XCTAssertEqual(info.label, "Unknown")
+        XCTAssertFalse(info.supports("telemetry"))
+        XCTAssertEqual(info.unsupportedText, "Not supported by EffeTune on the PC")
+    }
+
+    func testHelloCarriesOurVersionWhenKnown() {
+        let m = ETRemoteHello.message(info: ["CFBundleShortVersionString": "2026.09.28", "CFBundleVersion": "31"])
+        XCTAssertEqual(m["op"] as? String, "hello")
+        XCTAssertEqual(m["v"] as? Int, 1)
+        XCTAssertEqual(m["app"] as? String, "EffectDeck")
+        XCTAssertEqual(m["version"] as? String, "2026.09.28")
+        XCTAssertEqual(m["build"] as? String, "31")
+    }
+
+    func testHelloLeavesOutWhatItCannotFind() {
+        let m = ETRemoteHello.message(info: nil)
+        XCTAssertEqual(m["app"] as? String, "EffectDeck")
+        XCTAssertNil(m["version"])
+        XCTAssertNil(m["build"])
+    }
+
     // MARK: - 接続先
 
     func testAddressHostPortToken() {

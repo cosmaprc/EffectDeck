@@ -165,6 +165,10 @@ final class RemoteMirror: ObservableObject {
 
     // MARK: PC のアナライザの測定値
 
+    /// つないでいる PC の EffeTune（hello の返事から）。つながっていないときは nil。
+    @Published private(set) var host: ETRemoteHostInfo?
+    /// つながっていて、PC が telemetry を持っていない（古い EffeTune）。Mirror Analyzers を無効にして理由を出す。
+    var telemetryUnsupported: Bool { isRemote && (host.map { !$0.supports("telemetry") } ?? false) }
     /// PC が hello の features に "telemetry" を出した。
     private var serverTelemetry = false
     /// PC が hello の features に "overlays" を出した（PEQ の重ね表示の前後の枠を送れる）。
@@ -306,15 +310,16 @@ final class RemoteMirror: ObservableObject {
         // 送りの順は保たれる。open を待たずに積んでよい（URLSession が開いてから流す）。
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let state = await self.request(["op": "hello", "app": "EffectDeck", "v": 1],
+            let state = await self.request(ETRemoteHello.message(info: Bundle.main.infoDictionary),
                                            reply: "state", timeout: 20)
             guard gen == self.generation, let state else { return }
             self.status = .connected
             self.tokenRejected = false
             self.backoff = 1
-            let features = state["features"] as? [String] ?? []
-            self.serverTelemetry = features.contains("telemetry")
-            self.serverOverlays = features.contains("overlays")
+            let info = ETRemoteHostInfo(state: state)
+            self.host = info
+            self.serverTelemetry = info.supports("telemetry")
+            self.serverOverlays = info.supports("overlays")
             self.enterRemote(state)
         }
     }
@@ -343,6 +348,7 @@ final class RemoteMirror: ObservableObject {
         progress = nil
         // 接続ごと消えたので PC へは送らない（送れない）。映していた段は手元の枠へ戻す。
         // 退避を戻す（leaveRemote）より先に外す。戻した鎖で refreshMirrored が走らないように。
+        host = nil
         serverTelemetry = false
         serverOverlays = false
         telemetryWanted = false

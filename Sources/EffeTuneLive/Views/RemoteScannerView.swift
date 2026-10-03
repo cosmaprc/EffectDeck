@@ -141,8 +141,25 @@ struct RemoteRows: View {
                     .foregroundStyle(.secondary)
             }
         }
+        if let host = mirror.host {
+            LabeledContent(host.name) {
+                Text(host.label)
+                    .foregroundStyle(.secondary)
+            }
+        }
         // 保存する設定なので、つながっていなくても出して触れるようにしておく。
-        Toggle("Mirror Analyzers", isOn: $prefs.remoteMirrorAnalyzers)
+        // PC の EffeTune が測定値を送れない版のときだけ、つながっている間は触れなくして理由を添える。
+        Toggle(isOn: $prefs.remoteMirrorAnalyzers) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Mirror Analyzers")
+                if mirror.telemetryUnsupported, let host = mirror.host {
+                    Text(host.unsupportedText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .disabled(mirror.telemetryUnsupported)
         Button("Scan QR Code") { scanning = true }
             .sheet(isPresented: $scanning) {
                 RemoteScannerView { url in

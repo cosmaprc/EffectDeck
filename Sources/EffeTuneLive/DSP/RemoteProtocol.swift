@@ -496,3 +496,55 @@ enum ETRemoteTelemetry {
         UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24
     }
 }
+
+/// つないだ PC の EffeTune（hello の返事の state）。版の見せ方と、PC が持つ機能の判定。
+///
+/// **何ができるかは features で決める。版の数字は比べない**（表示だけに使う）。
+/// 古い PC は appName / build を出さない。その場合の名前は "EffeTune"、版は state の "app"。
+struct ETRemoteHostInfo: Equatable {
+    var name: String
+    var version: String?
+    var build: String?
+    var features: Set<String>
+
+    init(state: [String: Any]) {
+        name = Self.text(state["appName"]) ?? "EffeTune"
+        version = Self.text(state["app"])
+        build = Self.text(state["build"])
+        features = Set(state["features"] as? [String] ?? [])
+    }
+
+    private static func text(_ value: Any?) -> String? {
+        guard let s = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        return s
+    }
+
+    /// "2.11.0 (db06db0e)" / "2.11.0" / "Unknown"
+    var label: String {
+        switch (version, build) {
+        case let (v?, b?): return "\(v) (\(b))"
+        case let (v?, nil): return v
+        case let (nil, b?): return "(\(b))"
+        case (nil, nil): return "Unknown"
+        }
+    }
+
+    func supports(_ feature: String) -> Bool { features.contains(feature) }
+
+    /// 機能が無いときの一言。版が分からなければ版を省く。
+    var unsupportedText: String {
+        guard let version else { return "Not supported by \(name) on the PC" }
+        return "Not supported by \(name) \(version) on the PC"
+    }
+}
+
+/// つないだ直後に送る hello。自分の名前と版を添える（PC の Remote Control の窓に出る）。
+/// 版は Info.plist から。引数にしてあるのは、テストが plist を差し替えて呼べるように。
+enum ETRemoteHello {
+    static func message(info: [String: Any]?) -> [String: Any] {
+        var m: [String: Any] = ["op": "hello", "v": 1, "app": "EffectDeck"]
+        if let v = info?["CFBundleShortVersionString"] as? String, !v.isEmpty { m["version"] = v }
+        if let b = info?["CFBundleVersion"] as? String, !b.isEmpty { m["build"] = b }
+        return m
+    }
+}
