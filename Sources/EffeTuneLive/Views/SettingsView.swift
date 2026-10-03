@@ -32,13 +32,12 @@ struct SettingsView: View {
     /// 下位画面へ押し出すと、よく見る Status まで 1 タップ遠くなる。
     /// バーの真ん中でセグメントを切り替える形なら、どちらも起きない。
     enum Pane: String, CaseIterable, Identifiable {
-        case audio, effetune, about
+        case audio, about
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .audio:    return "Audio"
-            case .effetune: return "EffeTune"
-            case .about:    return "About"
+            case .audio:  return "Audio"
+            case .about:  return "About"
             }
         }
     }
@@ -63,10 +62,6 @@ struct SettingsView: View {
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
                     DetailsSection(io: io, dsp: dsp, prefs: prefs)
-                case .effetune:
-                    // PC の EffeTune を操る設定。音の設定ではないので Audio に混ぜない。
-                    // StatusSection（3.3Hz で作り直される）とも別の面なので、QR の読み取りは閉じない。
-                    RemoteSection()
                 case .about:
                     about
                 }
@@ -403,18 +398,6 @@ private struct ETReportView: View {
 }
 
 // MARK: - いま何が起きているか
-
-/// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
-/// 行はツールバーのアイコンから開くシートと同じ RemoteRows。
-private struct RemoteSection: View {
-    var body: some View {
-        Section {
-            RemoteRows()
-        } header: {
-            Text("Remote Control")
-        }
-    }
-}
 
 /// io を観測する 1 つ目の閉じ込め先。
 /// 3.3Hz で作り直されるが、中は文字だけなので提示の途中のものが無い。

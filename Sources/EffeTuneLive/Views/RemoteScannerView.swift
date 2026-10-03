@@ -3,7 +3,7 @@
 //
 //    - RemoteToolbarButton     鎖の画面のツールバーのアイコン。押すと RemotePanelView を開く。
 //                              入切はここでしない。状態（入・つなぎ中・つながった）だけを絵で見せる
-//    - RemotePanelView         アイコンから開くシート。行は RemoteRows（Settings の Remote Control 節と同じもの）
+//    - RemotePanelView         アイコンから開くシート。行は RemoteRows。入口はツールバーのアイコンと Remote Control の帯だけ（設定画面には置かない）
 //    - RemoteRows              Remote Control の入切・Status・つなぎ先・Mirror Analyzers・QR の読み取り・Forget
 //    - RemoteScannerView       PC の画面の QR（http://host:port/?t=…）を読む。VisionKit の
 //                              DataScannerViewController（公開 API）。そのリンク以外の QR は拾わない
@@ -90,7 +90,7 @@ struct RemoteStatusSlot: View {
 
 // MARK: - 設定のシート
 
-/// アイコンから開くシート。行は Settings の Remote Control 節と同じ RemoteRows。
+/// アイコンから開くシート。行は RemoteRows。設定画面には置かない（音の設定でも、EffeTune という面でもない）。
 struct RemotePanelView: View {
     @Environment(\.dismiss) private var dismiss
 
