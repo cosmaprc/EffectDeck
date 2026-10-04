@@ -1,9 +1,8 @@
 //  OutputDeviceTests.swift
-//  出力先ごとのプリセットの判断（ETOutputDevice / ETDeviceSwitch）。
+//  出力先の鍵と切り替える時機（ETOutputDevice / ETDeviceSwitch）。出力補正の入れ替えの土台。
 //
-//  壊れると: 別のヘッドセットが同じ鍵になって他人の設定を読み込んだり、
-//  揺れのたびに鎖を入れ替えたり、組み直しの最中に入れ替えて音が途切れたり、
-//  差し直しただけで手で直した鎖が消える。
+//  壊れると: 別のヘッドセットが同じ鍵になって他人の補正を読み込んだり、
+//  揺れのたびに補正を入れ替えたり、組み直しの最中に入れ替えて音が途切れたりする。
 
 import XCTest
 
@@ -237,52 +236,5 @@ final class OutputDeviceTests: XCTestCase {
         XCTAssertEqual(ETDeviceSwitch.stableSeconds, 2)
         XCTAssertEqual(ETDeviceSwitch.afterStartSeconds, 1.5)
         XCTAssertEqual(ETDeviceSwitch.afterEscapeSeconds, ETRouteEscape.retry)
-    }
-
-    // MARK: - 切り替えた後
-
-    func testActionUnbound() {
-        XCTAssertEqual(ETDeviceSwitch.action(device: "speaker", bound: nil, origin: nil), .unbound)
-        XCTAssertEqual(ETDeviceSwitch.action(device: "speaker", bound: nil, origin: "speaker"), .unbound)
-    }
-
-    func testActionKeepsOwnOrigin() {
-        XCTAssertEqual(ETDeviceSwitch.action(device: "wired", bound: "Live/IEM", origin: "wired"), .keep)
-    }
-
-    func testActionLoadsWhenOriginDiffers() {
-        XCTAssertEqual(ETDeviceSwitch.action(device: "wired", bound: "Live/IEM", origin: nil), .load("Live/IEM"))
-        XCTAssertEqual(ETDeviceSwitch.action(device: "wired", bound: "Live/IEM", origin: "speaker"), .load("Live/IEM"))
-    }
-
-    // MARK: - sameForm
-
-    func testSameFormIgnoresKeyOrder() {
-        // 入れた順が違っても内容が同じなら同じ。
-        var a: [String: Any] = [:]
-        a["id"] = "Volume"; a["en"] = true; a["vl"] = 0
-        var b: [String: Any] = [:]
-        b["vl"] = 0; b["en"] = true; b["id"] = "Volume"
-        XCTAssertTrue(ETDeviceSwitch.sameForm([a], [b]))
-        b["vl"] = 1
-        XCTAssertFalse(ETDeviceSwitch.sameForm([a], [b]))
-    }
-
-    func testSameFormCountDiffers() {
-        let a: [String: Any] = ["id": "Volume"]
-        XCTAssertFalse(ETDeviceSwitch.sameForm([a], [a, a]))
-        XCTAssertFalse(ETDeviceSwitch.sameForm([], [a]))
-    }
-
-    func testSameFormEmptyIsSame() {
-        XCTAssertTrue(ETDeviceSwitch.sameForm([], []))
-    }
-
-    func testSameFormInvalidJSONIsFalse() {
-        // Date はJSONにできない。data(withJSONObject:) に渡すとトラップするので、渡す前に弾く。
-        let bad: [[String: Any]] = [["x": Date()]]
-        XCTAssertFalse(ETDeviceSwitch.sameForm(bad, bad))
-        XCTAssertFalse(ETDeviceSwitch.sameForm(bad, []))
-        XCTAssertFalse(ETDeviceSwitch.sameForm([], bad))
     }
 }

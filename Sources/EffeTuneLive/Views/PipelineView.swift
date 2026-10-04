@@ -43,6 +43,8 @@ struct PipelineView: View {
     /// 画面に要る 3 つの値だけを、下で publisher から @State へ写す。
     private let io = AudioIO.shared
     @StateObject private var dsp = EffeTuneDSP.shared
+    /// 出力補正の入切と出力先。publish はまれなので本体で見てよい（AudioIO とは違う）。
+    @ObservedObject private var oc = OutputCorrection.shared
 
     /// 出しているシート。
     ///
@@ -71,6 +73,9 @@ struct PipelineView: View {
     /// ピッカーが本当に画面に出ているか（シートでもpopoverでも）。ETPickerHostが立てる。
     /// sheetが.pickerでも、同じ回に頼んだだけでまだ出ていないことがある（drainShared）。
     @State private var pickerOnScreen = false
+    /// ピッカーで選んだものを足す先。出力補正の見出しから開いたときだけ .correction。
+    /// ピッカーが閉じたら .main へ戻す（ETPickerHost の onDisappear と onChange(of: sheet)）。
+    @State private var pickerTarget: ETChainPart = .main
     /// 「Reset chain」の確認を出しているか。
     /// ツールバーは ToolbarContent で View ではないから .confirmationDialog を
     /// 持てない。押されたことだけ Binding で受け取り、出すのは下の List 側。
@@ -82,6 +87,8 @@ struct PipelineView: View {
     /// 開いたリンクが読めなかった（鎖が空、/j の中身が壊れている）。pluginError と同じ .alert で出す
     /// （同じ View に .alert を 2 枚積むと先に付いたほうが出なくなる）。
     @State private var linkError: String?
+    /// 出力補正へ写そうとしたプリセットが読めなかった。同じ .alert で出す。
+    @State private var presetError: String?
     /// 開いたリンクの鎖。**入れ替えは取り消せないので一度確かめる**（Reset と同じ形）。
     /// タップ 1 回で今の鎖が消えると、押し間違いで積み上げたものを失う。
     @State private var pendingChain: [PipelineStore.Loaded]?
@@ -94,6 +101,13 @@ struct PipelineView: View {
     /// 切ってある Section を消そうとしている行。消すと配下がその場で鳴り出すので、
     /// 一度だけ確かめる。配下の ON/OFF は書き換えない（about がそう約束している）。
     @State private var confirmingSectionRemoval: UUID?
+
+    /// 出力補正の確かめ。中身の在る補正をプリセットで入れ替える・空にする。
+    private enum CorrectionAsk {
+        case replace(String, [PipelineStore.Loaded])
+        case clear
+    }
+    @State private var pendingCorrection: CorrectionAsk?
     /// 開いている段。中身は EffeTuneDSP が持っている（足す・入れ替えるを握っているのが
     /// あちらで、端末に残すのも persist() なので）。Section もここに入り、
     /// その場合は自分のパラメータではなく配下の行が消える（下の rows）。
@@ -209,6 +223,9 @@ struct PipelineView: View {
 
     /// 鎖の中での座標。行の位置も指の位置もこれで測る。
     private static let chainSpace = "chain"
+    /// 出力補正の見出しの矩形を、行の矩形と同じ箱（geometry）へ入れるときの鍵。
+    /// 末尾の帯の高さ（tailHeight）が見出しのぶんも引くように。
+    private static let correctionHeaderID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
     private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
@@ -228,6 +245,8 @@ struct PipelineView: View {
         // 「画面の行数」の両方を要るので、行ごとに組み直すと本数ぶん無駄になる。
         // 2列では左の一覧も同じ並びから作る。onMoveの数え方がmove(_:to:)と揃う。
         let visible = rows
+        // 出力補正の行。層を出していないときは空。
+        let corrections = correctionShown ? rows(of: .correction) : []
 
         // **GroupではなくZStack。**本物の器なので、onAppear / onDisappearは1回ずつ来る。
         // Groupは枝ごとに配るので、並べ方が切り替わると、新しい枝が汲み始めた後に
@@ -236,9 +255,9 @@ struct PipelineView: View {
         // 並べ方を切り替えても消えないように。
         ZStack {
             if usesSplit {
-                split(visible)
+                split(visible, corrections)
             } else {
-                stack(visible)
+                stack(visible, corrections)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { updateWideEnough($0) }
@@ -246,7 +265,8 @@ struct PipelineView: View {
             switch which {
             case .picker:
                 ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
-                             pane: $pickerPane, fresh: $freshJSFX, onScreen: $pickerOnScreen)
+                             pane: $pickerPane, fresh: $freshJSFX, onScreen: $pickerOnScreen,
+                             target: $pickerTarget)
             case .settings:
                 SettingsView(io: io)
             case .routing:
@@ -270,10 +290,10 @@ struct PipelineView: View {
             }
         }
         .alert(alertTitle, isPresented: Binding(
-            get: { pluginError != nil || linkError != nil || importError != nil },
+            get: { pluginError != nil || linkError != nil || importError != nil || presetError != nil },
             set: { if !$0 { clearErrors() } })) {
                 Button("OK", role: .cancel) { clearErrors() }
-            } message: { Text(linkError ?? importError ?? pluginError ?? "Unknown error") }
+            } message: { Text(linkError ?? importError ?? presetError ?? pluginError ?? "Unknown error") }
         .onAppear {
             // **案内の画面は持たない。**
             // 「2 本構成で、他のアプリの音を寄越す」という形が読めないだろう、
@@ -351,8 +371,9 @@ struct PipelineView: View {
         }
         // 鎖から外れた段ぶんの「畳んでも消えない選択」を捨てる。
         // MatrixRouting が MatrixView の onAppear でやっているのと同じ掃除。
-        .onChange(of: dsp.chain.count) { _, _ in
-            ETCardSelection.shared.prune(keeping: dsp.chain.map(\.id))
+        // 出力補正の段も同じ（入れ替わると前の出力先の段は居なくなる）。
+        .onChange(of: dsp.chain.count + dsp.correction.count) { _, _ in
+            ETCardSelection.shared.prune(keeping: dsp.nodes.map(\.id))
         }
         // **ピッカーを出さないまま別のシートへ行ったら、面を戻す。**sheetが同じ回で.pickerを経て
         // 別のシートになると（JSFXのリンクと共有のIRが同じ回に届いたときなど。共有に溜まっていた
@@ -363,6 +384,7 @@ struct PipelineView: View {
             guard old != .picker, new != .picker else { return }
             pickerPane = .effects
             freshJSFX = nil
+            pickerTarget = .main
         }
         // io を丸ごと観測せず、要る値だけを写す。
         .onReceive(io.$running) { running = $0 }
@@ -376,7 +398,8 @@ struct PipelineView: View {
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
         // 鎖の並び。左の一覧の「右で一番上のカード」と、足したカードを見せるのに使う。
-        .onChange(of: dsp.chain.map(\.id), initial: true) { old, new in
+        // 出力補正の段も右に並ぶので、並びは両方。
+        .onChange(of: dsp.nodes.map(\.id), initial: true) { old, new in
             viewport.setOrder(new)
             if old != new { revealNew(old, new) }
         }
@@ -436,20 +459,58 @@ struct PipelineView: View {
                 Button("Cancel", role: .cancel) { confirmingSectionRemoval = nil }
             } message: {
                 if let id = confirmingSectionRemoval,
-                   dsp.chain.first(where: { $0.id == id })?.enabled == false {
+                   dsp.nodes.first(where: { $0.id == id })?.enabled == false {
                     Text("Kept effects will start playing again.")
                 }
             }
+            // 出力補正をプリセットで入れ替える・空にする。どちらも今の出力先の補正が消える。
+            .confirmationDialog(correctionAskTitle,
+                                isPresented: Binding(
+                                    get: { pendingCorrection != nil },
+                                    set: { if !$0 { pendingCorrection = nil } }),
+                                titleVisibility: .visible) {
+                switch pendingCorrection {
+                case .replace(let name, let items)?:
+                    Button("Replace", role: .destructive) {
+                        oc.choose(name: name, items: items)
+                        pendingCorrection = nil
+                    }
+                case .clear?:
+                    Button("Clear", role: .destructive) {
+                        oc.clear()
+                        pendingCorrection = nil
+                    }
+                case nil:
+                    EmptyView()
+                }
+                Button("Cancel", role: .cancel) { pendingCorrection = nil }
+            } message: {
+                if let name = oc.device?.name { Text(name) }
+            }
     }
 
-    private func split(_ visible: [Row]) -> some View {
+    private var correctionAskTitle: String {
+        switch pendingCorrection {
+        case .clear?: return "Clear Output Correction?"
+        case .replace?, nil: return "Replace Output Correction?"
+        }
+    }
+
+    private func split(_ visible: [Row], _ corrections: [Row]) -> some View {
         NavigationSplitView(columnVisibility: $columns) {
-            ChainMinimap(items: minimapItems(visible), dsp: dsp, viewport: viewport,
+            ChainMinimap(items: minimapItems(visible),
+                         correction: correctionShown ? minimapItems(corrections) : nil,
+                         dsp: dsp, viewport: viewport,
                          move: { move($0, to: $1) },
-                         insert: { _ = addDropped($0, at: $1) })
+                         insert: { _ = addDropped($0, at: $1) },
+                         moveCorrection: { move($0, to: $1, in: .correction) },
+                         // 一覧が渡すのは slot。補正の中の位置へ直す。
+                         insertCorrection: { payload, slot in
+                             _ = addDropped(payload, at: slot.map { $0 - dsp.chain.count }, in: .correction)
+                         })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
-            chainConfirmations(chainList(visible, split: true))
+            chainConfirmations(chainList(visible, corrections, split: true))
                 .environment(\.etCardsPinnedOpen, true)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
@@ -459,9 +520,9 @@ struct PipelineView: View {
     }
 
     /// 1列。iPhoneと、iPadの狭い窓。**今までの形そのまま。**
-    private func stack(_ visible: [Row]) -> some View {
+    private func stack(_ visible: [Row], _ corrections: [Row]) -> some View {
         NavigationStack {
-            chainConfirmations(chainList(visible, split: false))
+            chainConfirmations(chainList(visible, corrections, split: false))
                 // iPad は ETLayout が絞る。撮影のときは -ETWidth で上書きできる
                 // （iPad で撮るのは高さが要るからで、幅まで iPad になると
                 // 実機の見え方にならない）。
@@ -489,7 +550,7 @@ struct PipelineView: View {
                         pickerAsPopover: pickerAsPopover,
                         pickerAnchored: $pickerAnchored, pickerInSheet: $pickerInSheet,
                         pickerPane: $pickerPane, freshJSFX: $freshJSFX,
-                        pickerOnScreen: $pickerOnScreen,
+                        pickerOnScreen: $pickerOnScreen, pickerTarget: $pickerTarget,
                         pluginError: $pluginError, afterSheet: $afterSheet)
     }
 
@@ -510,12 +571,14 @@ struct PipelineView: View {
     /// **面は開くときに指す（openPicker）。**先に指すと、2列で畳むのを待つ間に
     /// onChange(of: sheet)がEffectsへ戻してしまう（出ていたシート→nilはピッカーを経ない）。
     /// 畳むのを待つ間に待っていた続き（警告）は、ピッカーが閉じた後へ回す（openAfterClosingSheet）。
-    private func presentPicker(fresh: String? = nil) {
+    ///
+    /// `target` は選んだものを足す先。出力補正の見出しからだけ .correction で開く。
+    private func presentPicker(fresh: String? = nil, target: ETChainPart = .main) {
         guard usesSplit, let open = sheet, open != .picker else {
-            openPicker(fresh: fresh)
+            openPicker(fresh: fresh, target: target)
             return
         }
-        Self.openAfterClosingSheet({ openPicker(fresh: fresh) },
+        Self.openAfterClosingSheet({ openPicker(fresh: fresh, target: target) },
                                    sheet: $sheet, afterSheet: $afterSheet)
     }
 
@@ -528,12 +591,14 @@ struct PipelineView: View {
     /// どちらで出すかは開くときに決め、閉じるまで変えない。途中で+が現れても、
     /// 出ているシートを畳んでpopoverへ出し直すことはしない。
     /// 既に出ているなら面だけをその場で替える（取り込んだJSFXが届いたとき）。
-    private func openPicker(fresh: String? = nil) {
+    private func openPicker(fresh: String? = nil, target: ETChainPart = .main) {
         if let fresh {
             pickerPane = .plugins
             freshJSFX = fresh
         }
         guard sheet != .picker else { return }
+        // 足す先は開くときに決める（閉じるまで変えない）。
+        pickerTarget = target
         pickerInSheet = usesSplit && !pickerAnchored
         sheet = .picker
     }
@@ -602,7 +667,7 @@ struct PipelineView: View {
     private func revealNew(_ old: [UUID], _ new: [UUID]) {
         guard usesSplit, dragging == nil else { return }
         let before = Set(old)
-        let shown = Set(rows.map(\.node.id))
+        let shown = Set((rows + rows(of: .correction)).map(\.node.id))
         guard let id = new.first(where: { !before.contains($0) && shown.contains($0) }) else { return }
         // **先に測れていたらここで決める。**新しい行の最初の測りとこのonChangeの
         // どちらが先に来るかは決まっていない。測りが先だと、待ちが残ったまま次に
@@ -640,7 +705,7 @@ struct PipelineView: View {
             let touched = scroll.isTracking || scroll.isDragging || scroll.isDecelerating
             return !touched && viewport.anchor == nil && offset > least + 0.5
         }
-        let moved = keeper.moved(id, to: top, order: dsp.chain.map(\.id), keeps: keeps())
+        let moved = keeper.moved(id, to: top, order: dsp.nodes.map(\.id), keeps: keeps())
         guard moved != 0, let scroll else { return }
         // 上が縮んだときは一番上より上へは送らない。
         scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: max(least, offset + moved)),
@@ -658,7 +723,7 @@ struct PipelineView: View {
     /// 選び違えても送りを取り違えることはない。
     private func followReading(_ id: UUID? = nil) {
         guard usesSplit else { return }
-        let order = dsp.chain.map(\.id)
+        let order = dsp.nodes.map(\.id)
         var chosen = id
         if chosen == nil, let scroll = brake.scrollView {
             let visibleTop = scroll.adjustedContentInset.top
@@ -749,6 +814,7 @@ struct PipelineView: View {
     private var alertTitle: String {
         if linkError != nil { return "Could Not Open Link" }
         if importError != nil { return "Could Not Import" }
+        if presetError != nil { return "Could Not Load Preset" }
         return "Could Not Add JSFX"
     }
 
@@ -756,6 +822,7 @@ struct PipelineView: View {
         pluginError = nil
         linkError = nil
         importError = nil
+        presetError = nil
     }
 
     /// 共有の拡張（EffectDeckShare）が App Group に置いたものを拾う。
@@ -815,8 +882,165 @@ struct PipelineView: View {
         Self.queueAfterSheet(next, sheet: $sheet, afterSheet: $afterSheet)
     }
 
+    /// 鎖の 1 行。main と出力補正の両方がこれを使う。`visible` はその行の居る部分の行だけ
+    /// （⋯ の Move Up / Move Down と組の線は、部分の中で数える）。
+    @ViewBuilder
+    private func rowView(_ row: Row, in visible: [Row], split: Bool) -> some View {
+        // 見えているかを左の一覧へ知らせ、2列では見えていない図を止める。
+        ETLiveRow(id: row.node.id, split: split, viewport: viewport) {
+        // **配下だと分かる印。**左に線を引いて内側へ寄せる。
+        // 続く行で線が繋がるので、Section から次の Section の手前までが
+        // 一組に見える。囲まないし、行間も詰めない。
+        // 伸ばす向きは位置から引く。行の中身から引くと、
+        // 組の切れ目（見出しの手前）で前の組と繋がってしまう。
+        // 線も角も同じ位置から引く。単独（.alone）には引かない。
+        //
+        // **組の上と下にだけ横線を引く。**どこからどこまでが
+        // ひと組なのかが見えないと、掴んだものを組の中へ入れるのか
+        // 外へ出すのかが分からない。終わりの印を持たない構造なので、
+        // 線が唯一の境目になる。
+        VStack(spacing: 0) {
+        // **線は 1 本にする。**直前の組が下線を出していたら引かない。
+        if row.block == .top && !(row.visible > 0
+            && visible[row.visible - 1].block == .bottom) {
+            ETGroupRule()
+        }
+        ETSectionBracket(active: row.showsBracket,
+                         extendsUp: !row.block.roundsTop,
+                         extendsDown: !row.block.roundsBottom) {
+        EffectCardView(
+            index: row.index,
+            node: row.node,
+            dsp: dsp,
+            // 2列では全部開く。iPhoneの開閉の覚えは読まない。
+            isExpanded: isOpen(row.node.id),
+            isCollapsedFully: !split && dsp.collapsedFully.contains(row.node.id),
+            toggleExpanded: split ? {} : { cycle(row.node) },
+            // 隣は鎖の隣ではなく**画面の隣**。畳んだ Section の配下と
+            // 入れ替わって行が消えないように、ドラッグと同じ道を通す。
+            moveUp: { moveRow(row.visible, to: row.visible - 1, in: row.part) },
+            moveDown: { moveRow(row.visible, to: row.visible + 2, in: row.part) },
+            canMoveUp: row.visible > 0,
+            canMoveDown: row.visible < visible.count - 1,
+            block: row.block)
+        }
+            // 線のぶんは外側の余白から取る。カードの左端は
+            // どちらの行でも 14 に揃う（ETSectionBracket の頭）。
+            .padding(.leading,
+                     row.showsBracket ? ETSectionBracket<EmptyView>.inset : 14)
+            .padding(.trailing, 14)
+            // **角丸が無い辺は余白を半分にする。**組の中では
+            // カードどうしが地続きに見えるほうが、ひと組だと分かる。
+            .padding(.top, row.block.roundsTop ? 5 : 2.5)
+            .padding(.bottom, row.block.roundsBottom ? 5 : 2.5)
+            // **左スワイプで削除。**行だけをずらし、後ろに赤い面を敷く。
+            // .onDelete は使わない（詳しくは下の remove(_:)）。
+            //
+            // **順番が要る。**.background を先に付けると赤い面も
+            // 一緒にずれて、ずっと行の裏に隠れたままになる。
+            // .offset は配置を変えないので、後から付けた
+            // .background は元の位置に残り、行だけが滑って見える。
+            .offset(x: swiping == row.node.id ? swipeX : 0)
+            .background(alignment: .trailing) { deleteAction(row) }
+            // 落とし先の判定に要る。開閉で高さが変わるたびに来る。
+            // 送るたびにも来るが、観測しない箱へ書くだけなのでbodyは走らない。
+            .onGeometryChange(for: CGRect.self) {
+                $0.frame(in: .named(Self.chainSpace))
+            } action: { measured(row.node.id, $0) }
+            // 中身の中での上端。送っても変わらず、上の行の高さが変わったときだけ来る。
+            // 使うのは2列の右だけ。
+            .onGeometryChange(for: CGFloat.self) {
+                $0.frame(in: .named(Self.contentSpace)).minY
+            } action: { if split { contentMoved(row.node.id, $0) } }
+                    .opacity(dragging == row.node.id ? 0 : 1)
+            // 掴みは UIKit の長押しで受ける（DragHandle.swift の頭）。
+            // 面は素通しなので、カードのタップも下へ届く。
+            // 2列の右では掴まない。並べ替えは左の一覧でやる。
+            .overlay {
+                ETDragHandle(
+                    reorders: !split,
+                    began: { beginDrag(row) },
+                    moved: { d in
+                        // 並べ方を切り替えた後に、古い行の認識器から届いたものは捨てる。
+                        guard dragging == row.node.id else { return }
+                        dragShift = d
+                        settle(row.node.id)
+                    },
+                    ended: { endDrag() },
+                    swipeBegan: { swipeBegan(row.node.id) },
+                    swiped: { dx in swipeChanged(row.node.id, dx) },
+                    swipeEnded: { dx, vx in swipeSettled(row.node.id, dx, vx) })
+            }
+            // **ピッカーからつまんだものを受ける。**
+            // カードには何も足さない。落ちたときだけ効く。
+            // 落とした段の手前に入れる（上流の並べ替えと同じ向き）。
+            .dropDestination(for: String.self) { items, _ in
+                guard let type = items.first else { return false }
+                return addDropped(type, at: row.local, in: row.part)
+            }
+        if row.block == .bottom { ETGroupRule() }
+        }
+        }
+        // 左の一覧から飛ぶ先。
+        .id(row.node.id)
+    }
+
+    /// 出力補正の層。見出し（入切と出力先の名前）と、入っているときはその出力先の補正の行。
+    /// 鎖の項目ではないので、掴んで main へ入れることも、消すこともできない。
+    @ViewBuilder
+    private func correctionSection(_ visible: [Row], split: Bool) -> some View {
+        ETGroupRule()
+        OutputCorrectionHeader(oc: oc, store: PresetStore.shared, correction: dsp.correction,
+                               addEffect: { presentPicker(target: .correction) },
+                               choose: { chooseCorrection($0) },
+                               clear: { pendingCorrection = .clear })
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .onGeometryChange(for: CGRect.self) {
+                $0.frame(in: .named(Self.chainSpace))
+            } action: { measured(Self.correctionHeaderID, $0) }
+            // 見出しへ落とすと補正の末尾へ足す。
+            .dropDestination(for: String.self) { items, _ in
+                guard correctionShown, let type = items.first else { return false }
+                return addDropped(type, at: nil, in: .correction)
+            }
+        if correctionShown {
+            if dsp.correction.isEmpty {
+                OutputCorrectionEmptyRow(oc: oc, store: PresetStore.shared,
+                                         addEffect: { presentPicker(target: .correction) },
+                                         choose: { chooseCorrection($0) })
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+            } else {
+                ForEach(visible) { row in
+                    rowView(row, in: visible, split: split)
+                }
+            }
+        }
+    }
+
+    /// 補正の行を出すか。入っていて、出力先が分かっていて、PC の鎖を編集していないとき。
+    private var correctionShown: Bool {
+        oc.isOn && oc.device != nil && !isRemote
+    }
+
+    /// Choose Preset で選んだ。中身が在れば一度確かめてから入れ替える。
+    private func chooseCorrection(_ name: String) {
+        let items = PresetStore.shared.load(name)
+        guard !items.isEmpty else {
+            afterClosingSheet { presetError = "“\(name)” could not be read." }
+            return
+        }
+        if dsp.correction.isEmpty {
+            oc.choose(name: name, items: items)
+        } else {
+            pendingCorrection = .replace(name, items)
+        }
+    }
+
     /// 鎖。1列でも2列でも同じもの。`split`は2列の右に置くときに真。
-    private func chainList(_ visible: [Row], split: Bool) -> some View {
+    /// `corrections` は出力補正の行（出していなければ空）。
+    private func chainList(_ visible: [Row], _ corrections: [Row], split: Bool) -> some View {
         // **List ではなく ScrollView + VStack。**
         //
         // List は行の高さを動かす間も中身を切るので掴んだカードが欠ける。
@@ -835,16 +1059,6 @@ struct PipelineView: View {
             ClipboardBanner(dsp: dsp)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
-
-            // 出力先が変わって紐付けたプリセットを読んだ。Undo で前の鎖へ戻せる。
-            if let notice = dsp.deviceNotice {
-                DevicePresetBanner(notice: notice,
-                                   undo: { dsp.undoDeviceSwitch() },
-                                   dismiss: { dsp.dismissDeviceNotice() })
-                    .padding(.horizontal, 14)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-            }
 
             if isRemote {
                 RemoteBanner(openRemote: { presentSheet(.remote) })
@@ -873,106 +1087,16 @@ struct PipelineView: View {
                     .padding(.vertical, 20)
             } else {
                 ForEach(visible) { row in
-                    // 見えているかを左の一覧へ知らせ、2列では見えていない図を止める。
-                    ETLiveRow(id: row.node.id, split: split, viewport: viewport) {
-                    // **配下だと分かる印。**左に線を引いて内側へ寄せる。
-                    // 続く行で線が繋がるので、Section から次の Section の手前までが
-                    // 一組に見える。囲まないし、行間も詰めない。
-                    // 伸ばす向きは位置から引く。行の中身から引くと、
-                    // 組の切れ目（見出しの手前）で前の組と繋がってしまう。
-                    // 線も角も同じ位置から引く。単独（.alone）には引かない。
-                    //
-                    // **組の上と下にだけ横線を引く。**どこからどこまでが
-                    // ひと組なのかが見えないと、掴んだものを組の中へ入れるのか
-                    // 外へ出すのかが分からない。終わりの印を持たない構造なので、
-                    // 線が唯一の境目になる。
-                    VStack(spacing: 0) {
-                    // **線は 1 本にする。**直前の組が下線を出していたら引かない。
-                    if row.block == .top && !(row.visible > 0
-                        && visible[row.visible - 1].block == .bottom) {
-                        ETGroupRule()
-                    }
-                    ETSectionBracket(active: row.showsBracket,
-                                     extendsUp: !row.block.roundsTop,
-                                     extendsDown: !row.block.roundsBottom) {
-                    EffectCardView(
-                        index: row.index,
-                        node: row.node,
-                        dsp: dsp,
-                        // 2列では全部開く。iPhoneの開閉の覚えは読まない。
-                        isExpanded: isOpen(row.node.id),
-                        isCollapsedFully: !split && dsp.collapsedFully.contains(row.node.id),
-                        toggleExpanded: split ? {} : { cycle(row.node) },
-                        // 隣は鎖の隣ではなく**画面の隣**。畳んだ Section の配下と
-                        // 入れ替わって行が消えないように、ドラッグと同じ道を通す。
-                        moveUp: { moveRow(row.visible, to: row.visible - 1) },
-                        moveDown: { moveRow(row.visible, to: row.visible + 2) },
-                        canMoveUp: row.visible > 0,
-                        canMoveDown: row.visible < visible.count - 1,
-                        block: row.block)
-                    }
-                        // 線のぶんは外側の余白から取る。カードの左端は
-                        // どちらの行でも 14 に揃う（ETSectionBracket の頭）。
-                        .padding(.leading,
-                                 row.showsBracket ? ETSectionBracket<EmptyView>.inset : 14)
-                        .padding(.trailing, 14)
-                        // **角丸が無い辺は余白を半分にする。**組の中では
-                        // カードどうしが地続きに見えるほうが、ひと組だと分かる。
-                        .padding(.top, row.block.roundsTop ? 5 : 2.5)
-                        .padding(.bottom, row.block.roundsBottom ? 5 : 2.5)
-                        // **左スワイプで削除。**行だけをずらし、後ろに赤い面を敷く。
-                        // .onDelete は使わない（詳しくは下の remove(_:)）。
-                        //
-                        // **順番が要る。**.background を先に付けると赤い面も
-                        // 一緒にずれて、ずっと行の裏に隠れたままになる。
-                        // .offset は配置を変えないので、後から付けた
-                        // .background は元の位置に残り、行だけが滑って見える。
-                        .offset(x: swiping == row.node.id ? swipeX : 0)
-                        .background(alignment: .trailing) { deleteAction(row) }
-                        // 落とし先の判定に要る。開閉で高さが変わるたびに来る。
-                        // 送るたびにも来るが、観測しない箱へ書くだけなのでbodyは走らない。
-                        .onGeometryChange(for: CGRect.self) {
-                            $0.frame(in: .named(Self.chainSpace))
-                        } action: { measured(row.node.id, $0) }
-                        // 中身の中での上端。送っても変わらず、上の行の高さが変わったときだけ来る。
-                        // 使うのは2列の右だけ。
-                        .onGeometryChange(for: CGFloat.self) {
-                            $0.frame(in: .named(Self.contentSpace)).minY
-                        } action: { if split { contentMoved(row.node.id, $0) } }
-                                .opacity(dragging == row.node.id ? 0 : 1)
-                        // 掴みは UIKit の長押しで受ける（DragHandle.swift の頭）。
-                        // 面は素通しなので、カードのタップも下へ届く。
-                        // 2列の右では掴まない。並べ替えは左の一覧でやる。
-                        .overlay {
-                            ETDragHandle(
-                                reorders: !split,
-                                began: { beginDrag(row) },
-                                moved: { d in
-                                    // 並べ方を切り替えた後に、古い行の認識器から届いたものは捨てる。
-                                    guard dragging == row.node.id else { return }
-                                    dragShift = d
-                                    settle(row.node.id)
-                                },
-                                ended: { endDrag() },
-                                swipeBegan: { swipeBegan(row.node.id) },
-                                swiped: { dx in swipeChanged(row.node.id, dx) },
-                                swipeEnded: { dx, vx in swipeSettled(row.node.id, dx, vx) })
-                        }
-                        // **ピッカーからつまんだものを受ける。**
-                        // カードには何も足さない。落ちたときだけ効く。
-                        // 落とした段の手前に入れる（上流の並べ替えと同じ向き）。
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let type = items.first else { return false }
-                            return addDropped(type, at: row.index)
-                        }
-                    if row.block == .bottom { ETGroupRule() }
-                    }
-                    }
-                    // 左の一覧から飛ぶ先。
-                    .id(row.node.id)
+                    rowView(row, in: visible, split: split)
                 }
+            }
 
+            // 出力補正の層。main の後ろに固定で付く。PC の鎖を編集している間は出さない。
+            if !isRemote {
+                correctionSection(corrections, split: split)
+            }
 
+            if !dsp.chain.isEmpty {
                 // **最後の行より下の余白も受ける。**
                 // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
                 // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
@@ -981,6 +1105,7 @@ struct PipelineView: View {
                 // **contentShape を必ず付ける。**Color.clear は描くものが無いので、
                 // 枠を持っていても当たりを取らない。帯が在っても落ちなかったのはこれで、
                 // 高さの問題ではなかった。
+                // 補正の層より下でも、落とせば main の末尾へ足す。
                 Color.clear
                     .frame(height: tailHeight)
                     .contentShape(Rectangle())
@@ -1026,7 +1151,7 @@ struct PipelineView: View {
         // ここが List の外なので切られない。
         .overlay(alignment: .topLeading) {
             if let id = dragging,
-               let row = visible.first(where: { $0.node.id == id }) {
+               let row = (visible + corrections).first(where: { $0.node.id == id }) {
                 ETSectionBracket(active: row.showsBracket,
                                  extendsUp: !row.block.roundsTop,
                                  extendsDown: !row.block.roundsBottom) {
@@ -1102,9 +1227,12 @@ struct PipelineView: View {
         return nil
     }
 
-    private func addDropped(_ payload: String, at index: Int?) -> Bool {
+    /// `index` は `part` の中の位置（nil なら末尾）。
+    private func addDropped(_ payload: String, at index: Int?, in part: ETChainPart = .main) -> Bool {
+        // 補正へは、いまの出力先の写しが入っているときだけ足す。
+        if part == .correction && !oc.isEditable { return false }
         if let preset = presetPayload(payload) {
-            dsp.addPreset(named: preset.0, items: preset.1, at: index)
+            dsp.addPreset(named: preset.0, items: preset.1, at: index, in: part)
             sheet = nil
             return true
         }
@@ -1115,7 +1243,7 @@ struct PipelineView: View {
                 instanceID: instanceID) else { return false }
             dsp.addExternal(id: entry.id, instanceID: instanceID, name: entry.name,
                             category: "Audio Units", externalIndex: externalIndex,
-                            at: index)
+                            at: index, in: part)
             ETAUHost.shared.create(entry, instanceID: instanceID)
             sheet = nil
             return true
@@ -1123,19 +1251,26 @@ struct PipelineView: View {
         if let componentID = payload.dropPrefixIfPresent("plugin-jsfx:"),
            let entry = ETJSFXHost.shared.entry(id: componentID) {
             let instanceID = UUID().uuidString
+            // 組み上がるまでに出力先が替わったら、補正へは足さない（別の出力先の補正に入る）。
+            let key = OutputCorrection.shared.loadedKey
             sheet = nil
             ETJSFXHost.shared.prepare(entry, instanceID: instanceID) { result in
                 switch result {
                 case .success(let externalIndex):
+                    if part == .correction && OutputCorrection.shared.loadedKey != key {
+                        ETJSFXHost.shared.remove(instanceID: instanceID)
+                        return
+                    }
                     dsp.addExternal(id: entry.id, instanceID: instanceID, name: entry.name,
-                                    category: "JSFX", externalIndex: externalIndex, at: index)
+                                    category: "JSFX", externalIndex: externalIndex, at: index,
+                                    in: part)
                 case .failure(let error): pluginError = error.localizedDescription
                 }
             }
             return true
         }
         guard let spec = EffeTuneDSP.spec(forType: payload) else { return false }
-        if let index { dsp.add(spec, at: index) } else { dsp.add(spec) }
+        if let index { dsp.add(spec, at: index, in: part) } else { dsp.add(spec, in: part) }
         sheet = nil
         return true
     }
@@ -1307,14 +1442,18 @@ struct PipelineView: View {
     ///
     /// 連続して越えるときも正しい。`[A,B,C]` の A が B を越えても C の位置は
     /// `a+g+b+g` → `b+g+a+g` で変わらないので、次の判定は動きの最中でも狂わない。
+    ///
+    /// **部分の中だけで比べる。**main の最後の行と補正の最初の行は隣に並ばないので、
+    /// 掴んだものが境を越えることはない。
     private func settle(_ id: UUID) {
-        let visible = rows
+        let part = dsp.slot(of: id).flatMap { dsp.part(ofSlot: $0) } ?? .main
+        let visible = rows(of: part)
         guard let at = visible.firstIndex(where: { $0.node.id == id }) else { return }
         // 判定は縦だけ見る。鎖は 1 列なので横は絵の都合でしかない。
         let moving = anchorRect.offsetBy(dx: 0, dy: dragShift.height)
 
         if at > 0, let above = geometry[visible[at - 1].node.id], moving.minY < above.midY {
-            swap(at, to: at - 1)
+            swap(at, to: at - 1, in: part)
             return
         }
         if at < visible.count - 1, let below = geometry[visible[at + 1].node.id] {
@@ -1322,16 +1461,16 @@ struct PipelineView: View {
                 // **組の最後から下へ出ようとしたら、組を閉じる。**
                 // そのまま入れ替えると、次の組の見出しを飛び越えて
                 // 今度はそちらの中に入るだけで、外に出ることができない。
-                if visible[at].block == .bottom { leaveGroup(at); return }
+                if visible[at].block == .bottom { leaveGroup(at, in: part); return }
                 // 下へは 2 つ先。move(_:to:) は List の onMove と同じ数え方。
-                swap(at, to: at + 2)
+                swap(at, to: at + 2, in: part)
             }
         } else if visible[at].block == .bottom, let mine = geometry[id],
                   moving.midY > mine.maxY {
             // 鎖の末尾。下に行が無いので入れ替えでは外に出られない。
             // 自分の枠の下端を中心が越えたら、で s > a/2。前の書き方
             // （maxY > mine.maxY + height/2）と同じ量。
-            leaveGroup(at)
+            leaveGroup(at, in: part)
         }
     }
 
@@ -1341,8 +1480,8 @@ struct PipelineView: View {
     /// 段の位置を動かすだけでは組の外へ出せない（次の組に入るだけ）。
     /// 名前の無い Section を挟めば、そこで前の組が閉じる。上流はただの
     /// 新しい組として読むので、web と行き来しても壊れない。
-    private func leaveGroup(_ at: Int) {
-        let visible = rows
+    private func leaveGroup(_ at: Int, in part: ETChainPart = .main) {
+        let visible = rows(of: part)
         guard visible.indices.contains(at) else { return }
         // **判断は模型が持つ。**画面は「この行を外へ」と言うだけ。
         // 直前が既に印か、もう root に居るか、正規化で取り消されるか、は
@@ -1370,8 +1509,8 @@ struct PipelineView: View {
     /// 掴んだものは別の層に描いている。絵の位置は「掴んだ時点の矩形＋指の
     /// 移動量」で決まりきっていて、下の並びがどう動こうと関係ない。
     /// 補正そのものが要らなかった。
-    private func swap(_ at: Int, to destination: Int) {
-        withAnimation(.snappy(duration: 0.22)) { moveRow(at, to: destination) }
+    private func swap(_ at: Int, to destination: Int, in part: ETChainPart = .main) {
+        withAnimation(.snappy(duration: 0.22)) { moveRow(at, to: destination, in: part) }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
@@ -1384,7 +1523,12 @@ struct PipelineView: View {
         /// 画面の何行目か。⋯ の Move Up / Move Down が使う。
     /// List の onMove が渡してくる数と同じ数え方（鎖の添字ではない）。
         let visible: Int
+        /// slot（main と補正を続けて数えた位置）。EffectCardView と dsp の段ごとの口はこれで指す。
         let index: Int
+        /// 部分の中の位置。差し込む・動かすはこちらで指す。
+        let local: Int
+        /// どちらの部分の行か。
+        let part: ETChainPart
         let node: EffeTuneDSP.Node
         /// 段そのものの身元。remove(_:) やスワイプ削除はこちらを使う。
         var id: UUID { node.id }
@@ -1425,12 +1569,25 @@ struct PipelineView: View {
     /// 隠す範囲は Section の次から、次の Section の手前まで。上流が音を止める
     /// 範囲と同じ区切り方にしてある（js/audio/dsp-pipeline-descriptor.js:190-201、
     /// 区切りは入れ子にならず、次の Section に当たったらそこで切り替わる）。
-    private var rows: [Row] {
+    private var rows: [Row] { rows(of: .main) }
+
+    /// その部分の行。出力補正の行は main の後ろに続けて出すが、組（Section）は部分の中だけで閉じる
+    /// （所属は部分ごとに数えて合わせてある。EffeTuneDSP.analysis）。
+    private func rows(of part: ETChainPart) -> [Row] {
         // **所属を数えるのはここではない。**ETPipelineAnalysis が 1 か所で決める。
         // 画面が `range(after:)` を自分で呼んでいたころは、「名前が空なら組を作らない、
         // ただし切ってあるなら作る」という但し書きを呼ぶ場所ごとに書いていた。
         let a = dsp.analysis
-        let chain = dsp.chain
+        let chain: [EffeTuneDSP.Node]
+        let base: Int
+        switch part {
+        case .main:
+            chain = dsp.chain
+            base = 0
+        case .correction:
+            chain = dsp.correction
+            base = dsp.chain.count
+        }
 
         // 鎖の位置 → Node.id。所属は id で返ってくるので引き直す。
         var indexOf: [UUID: Int] = [:]
@@ -1478,7 +1635,7 @@ struct PipelineView: View {
         }
         return shown.indices.map {
             let node = chain[shown[$0]]
-            return Row(visible: $0, index: shown[$0], node: node,
+            return Row(visible: $0, index: base + shown[$0], local: shown[$0], part: part, node: node,
                        block: position($0),
                        isCollapsed: node.isSection && !isOpen(node.id))
         }
@@ -1537,9 +1694,10 @@ struct PipelineView: View {
     /// 配下の ON/OFF は書き換えない（Section の about が「各段は自分の ON/OFF を
     /// 保つ」と約束している）。代わりに消す前に一言出す。
     private func remove(_ id: UUID) {
-        guard let i = dsp.chain.firstIndex(where: { $0.id == id }) else { return }
+        // 位置は slot（出力補正の段も同じ口で消す）。
+        guard let i = dsp.slot(of: id), let node = dsp.node(at: i) else { return }
         // 中身の在るSectionは、中身も消すかを確かめる。空のSectionはそのまま消す。
-        if dsp.chain[i].isSection, !dsp.analysis.members(of: dsp.chain[i].id).isEmpty {
+        if node.isSection, !dsp.analysis.members(of: node.id).isEmpty {
             confirmingSectionRemoval = id
             return
         }
@@ -1647,11 +1805,12 @@ struct PipelineView: View {
     /// 配下は枠の線と同じ数え方（dsp.analysis.members）なので、線が囲っている段だけが消える。
     /// 消すのは1回（dsp.remove）。AU・JSFXの手放しとpublishはそちらが1度ずつやる。
     private func removeConfirmed(_ id: UUID, withEffects: Bool) {
-        guard let i = dsp.chain.firstIndex(where: { $0.id == id }) else { return }
+        guard let i = dsp.slot(of: id) else { return }
         var doomed = IndexSet(integer: i)
         if withEffects {
+            // 配下は同じ部分の中にしか居ない。slot で数える。
             let members = Set(dsp.analysis.members(of: id))
-            for (j, node) in dsp.chain.enumerated() where members.contains(node.id) { doomed.insert(j) }
+            for (j, node) in dsp.nodes.enumerated() where members.contains(node.id) { doomed.insert(j) }
         }
         dsp.remove(at: doomed)
     }
@@ -1701,19 +1860,20 @@ struct PipelineView: View {
         }
     }
 
-    private func move(_ source: IndexSet, to destination: Int) {
-        let visible = rows
-        let types = dsp.chain.map(\.spec.type)
+    ///
+    /// 行の番号も動かす先も `part` の中で数える。部分をまたいでは動かさない。
+    private func move(_ source: IndexSet, to destination: Int, in part: ETChainPart = .main) {
+        let visible = rows(of: part)
+        let list = part == .main ? dsp.chain : dsp.correction
 
         var moving = IndexSet()
         for offset in source {
             guard visible.indices.contains(offset) else { continue }
-            let i = visible[offset].index
-            moving.insert(i)
+            moving.insert(visible[offset].local)
             if visible[offset].node.isSection && !isOpen(visible[offset].node.id) {
                 // 畳んだ組を動かすと配下も付いてくる。配下は Analysis が持つ。
                 for member in dsp.analysis.members(of: visible[offset].node.id) {
-                    if let at = dsp.chain.firstIndex(where: { $0.id == member }) {
+                    if let at = list.firstIndex(where: { $0.id == member }) {
                         moving.insert(at)
                     }
                 }
@@ -1721,12 +1881,12 @@ struct PipelineView: View {
         }
         guard !moving.isEmpty else { return }
 
-        let target = visible.indices.contains(destination) ? visible[destination].index
-                                                           : dsp.chain.count
+        let target = visible.indices.contains(destination) ? visible[destination].local
+                                                           : list.count
         // 落ちた先が畳んだ Section の中なら、EffeTuneDSP.move が開く
         // （revealHidden）。連れて行った配下は開く理由に数えない。
         let wasVisible = Set(visible.map(\.node.id))
-        dsp.move(from: moving, to: target)
+        dsp.move(from: moving, to: target, in: part)
 
         // **見えていたのに消えた段を開く。**
         //
@@ -1738,7 +1898,7 @@ struct PipelineView: View {
         //   SecA を SecB の下へ落とすと [SecB, SecA, EQ, Comp, Delay] になり、
         //   SecA の範囲が Comp と Delay まで伸びる。
         // 掴んだかどうかではなく「見えていたものが消えたか」で開く。
-        let nowVisible = Set(rows.map(\.node.id))
+        let nowVisible = Set(rows(of: part).map(\.node.id))
         dsp.revealHidden(wasVisible.subtracting(nowVisible))
     }
 
@@ -1749,11 +1909,11 @@ struct PipelineView: View {
     /// 畳んだ Section を動かせば配下も付いてくるし、畳んだ Section の中へ
     /// 入ったら開く。鎖の添字で動かしていた頃は、隣が画面に無い行だと
     /// そこへ入り込んで動かした行が消えていた。
-    private func moveRow(_ from: Int, to destination: Int) {
+    private func moveRow(_ from: Int, to destination: Int, in part: ETChainPart = .main) {
         // 端の行では項目を押せないようにしてあるが、-1 を渡すと
         // move(_:to:) が「画面の外＝末尾へ」と解いてしまうので、ここでも止める。
         guard destination >= 0 else { return }
-        move(IndexSet(integer: from), to: destination)
+        move(IndexSet(integer: from), to: destination, in: part)
     }
 }
 
@@ -1782,6 +1942,8 @@ private struct PipelineToolbar: ToolbarContent {
     @Binding var freshJSFX: String?
     /// ピッカーが画面に出ているか。popoverのETPickerHostが立てる（持ち主は親。drainSharedが見る）。
     @Binding var pickerOnScreen: Bool
+    /// ピッカーで選んだものを足す先（持ち主は親）。
+    @Binding var pickerTarget: ETChainPart
     @Binding var pluginError: String?
     @Binding var afterSheet: (() -> Void)?
 
@@ -1900,6 +2062,7 @@ private struct PipelineToolbar: ToolbarContent {
                         ETPickerHost(dsp: dsp, sheet: $sheet, pluginError: $pluginError,
                                      pane: $pickerPane, fresh: $freshJSFX,
                                      onScreen: $pickerOnScreen,
+                                     target: $pickerTarget,
                                      waitsForDismissal: true)
                             .frame(minWidth: 380, idealWidth: 420,
                                    minHeight: 520, idealHeight: 720)
@@ -1958,6 +2121,8 @@ struct ETPickerHost: View {
     /// 画面に出ているか。持ち主はPipelineView（drainSharedが、頼んだだけでまだ出ていない
     /// ピッカーを畳まないために見る）。
     @Binding var onScreen: Bool
+    /// 足す先。出力補正の見出しから開いたときだけ .correction。閉じたら .main へ戻す。
+    @Binding var target: ETChainPart
     /// popoverで出しているとき。足せなかった警告を、popoverが畳み終わってから出す。
     /// JSFXは音の準備が無いとその場で失敗し、閉じる途中に警告を立てると出ないまま残る。
     /// シート（1列）は今までどおりその場で立てる。
@@ -1965,44 +2130,61 @@ struct ETPickerHost: View {
 
     var body: some View {
         EffectPickerView(onPick: { spec in
-            dsp.add(spec, at: nil)
+            guard canAdd else { sheet = nil; return }
+            dsp.add(spec, at: nil, in: target)
             sheet = nil
         }, onPickAU: { entry in
+            guard canAdd else { sheet = nil; return }
             let instanceID = UUID().uuidString
             guard let externalIndex = try? ETAUExternalBridge.shared.reserve(
                 instanceID: instanceID) else { return }
             dsp.addExternal(id: entry.id, instanceID: instanceID,
                             name: entry.name,
                             category: "Audio Units",
-                            externalIndex: externalIndex, at: nil)
+                            externalIndex: externalIndex, at: nil, in: target)
             ETAUHost.shared.create(entry, instanceID: instanceID)
             sheet = nil
         }, onPickJSFX: { entry in
+            guard canAdd else { sheet = nil; return }
             let instanceID = UUID().uuidString
+            let part = target
+            // 組み上がるまでに出力先が替わったら、補正へは足さない（別の出力先の補正に入る）。
+            let key = OutputCorrection.shared.loadedKey
             sheet = nil
             ETJSFXHost.shared.prepare(entry, instanceID: instanceID) { result in
                 switch result {
                 case .success(let externalIndex):
+                    if part == .correction && OutputCorrection.shared.loadedKey != key {
+                        ETJSFXHost.shared.remove(instanceID: instanceID)
+                        return
+                    }
                     dsp.addExternal(id: entry.id, instanceID: instanceID,
                                     name: entry.name, category: "JSFX",
-                                    externalIndex: externalIndex, at: nil)
+                                    externalIndex: externalIndex, at: nil, in: part)
                 case .failure(let error): report(error.localizedDescription)
                 }
             }
         }, onPickPreset: { name, items in
+            guard canAdd else { sheet = nil; return }
             // 名前の付いた Section に包んで挿す。置き換えない。
             // 鎖ごと置き換えたいときは Presets 画面のほう。
-            dsp.addPreset(named: name, items: items, at: nil)
+            dsp.addPreset(named: name, items: items, at: nil, in: target)
             sheet = nil
         }, pane: $pane, fresh: $fresh)
         .onAppear { onScreen = true }
         // 次に開くときはEffectsから。Pluginsを指して開くのは取り込みの口だけ。
-        // シートでもpopoverでも、閉じたらここで戻す。
+        // シートでもpopoverでも、閉じたらここで戻す。足す先も main へ戻す。
         .onDisappear {
             pane = .effects
             fresh = nil
             onScreen = false
+            target = .main
         }
+    }
+
+    /// 足してよいか。補正へは、いまの出力先の写しが入っているときだけ（開いている間に替わることがある）。
+    private var canAdd: Bool {
+        target == .main || OutputCorrection.shared.isEditable
     }
 
     private func report(_ why: String) {
@@ -2187,50 +2369,155 @@ private struct BypassBanner: View {
     }
 }
 
-/// 出力先のプリセットを読んだ知らせ。形は BypassBanner と同じ。
-/// 閉じるか、Undo か、次の切り替えか、並びを変えるまで残る。
-private struct DevicePresetBanner: View {
-    let notice: EffeTuneDSP.DeviceNotice
-    let undo: () -> Void
-    let dismiss: () -> Void
+/// 出力補正の見出し。入切と、いまの出力先の名前。入っているときは ⋯ に操作を並べる。
+/// 鎖の項目ではないので掴めず、消せない。
+private struct OutputCorrectionHeader: View {
+    @ObservedObject var oc: OutputCorrection
+    @ObservedObject var store: PresetStore
+    let correction: [EffeTuneDSP.Node]
+    let addEffect: () -> Void
+    let choose: (String) -> Void
+    let clear: () -> Void
 
     var body: some View {
         Card {
             HStack(spacing: 12) {
-                Image(systemName: notice.symbol)
-                    .font(.system(size: 20))
-                    .foregroundStyle(.tint)
-                    .frame(width: 26)
-
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Loaded “\(notice.preset)”")
+                    Text("Output Correction")
                         .font(.system(size: 15, weight: .semibold))
-                    Text(notice.device)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    if let d = oc.device {
+                        Label(d.name, systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("No output device")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer(minLength: 4)
 
-                Button(action: undo) {
-                    Text("Undo")
-                        .font(.system(size: 13, weight: .semibold))
-                        // BypassBanner と同じく、押せる面を 44pt に届かせるための余白。
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 7)
+                if oc.isOn && oc.device != nil {
+                    Menu {
+                        if !store.names.isEmpty {
+                            Menu {
+                                OutputCorrectionPresetItems(store: store, source: oc.source, choose: choose)
+                            } label: {
+                                Label("Choose Preset", systemImage: "square.stack")
+                            }
+                        }
+                        Button(action: addEffect) {
+                            Label("Add Effect", systemImage: "plus")
+                        }
+                        share
+                        Divider()
+                        Button(role: .destructive, action: clear) {
+                            Label("Clear", systemImage: "trash")
+                        }
+                        .disabled(correction.isEmpty && oc.source == nil)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(!oc.isEditable)
+                    .accessibilityLabel("Output Correction Options")
                 }
-                .buttonStyle(.bordered)
 
-                Button(action: dismiss) {
-                    Image(systemName: "xmark")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Dismiss")
+                Toggle("Output Correction", isOn: Binding(get: { oc.isOn },
+                                                          set: { oc.setOn($0) }))
+                    .labelsHidden()
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// 補正だけを共有する。外の段（AU・JSFX）が在れば、落とさない口と EffeTune へ出す口を分ける。
+    /// 出力先の身元はどちらにも入らない。
+    @ViewBuilder
+    private var share: some View {
+        let ext = correction.lazy.filter(\.isExternal).count
+        if correction.isEmpty {
+            Button {} label: {
+                Label("Share Output Correction", systemImage: "square.and.arrow.up")
+            }
+            .disabled(true)
+        } else if ext == 0 {
+            if let url = ETShareLink.url(for: correction) {
+                ShareLink(item: url) {
+                    Label("Share Output Correction", systemImage: "square.and.arrow.up")
+                }
+            }
+        } else {
+            Menu {
+                if let deck = ETShareLink.deckURL(for: correction) {
+                    ShareLink(item: deck) { Text("Share") }
+                }
+                if let url = ETShareLink.url(for: correction) {
+                    ShareLink(item: url) {
+                        Text("Export to EffeTune without \(ext) external effect\(ext == 1 ? "" : "s")")
+                    }
+                }
+            } label: {
+                Label("Share Output Correction", systemImage: "square.and.arrow.up")
+            }
+        }
+    }
+}
+
+/// Choose Preset の中身。ユーザープリセットだけを、Presets と同じくフォルダごとに並べる。
+/// いま写してある元のプリセットに印を付ける。
+private struct OutputCorrectionPresetItems: View {
+    @ObservedObject var store: PresetStore
+    let source: String?
+    let choose: (String) -> Void
+
+    var body: some View {
+        ForEach(ETUserPresetName.folders(store.names), id: \.name) { folder in
+            if folder.name.isEmpty {
+                ForEach(folder.items, id: \.self) { item($0) }
+            } else {
+                Menu(folder.name) {
+                    ForEach(folder.items, id: \.self) { item($0) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func item(_ full: String) -> some View {
+        Button { choose(full) } label: {
+            if source == full {
+                Label(ETUserPresetName.leaf(full), systemImage: "checkmark")
+            } else {
+                Text(ETUserPresetName.leaf(full))
+            }
+        }
+    }
+}
+
+/// 出力補正が空のとき。足すか、プリセットから写すか。
+private struct OutputCorrectionEmptyRow: View {
+    @ObservedObject var oc: OutputCorrection
+    @ObservedObject var store: PresetStore
+    let addEffect: () -> Void
+    let choose: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button("Add Effect", action: addEffect)
+                .buttonStyle(.bordered)
+            if !store.names.isEmpty {
+                Menu("Choose Preset") {
+                    OutputCorrectionPresetItems(store: store, source: oc.source, choose: choose)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .disabled(!oc.isEditable)
+        .frame(maxWidth: .infinity)
     }
 }
 

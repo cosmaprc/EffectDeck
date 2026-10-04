@@ -111,14 +111,14 @@ final class RoomEQStore: ObservableObject {
             // 後から書いても遅延だけ前の設計のまま残る。
             //
             // 並べ替えを跨ぐので、位置は instance から引き直す。
-            guard let at = dsp.chain.firstIndex(where: { $0.instance == instance }) else { return }
+            guard let at = dsp.nodes.firstIndex(where: { $0.instance == instance }) else { return }
             // lt は普通そのまま戻る値なので、外れているときだけ直す。
             // 毎回書くと node.values が変わり、それを見張っている onChange が
             // もう一度送り直しに来る。
             let offset = RoomEQDesigner.ParameterOffset.latencyMode
             let want = RoomEQDesigner.parameterValue(forLatencyMode: mode)
-            if dsp.chain[at].values.indices.contains(offset),
-               dsp.chain[at].values[offset] != want {
+            if dsp.nodes[at].values.indices.contains(offset),
+               dsp.nodes[at].values[offset] != want {
                 dsp.setValue(want, at: at, offset: offset)
             }
             dsp.setValue(Float(design.filterDelaySamples),
@@ -177,7 +177,7 @@ final class RoomEQStore: ObservableObject {
 
     /// 鎖に居ない段を落とす。
     private func prune() {
-        let live = Set(EffeTuneDSP.shared.chain.map(\.id))
+        let live = Set(EffeTuneDSP.shared.nodes.map(\.id))
         // 回しながら消すので、鍵は先に控える。
         for id in Array(sessions.keys) where !live.contains(id) {
             sessions[id] = nil

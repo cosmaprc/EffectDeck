@@ -40,7 +40,7 @@ final class RhythmTracker: ObservableObject {
         // 0 は tap を付けられなかったもの（"Waiting for audio" のまま）。分けて持たない。
         guard tap != 0 else { return RhythmTracker() }
         if let tracker = byTap[tap] { return tracker }
-        let live = Set(EffeTuneDSP.shared.chain.map(\.tapId))
+        let live = Set(EffeTuneDSP.shared.nodes.map(\.tapId))
         byTap = byTap.filter { live.contains($0.key) }
         let made = RhythmTracker()
         byTap[tap] = made

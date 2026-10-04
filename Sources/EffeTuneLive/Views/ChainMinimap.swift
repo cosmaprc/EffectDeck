@@ -13,6 +13,9 @@
 //
 //  行の並びは右と同じrowsから作る（PipelineView.minimapItems）。
 //  onMoveの数え方がそのままmove(_:to:)の数え方になる。
+//
+//  出力補正の層が出ているときは、その行を別の節（Output Correction）に並べる。
+//  節ごとにForEachとonMoveを分けるので、main と補正のあいだで行は行き来しない。
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -20,7 +23,7 @@ import UniformTypeIdentifiers
 /// 左の一覧の1行ぶん。PipelineViewのrowsから作る。
 struct ETMinimapItem: Identifiable, Equatable {
     let id: UUID
-    /// 鎖の中の位置。入切を書くのに使う。
+    /// 鎖の中の位置（slot。補正の行は main の本数から続けて数える）。入切を書くのに使う。
     let index: Int
     let name: String
     let isSection: Bool
@@ -41,12 +44,18 @@ struct ETMinimapID: Hashable {
 
 struct ChainMinimap: View {
     let items: [ETMinimapItem]
+    /// 出力補正の行。nil なら節ごと出さない。
+    let correction: [ETMinimapItem]?
     let dsp: EffeTuneDSP
     let viewport: ETChainViewport
     /// 画面の行番号で動かす。ListのonMoveと同じ数え方。
     let move: (IndexSet, Int) -> Void
     /// ピッカーから運ばれた文字列と、差し込む鎖の位置（nilなら末尾）。
     let insert: (String, Int?) -> Void
+    /// 補正の節の中の行番号で動かす。
+    let moveCorrection: (IndexSet, Int) -> Void
+    /// 補正へ差し込む。位置は落とした行の slot（nilなら補正の末尾）。
+    let insertCorrection: (String, Int?) -> Void
 
     @State private var tracker = ETMinimapTracker()
 
@@ -61,11 +70,19 @@ struct ChainMinimap: View {
                 .onInsert(of: [.plainText]) { offset, providers in
                     // 落とした行の手前へ。一番下なら末尾。
                     let at = items.indices.contains(offset) ? items[offset].index : nil
-                    guard let provider = providers.first else { return }
-                    _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-                        guard let text = object as? NSString else { return }
-                        let payload = text as String
-                        Task { @MainActor in insert(payload, at) }
+                    Self.receive(providers) { insert($0, at) }
+                }
+                if let correction {
+                    Section("Output Correction") {
+                        ForEach(correction) { item in
+                            ETMinimapRow(item: item, dsp: dsp, viewport: viewport, tracker: tracker)
+                                .id(ETMinimapID(id: item.id))
+                        }
+                        .onMove(perform: moveCorrection)
+                        .onInsert(of: [.plainText]) { offset, providers in
+                            let at = correction.indices.contains(offset) ? correction[offset].index : nil
+                            Self.receive(providers) { insertCorrection($0, at) }
+                        }
                     }
                 }
             }
@@ -75,6 +92,19 @@ struct ChainMinimap: View {
             .background {
                 ETMinimapFollow(viewport: viewport, tracker: tracker, proxy: proxy)
             }
+        }
+    }
+}
+
+extension ChainMinimap {
+    /// 落とされた文字列を読んで渡す。読めたらメインで。
+    fileprivate static func receive(_ providers: [NSItemProvider],
+                                    _ deliver: @escaping @MainActor (String) -> Void) {
+        guard let provider = providers.first else { return }
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let text = object as? NSString else { return }
+            let payload = text as String
+            Task { @MainActor in deliver(payload) }
         }
     }
 }

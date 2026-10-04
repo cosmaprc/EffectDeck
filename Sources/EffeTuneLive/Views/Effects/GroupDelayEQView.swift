@@ -136,7 +136,7 @@ final class ETGroupDelayEQDesigners {
     /// engine には触らない（designer:684-685 の refresh が頭で cancel する）。
     private func release() {
         guard !entries.isEmpty else { return }
-        let alive = Set(EffeTuneDSP.shared.chain.map(\.id))
+        let alive = Set(EffeTuneDSP.shared.nodes.map(\.id))
         let doomed = entries.filter { !alive.contains($0.key) }
         for (id, entry) in doomed {
             entry.designer.attach(instance: 0)

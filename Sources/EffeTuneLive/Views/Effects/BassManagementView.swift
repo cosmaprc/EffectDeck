@@ -460,9 +460,8 @@ private struct BassManagementBody: View {
 
     /// 複数の配列にまたがる変更。鎖の今の値から作り、1 回で渡す。
     private func edit(_ change: (BassManagementSettings) -> BassManagementSettings) {
-        guard let layout, dsp.chain.indices.contains(index),
-              dsp.chain[index].id == node.id else { return }
-        var values = dsp.chain[index].values
+        guard let layout, let live = dsp.node(at: index), live.id == node.id else { return }
+        var values = live.values
         let current = BassManagementSettings(values: values, layout: layout)
         let next = change(current)
         guard next != current else { return }

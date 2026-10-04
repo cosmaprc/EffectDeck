@@ -529,10 +529,12 @@ final class RemoteMirror: ObservableObject {
         }
         UserDefaults.standard.set(data, forKey: Self.stashKey)
         UserDefaults.standard.set(dsp.bypass, forKey: Self.stashBypassKey)
+        // 出力補正は手元の出力先の話なので、PC の鎖を編集している間は外す。
+        // **isRemote を立てる前に呼ぶ。**外すときの publish → persist() → chainChanged が
+        // isRemote を見て手元の鎖を PC へ送らないように。外す前の書き出し（flush）もつなぐ前の状態で行う。
+        OutputCorrection.shared.setRemote(true)
         // 先に立てる。入れ替えの persist() が端末へ書かないように。
         isRemote = true
-        // 出力先のプリセットの帯と Undo は手元の鎖の話。残すと Undo が PC の鎖を手元の鎖で上書きする。
-        dsp.dismissDeviceNotice()
         adopt(state, rebuild: true)
         let gen = generation
         syncTask = Task { @MainActor [weak self] in
@@ -549,6 +551,8 @@ final class RemoteMirror: ObservableObject {
         restoreStash()
         applyingRemote = false
         isRemote = false
+        // いまの出力先の補正を戻す。isRemote を下ろした後なので、入れ直しの persist() は PC へ送らない。
+        OutputCorrection.shared.setRemote(false)
     }
 
     /// 退避した鎖を画面へ戻して、退避を消す。いまの鎖と同じなら作り直さない。

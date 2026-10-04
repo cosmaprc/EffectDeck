@@ -22,8 +22,6 @@ final class PresetStore: ObservableObject {
     @Published private(set) var names: [String] = []
     /// 中身の無いフォルダ。名前から作られるぶんとは別に持つ。
     @Published private(set) var emptyFolders: [String] = []
-    /// 出力先ごとのプリセットの紐付け（端末だけ）。無くなったプリセットのものは入らない。
-    @Published private(set) var deviceBindings: [PresetStoreCore.DeviceBinding] = []
 
     private let core: PresetStoreCore
 
@@ -37,7 +35,6 @@ final class PresetStore: ObservableObject {
     private func reload() {
         names = core.names
         emptyFolders = core.emptyFolders
-        deviceBindings = core.deviceBindings
     }
 
     /// 空のフォルダを作る。**入れ子は作らない。**`/` は名前から落とす。
@@ -96,29 +93,6 @@ final class PresetStore: ObservableObject {
         core.remove(name)
         reload()
     }
-
-    // MARK: - 出力先との紐付け（端末だけ）
-
-    /// その出力先に紐付けたプリセットの名前（無ければ nil）。
-    func preset(forDevice key: String) -> String? { core.preset(forDevice: key) }
-
-    /// 出力先にプリセットを紐付ける（nil で外す）。在るプリセットだけ。
-    @discardableResult
-    func bindDevice(_ key: String, name: String, kind: String, preset: String?) -> Bool {
-        defer { reload() }
-        return core.bindDevice(key, name: name, kind: kind, preset: preset)
-    }
-
-    /// 見出しの名前を最後に見たものへ直す（紐付けてある出力先だけ）。
-    func noteDeviceName(_ key: String, name: String) {
-        core.noteDeviceName(key, name: name)
-        reload()
-    }
-
-    /// 最後に落ち着いた出力先の鍵。
-    var currentDevice: String? { core.currentDevice }
-
-    func setCurrentDevice(_ key: String?) { core.setCurrentDevice(key) }
 
     /// 貼られた字から鎖を読む。直したもの・落としたもの（ETChainText.Report）も返す。
     /// JSFXをdesc:の名前で指した段は、取り込んであるJSFXで引く（CHAIN.md）。

@@ -50,7 +50,7 @@ struct MatrixView: View {
             ChannelCountProbe(tap: node.tapId, channels: $channels)
         }
         .onAppear {
-            MatrixRouting.shared.prune(keeping: dsp.chain.map(\.id))
+            MatrixRouting.shared.prune(keeping: dsp.nodes.map(\.id))
             push(cells)
         }
         // 鎖を作り直すとカーネルは既定の対角へ戻る（kernel.cpp:44-48 の reset）。

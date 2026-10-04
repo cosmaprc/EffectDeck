@@ -159,7 +159,7 @@ final class GroupDelayPEQDesigners {
         designer.update(next.clampingDelaysToLimit(), debounce: 0)
 
         markAttached(node.id, instance: node.instance)
-        let at = dsp.chain.firstIndex(where: { $0.instance == node.instance })
+        let at = dsp.nodes.firstIndex(where: { $0.instance == node.instance })
         designer.attach(instance: node.instance, nodeIndex: at ?? 0)
     }
 
@@ -171,7 +171,7 @@ final class GroupDelayPEQDesigners {
     /// instance は EffeTuneDSP が壊している（EffeTuneDSP.swift:689 の et_instance_destroy）ので、
     /// ここでは参照を外すだけでよい。detach を呼ぶと死んだ instance へ触りに行く。
     private func prune() {
-        let live = Set(EffeTuneDSP.shared.chain.map(\.id))
+        let live = Set(EffeTuneDSP.shared.nodes.map(\.id))
         designers = designers.filter { live.contains($0.key) }
         watches = watches.filter { live.contains($0.key) }
         attached = attached.filter { live.contains($0.key) }

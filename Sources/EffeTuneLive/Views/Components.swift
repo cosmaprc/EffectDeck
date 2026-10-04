@@ -327,8 +327,7 @@ extension View {
     where T: RawRepresentable & Equatable, T.RawValue == String {
         self
             .onAppear {
-                guard dsp.chain.indices.contains(index),
-                      let raw = dsp.chain[index].display[key],
+                guard let raw = dsp.node(at: index)?.display[key],
                       let v = T(rawValue: raw) else { return }
                 value.wrappedValue = v
             }
@@ -343,8 +342,7 @@ extension View {
                  dsp: EffeTuneDSP, on: String = "true", off: String = "false") -> some View {
         self
             .onAppear {
-                guard dsp.chain.indices.contains(index),
-                      let raw = dsp.chain[index].display[key] else { return }
+                guard let raw = dsp.node(at: index)?.display[key] else { return }
                 value.wrappedValue = raw == on
             }
             .onChange(of: value.wrappedValue) { _, v in
@@ -357,8 +355,7 @@ extension View {
                  dsp: EffeTuneDSP) -> some View {
         self
             .onAppear {
-                guard dsp.chain.indices.contains(index),
-                      let raw = dsp.chain[index].display[key],
+                guard let raw = dsp.node(at: index)?.display[key],
                       let v = Double(raw) else { return }
                 value.wrappedValue = v
             }

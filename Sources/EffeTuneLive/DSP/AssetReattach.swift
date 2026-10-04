@@ -30,7 +30,7 @@ enum ETAssetReattach {
 
     /// 鎖ぜんぶを見る。**何も無ければ何もしない**（置き場に材料が無い段は素通り）。
     static func all() {
-        for node in EffeTuneDSP.shared.chain where node.instance != 0 {
+        for node in EffeTuneDSP.shared.nodes where node.instance != 0 {
             one(node)
         }
     }

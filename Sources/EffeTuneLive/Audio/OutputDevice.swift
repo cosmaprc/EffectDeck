@@ -1,6 +1,6 @@
 //  OutputDevice.swift
-//  出力先（ヘッドホン・イヤホン・内蔵スピーカー）ごとのプリセットの、値だけで決まる判断。
-//  出力先の鍵・切り替える時機・読むか残すか・鎖が同じか。**AVAudioSession に触らない**
+//  出力先（ヘッドホン・イヤホン・内蔵スピーカー）ごとの出力補正の、値だけで決まる判断。
+//  出力先の鍵・切り替える時機。**AVAudioSession に触らない**
 //  （OutputDeviceTests）。口の型をKindに直す1か所だけAudioIOに残る。
 
 import Foundation
@@ -73,7 +73,7 @@ struct ETDeviceSwitch {
     /// 引き剥がしの操作の後に待つ秒数。その間のスピーカー表示を本物と取らない。
     static let afterEscapeSeconds: TimeInterval = ETRouteEscape.retry
 
-    /// 決まっている出力先の鍵（presetDeviceCurrent に残す）。
+    /// 決まっている出力先の鍵（outputCorrection.device に残す）。
     private(set) var settled: String?
     private(set) var candidate: String?
     private(set) var since: TimeInterval = 0
@@ -114,35 +114,5 @@ struct ETDeviceSwitch {
         settled = key
         candidate = nil
         return .switched(device)
-    }
-
-    // MARK: - 切り替えた後
-
-    enum Action: Equatable {
-        /// 紐付けが無い。鎖はそのまま。
-        case unbound
-        /// 鎖はもうこの出力先のプリセットから来ている（手で直した後かもしれない）。そのまま残す。
-        case keep
-        /// このプリセットを読む。
-        case load(String)
-    }
-
-    static func action(device: String, bound: String?, origin: String?) -> Action {
-        guard let bound else { return .unbound }
-        if origin == device { return .keep }
-        return .load(bound)
-    }
-
-    /// 2つの鎖の短い形が同じか。キーを並べ替えたJSONで比べる。
-    ///
-    /// data(withJSONObject:) は不正な値だとトラップするので、先に isValidJSONObject で見る。
-    /// どちらかが作れなければ false（同じとは言わない）。
-    static func sameForm(_ a: [[String: Any]], _ b: [[String: Any]]) -> Bool {
-        guard JSONSerialization.isValidJSONObject(a),
-              JSONSerialization.isValidJSONObject(b),
-              let da = try? JSONSerialization.data(withJSONObject: a, options: [.sortedKeys]),
-              let db = try? JSONSerialization.data(withJSONObject: b, options: [.sortedKeys])
-        else { return false }
-        return da == db
     }
 }

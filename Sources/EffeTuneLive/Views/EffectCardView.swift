@@ -1225,8 +1225,7 @@ private struct SectionCardView: View {
     /// 頭に出す行。Section の名前は欄そのものなので、ここには種別と中身の数を出す。
     private var subtitle: String {
         // 配下は Analysis が持つ。ここで鎖を走って数え直さない。
-        let n = dsp.chain.indices.contains(index)
-            ? dsp.analysis.members(of: dsp.chain[index].id).count : 0
+        let n = dsp.node(at: index).map { dsp.analysis.members(of: $0.id).count } ?? 0
         guard n > 0 else { return "Section" }
         let effects = "\(n) effect\(n == 1 ? "" : "s")"
         return isExpanded ? "Section · \(effects)" : "Section · \(effects) hidden"

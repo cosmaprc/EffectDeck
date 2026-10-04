@@ -471,7 +471,7 @@ final class ETJSFXHost: ObservableObject {
     /// （取ったのが別の番号なら返す。次の起動で建つ）。
     private func reviveDeadCards(resolvingTo ids: Set<String>) {
         let bridge = ETAUExternalBridge.shared
-        let dead = EffeTuneDSP.shared.chain.filter { node in
+        let dead = EffeTuneDSP.shared.nodes.filter { node in
             guard node.isExternal, let componentID = node.externalID, componentID.hasPrefix("jsfx:"),
                   instances[node.externalInstanceID] == nil,
                   let resolved = entry(id: componentID) else { return false }

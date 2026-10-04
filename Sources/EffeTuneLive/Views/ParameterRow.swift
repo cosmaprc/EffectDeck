@@ -177,8 +177,7 @@ struct ParameterRow: View {
     /// ETParamGate の toggle が切れているか。
     private var isGatedOff: Bool {
         guard let gate = ETParamGate.upstream(type: effectType, key: param.key),
-              dsp.chain.indices.contains(nodeIndex),
-              let owner = dsp.chain[nodeIndex].spec.params.first(where: { $0.key == gate }),
+              let owner = dsp.node(at: nodeIndex)?.spec.params.first(where: { $0.key == gate }),
               values.indices.contains(owner.offset) else { return false }
         return values[owner.offset] < 0.5
     }
@@ -308,7 +307,7 @@ struct ParameterRow: View {
 
     /// 上流のプラグイン名。
     private var effectType: String {
-        dsp.chain.indices.contains(nodeIndex) ? dsp.chain[nodeIndex].spec.type : ""
+        dsp.node(at: nodeIndex)?.spec.type ?? ""
     }
 
     private var unitSuffix: String {
