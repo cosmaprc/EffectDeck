@@ -77,16 +77,21 @@ struct EffectPickerView: View {
     /// ソースを開いているJSFX（行の…のView Source）。
     @State private var viewingSource: ETJSFXHost.Entry?
 
-    /// 上の段階の切り替え。効果 / 自分のプリセット / 同梱のプリセット。
+    /// 上の段階の切り替え。効果 / プラグイン / プリセット。
+    ///
+    /// プリセットは自分のもの（User Presets）と同梱のもの（System Presets）を 1 面に縦に並べる。
+    /// 以前は User と Factory の 2 面だったが、探しに来た人に先にどちらかを当てさせていた。
+    /// 呼び名は上流に合わせて System（js/locales/en.json5 の ui.title.systemPresets）。
+    /// "Factory" はこちらが勝手に付けた言葉だった。
+    /// rawValue はどこにも保存していない（持ち主の PipelineView は @State）ので、.user / .system からの移行は要らない。
     enum Pane: String, CaseIterable, Identifiable {
-        case effects, plugins, user, system
+        case effects, plugins, presets
         var id: String { rawValue }
         var label: String {
             switch self {
             case .effects: return "Effects"
             case .plugins: return "Plugins"
-            case .user:    return "User"
-            case .system:  return "Factory"
+            case .presets: return "Presets"
             }
         }
     }
@@ -136,8 +141,8 @@ struct EffectPickerView: View {
 
     // MARK: - 探す
     //
-    // **段の区別を越えて探す。**上の 4 つの段（効果・プラグイン・自分のプリセット・
-    // 出荷時のプリセット）は「並べて眺めるとき」の分け方で、名前で探すときには
+    // **段の区別を越えて探す。**上の 3 つの段（効果・プラグイン・プリセット）は
+    // 「並べて眺めるとき」の分け方で、名前で探すときには
     // 邪魔でしかない。探しているものがどの段に居るかを先に当てさせる作りだった。
     //
     // **当たり方で並べる。**ただ contains で拾うと、打った字を含むだけのものが
@@ -275,10 +280,8 @@ struct EffectPickerView: View {
                             allSections
                         case .plugins:
                             pluginList
-                        case .user:
-                            userPresetList
-                        case .system:
-                            systemPresetList
+                        case .presets:
+                            presetList
                         }
                     }
                 } else {
@@ -797,134 +800,194 @@ struct EffectPickerView: View {
         .menuStyle(.button)
     }
 
-    /// 自分で保存したプリセット。`/` で仕切るとフォルダに束ねる。
-    private var userPresetList: some View {
-        Group {
-            if presets.names.isEmpty {
-                ContentUnavailableView("No user presets", systemImage: "square.stack")
-            } else {
-                ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                // フォルダが 1 つだけ（＝仕切っていない）なら帯は出さない。
-                if userFolders.count > 1 {
-                    jumpStrip(userFolders.map(\.name).map { $0.isEmpty ? Self.looseKey : $0 })
+    /// プリセットの面。**自分のもの（User Presets）を先に、同梱のもの（System Presets）をその下に、
+    /// 1 本の List へ縦に並べる。**開いたときは List の頭（User Presets の先頭）。
+    /// 上の帯は飛び先の 2 組で、左が自分のフォルダ・右が同梱のカテゴリ（帯は 1 段のまま）。
+    private var presetList: some View {
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                let chips = presetChips
+                if !chips.isEmpty {
+                    chipStrip(chips)
                     Divider()
                 }
                 List {
-                    ForEach(userFolders, id: \.name) { folder in
-                        Section {
-                            ForEach(Array(folder.items.enumerated()), id: \.element) {
-                                offset, name in
-                                presetRow(name: ETUserPresetName.leaf(name),
-                                          payload: "preset:user:" + name) {
-                                    PresetStore.shared.load(name)
-                                }
-                                .id(offset == 0
-                                    ? Self.jumpTarget(folder.name.isEmpty
-                                                        ? Self.looseKey : folder.name)
-                                    : "user-preset-" + name)
-                            }
-                        } header: {
-                            Text(folder.name.isEmpty ? "Others" : folder.name)
-                                .onScrollVisibilityChange(threshold: 0.1) { visible in
-                                    if visible {
-                                        current = folder.name.isEmpty ? Self.looseKey : folder.name
-                                    }
-                                }
+                    // **鎖を組ませる口を、一覧の頭で見せる。**返ってきた鎖は Presets 画面の
+                    // Import from clipboard で入れる。説明は足さず、札だけ置く。
+                    // 中国本土の店では出さない（ETStorefrontGate）。
+                    if ETStorefrontGate.shared.allowsChatGPT {
+                        Button("Build a chain with ChatGPT", systemImage: "sparkles") {
+                            openURL(Self.buildChain)
                         }
                     }
+                    userSections
+                    systemSections
                 }
                 .listStyle(.plain)
-                }
-                .onChange(of: jump) { _, now in
-                    guard !now.name.isEmpty else { return }
-                    withAnimation {
-                        proxy.scrollTo(Self.jumpTarget(now.name), anchor: .top)
+            }
+            .onChange(of: jump) { _, now in
+                guard !now.name.isEmpty else { return }
+                withAnimation { proxy.scrollTo(Self.jumpTarget(now.name), anchor: .top) }
+            }
+        }
+    }
+
+    /// 自分で保存したプリセット。`/` で仕切るとフォルダごとの節にする。
+    /// **空でも節は出す。**1 行だけの空の表示を置き、下の System Presets へは帯から飛べる。
+    @ViewBuilder
+    private var userSections: some View {
+        let folders = userFolders
+        if folders.isEmpty {
+            Section {
+                Text("No user presets")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                presetHeader(group: "User Presets", title: nil)
+                    // 空の表示が見えているあいだは、帯のどれも塗らない。
+                    .onScrollVisibilityChange(threshold: 0.1) { visible in
+                        if visible { current = "" }
                     }
-                }
+            }
+        } else {
+            ForEach(folders, id: \.name) { folder in
+                let key = Self.userChipKey(folder.name)
+                // 先頭の節にだけ群の名前。仕切っていないものは、フォルダが他にあるときだけ "Others" と呼ぶ。
+                let group: String? = folder.name == folders.first?.name ? "User Presets" : nil
+                let title: String? = folder.name.isEmpty ? (folders.count > 1 ? "Others" : nil)
+                                                         : folder.name
+                Section {
+                    ForEach(Array(folder.items.enumerated()), id: \.element) { offset, name in
+                        presetRow(name: ETUserPresetName.leaf(name),
+                                  payload: "preset:user:" + name) {
+                            PresetStore.shared.load(name)
+                        }
+                        .id(offset == 0 ? Self.jumpTarget(key) : "user-preset-" + name)
+                    }
+                } header: {
+                    presetHeader(group: group, title: title)
+                        .onScrollVisibilityChange(threshold: 0.1) { visible in
+                            if visible { current = key }
+                        }
                 }
             }
         }
     }
 
     /// 同梱のプリセット。上流の分け方をそのまま見出しにする。
-    private var systemPresetList: some View {
-        ScrollViewReader { proxy in
-        VStack(spacing: 0) {
-        jumpStrip(systemCategories)
-        Divider()
-        List {
-            ForEach(systemCategories, id: \.self) { category in
-                Section {
-                    if category == Self.debugJSFXCategory {
-                        // **Debugの版だけ。**見出し（systemCategories）はDebugでしか出ないが、
-                        // 呼ぶ側を囲わないとDebugPresets.swiftの鎖の字がReleaseにも入る
-                        // （Scripts/check_release_binary.shのdebugonlyが見る）。
-                        #if DEBUG
-                        presetRow(name: "JSFX Host Test",
-                                  payload: "preset:debug:jsfx-host") {
-                            jsfx.debugPresetItems()
-                        }
-                        .id(Self.jumpTarget(category))
-                        // 手で組み直さずに見るための鎖（DSP/DebugPresets.swift）。
-                        ForEach(Array(ETDebugPresets.all.enumerated()), id: \.offset) {
-                            _, item in
-                            presetRow(name: item.name,
-                                      payload: "preset:debug:" + item.name) {
-                                ETShareLink.parse(item.json, catalog: ETCatalog)
-                            }
-                        }
-                        #endif
-                    } else {
-                        let presets = ETSystemPresets.filter { $0.category == category }
-                        ForEach(Array(presets.enumerated()), id: \.element.id) { offset, preset in
-                            presetRow(name: preset.name,
-                                      payload: "preset:system:" + preset.name) {
-                                ETShareLink.parse(preset.json, catalog: ETCatalog)
-                            }
-                            .id(offset == 0 ? Self.jumpTarget(category)
-                                            : "system-preset-" + preset.name)
+    @ViewBuilder
+    private var systemSections: some View {
+        ForEach(systemCategories, id: \.self) { category in
+            let key = Self.systemChipKey(category)
+            Section {
+                if category == Self.debugJSFXCategory {
+                    // **Debugの版だけ。**見出し（systemCategories）はDebugでしか出ないが、
+                    // 呼ぶ側を囲わないとDebugPresets.swiftの鎖の字がReleaseにも入る
+                    // （Scripts/check_release_binary.shのdebugonlyが見る）。
+                    #if DEBUG
+                    presetRow(name: "JSFX Host Test",
+                              payload: "preset:debug:jsfx-host") {
+                        jsfx.debugPresetItems()
+                    }
+                    .id(Self.jumpTarget(key))
+                    // 手で組み直さずに見るための鎖（DSP/DebugPresets.swift）。
+                    ForEach(Array(ETDebugPresets.all.enumerated()), id: \.offset) {
+                        _, item in
+                        presetRow(name: item.name,
+                                  payload: "preset:debug:" + item.name) {
+                            ETShareLink.parse(item.json, catalog: ETCatalog)
                         }
                     }
-                } header: {
-                    Text(category.categoryLabel)
-                        .onScrollVisibilityChange(threshold: 0.1) { visible in
-                            if visible { current = category }
+                    #endif
+                } else {
+                    let inCategory = ETSystemPresets.filter { $0.category == category }
+                    ForEach(Array(inCategory.enumerated()), id: \.element.id) { offset, preset in
+                        presetRow(name: preset.name,
+                                  payload: "preset:system:" + preset.name) {
+                            ETShareLink.parse(preset.json, catalog: ETCatalog)
                         }
+                        .id(offset == 0 ? Self.jumpTarget(key)
+                                        : "system-preset-" + preset.name)
+                    }
                 }
+            } header: {
+                presetHeader(group: category == systemCategories.first ? "System Presets" : nil,
+                             title: category.categoryLabel)
+                    .onScrollVisibilityChange(threshold: 0.1) { visible in
+                        if visible { current = key }
+                    }
             }
-        }
-        .listStyle(.plain)
-        }
-        .onChange(of: jump) { _, now in
-            guard !now.name.isEmpty else { return }
-            withAnimation { proxy.scrollTo(Self.jumpTarget(now.name), anchor: .top) }
-        }
         }
     }
 
-    /// 仕切っていないプリセットをまとめる見出しの鍵。
-    static let looseKey = "__loose"
+    /// プリセットの面の節の見出し。**群の先頭の節にだけ、群の名前（User Presets / System Presets）を上に付ける。**
+    /// 見出しを群ごとに別の節にすると、中身の無い節が出来て飛び先も塗り分けも合わなくなる。
+    private func presetHeader(group: String?, title: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let group { Text(group).font(.headline) }
+            if let title { Text(title) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// プリセットの面の帯。左が自分のフォルダ、右が同梱のカテゴリ。
+    /// 自分のものが 1 つも無いときは同梱のものだけ（区切りも出さない）。
+    private var presetChips: [JumpChip] {
+        let folders = userFolders
+        var chips = folders.map { folder in
+            // 仕切っていないものだけのときは、帯に "Others" と出しても何の他か分からない。
+            JumpChip(key: Self.userChipKey(folder.name),
+                     label: folder.name.isEmpty ? (folders.count > 1 ? "Others" : "User Presets")
+                                                : folder.name)
+        }
+        let hasUser = !chips.isEmpty
+        for (index, category) in systemCategories.enumerated() {
+            chips.append(JumpChip(key: Self.systemChipKey(category), label: category.categoryLabel,
+                                  startsGroup: hasUser && index == 0))
+        }
+        return chips
+    }
+
+    /// 帯の飛び先の鍵。自分のフォルダと同梱のカテゴリは同じ名前がありうる（Reverb など）ので、
+    /// 頭に群を付けて別の鍵にする。仕切っていないものは folder が空。
+    static func userChipKey(_ folder: String) -> String { "user:" + folder }
+    static func systemChipKey(_ category: String) -> String { "system:" + category }
+
+    /// 帯の 1 つ。key が飛び先と塗り分けの鍵（current）、label が字。
+    private struct JumpChip: Identifiable {
+        let key: String
+        let label: String
+        /// 立っていれば、この前に縦の区切りを置く（プリセットの面の自分と同梱のあいだ）。
+        var startsGroup = false
+        var id: String { key }
+    }
 
     /// 面の上に出す飛び先の帯。効果のジャンル帯と同じ作り。
     private func jumpStrip(_ names: [String]) -> some View {
+        chipStrip(names.map { JumpChip(key: $0, label: $0.categoryLabel) })
+    }
+
+    private func chipStrip(_ chips: [JumpChip]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(names, id: \.self) { name in
+                ForEach(chips) { chip in
+                    if chip.startsGroup {
+                        Divider().frame(height: 18)
+                    }
                     Button {
-                        current = name
-                        jump = Jump(name: name, count: jump.count + 1)
+                        current = chip.key
+                        jump = Jump(name: chip.key, count: jump.count + 1)
                     } label: {
-                        Text(name == Self.looseKey ? "Others" : name.categoryLabel)
+                        Text(chip.label)
                             .font(.system(size: 13,
-                                          weight: current == name ? .semibold : .regular))
-                            .foregroundStyle(current == name ? AnyShapeStyle(.white)
-                                                             : AnyShapeStyle(.secondary))
+                                          weight: current == chip.key ? .semibold : .regular))
+                            .foregroundStyle(current == chip.key ? AnyShapeStyle(.white)
+                                                                 : AnyShapeStyle(.secondary))
                             .padding(.horizontal, 13)
                             .padding(.vertical, 7)
                             .frame(minHeight: ETMetrics.hitTarget)
-                            .background(current == name ? AnyShapeStyle(.tint)
-                                                        : AnyShapeStyle(.quaternary),
+                            .background(current == chip.key ? AnyShapeStyle(.tint)
+                                                            : AnyShapeStyle(.quaternary),
                                         in: .capsule)
                             .contentShape(.capsule)
                     }
@@ -950,10 +1013,6 @@ struct EffectPickerView: View {
     }
 
     static let debugJSFXCategory = "Debug"
-
-    /// 一覧に出すプリセットの見出し用の鍵。カテゴリ名と衝突しない字にする。
-    static let userKey = "__user_presets"
-    static let systemKey = "__system_presets"
 
     /// 上の帯に並べるもの。**新しいものを先頭に置く。**
     /// 上流が増やした効果は、ジャンルに散らばると見つけられない。
@@ -983,10 +1042,8 @@ struct EffectPickerView: View {
 
     static func stripLabel(_ name: String) -> String {
         switch name {
-        case newKey:    return "New"
-        case userKey:   return "User Presets"
-        case systemKey: return "System Presets"
-        default:        return name.categoryLabel
+        case newKey: return "New"
+        default:     return name.categoryLabel
         }
     }
 
@@ -1032,7 +1089,8 @@ struct EffectPickerView: View {
         "and follow it. Then ask me what effect I want.")
 
     /// 同じ形で、内蔵のエフェクトの鎖を組ませる依頼（CHAIN.md）。返ってきた鎖は
-    /// Presets → Import from clipboardで入れる（依頼を開くボタンもそのすぐ上に置いてある）。
+    /// Presets → Import from clipboardで入れる。依頼を開くボタンは、Presets画面のSaveの節と
+    /// このシートのPresetsの面の頭に置いてある。
     static let buildChain: URL = chatGPT(
         "Build an effect chain for \(requestVersion). " +
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md " +
@@ -1190,10 +1248,10 @@ struct EffectPickerView: View {
         switch pane {
         case .effects:    return stripNames.first ?? ""
         case .plugins:    return pluginVendors.first ?? ""
-        case .user:
-            guard let first = userFolders.first?.name else { return "" }
-            return first.isEmpty ? Self.looseKey : first
-        case .system:     return systemCategories.first ?? ""
+        case .presets:
+            // 開くのは User Presets の頭。自分のものが無いときは空の表示が頭で、どの帯も塗らない。
+            guard let first = userFolders.first else { return "" }
+            return Self.userChipKey(first.name)
         }
     }
 
