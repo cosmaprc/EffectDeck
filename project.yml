@@ -391,6 +391,10 @@ targets:
       - path: Sources/EffeTuneLive/Audio/NowPlayingMode.swift
       - path: Sources/EffeTuneLive/Audio/PowerPolicy.swift
       - path: Sources/EffeTuneLive/Audio/MockSource.swift
+      # 出力先（ヘッドホンなど）ごとのプリセット。出力先の鍵・切り替える時機・読むか残すかの判断。
+      # Foundationだけ（OutputDeviceTests）。自分の仮想デバイスを名前で外すのにAudioSessionRules、
+      # 待つ秒数にRouteEscape（どちらも上で入れてある）を引く。
+      - path: Sources/EffeTuneLive/Audio/OutputDevice.swift
       # FeedbackLoopTestsがET_NAME_STEMをSwiftの写しと照らすために読む。コンパイルはしない。
       - path: Sources/Shared/ETNames.h
         buildPhase: resources
