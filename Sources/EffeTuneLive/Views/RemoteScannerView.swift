@@ -165,8 +165,12 @@ struct RemoteRows: View {
         let intent = mirror.intent
         switch intent.layout {
         case .unpaired:
-            Section(Self.title) {
+            Section {
                 scanButton
+            } header: {
+                Text(Self.title)
+            } footer: {
+                Text(Self.qrTrademark)
             }
         case .active:
             Section(Self.title) {
@@ -208,7 +212,7 @@ struct RemoteRows: View {
             }
         case .idle:
             // 切断中は PC の情報を並べない（つないでいるように読める）。つなぎ先の名前はボタンに出す。
-            Section(Self.title) {
+            Section {
                 if intent.canConnect {
                     Button("Connect to \(connectTarget)") { mirror.connectToSaved() }
                 }
@@ -220,6 +224,10 @@ struct RemoteRows: View {
                     }
                 }
                 scanButton
+            } header: {
+                Text(Self.title)
+            } footer: {
+                Text(Self.qrTrademark)
             }
             Section {
                 Button("Forget", role: .destructive) { mirror.forget() }
@@ -229,6 +237,11 @@ struct RemoteRows: View {
 
     /// 先頭の節の見出し。どの状態でも同じ（何を操る画面かを言う）。
     static let title = "EffeTune Remote Control"
+
+    /// QR コードの商標表示。**Scan QR Code のある節（unpaired と idle の先頭）の footer に付ける。**
+    /// 登録商標の持ち主は DENSO WAVE INCORPORATED（DENSO ではない）。字は引用符つきで一字一句この形。
+    /// active の節には Scan QR Code が無いので付けない。About の footer にも置かない。
+    static let qrTrademark = "“QR Code” is a registered trademark of DENSO WAVE INCORPORATED."
 
     /// 切断中の Connect に出すつなぎ先。ホスト名、無ければアドレスの host。
     private var connectTarget: String {
