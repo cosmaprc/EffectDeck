@@ -822,6 +822,16 @@ struct PipelineView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
 
+            // 出力先が変わって紐付けたプリセットを読んだ。Undo で前の鎖へ戻せる。
+            if let notice = dsp.deviceNotice {
+                DevicePresetBanner(notice: notice,
+                                   undo: { dsp.undoDeviceSwitch() },
+                                   dismiss: { dsp.dismissDeviceNotice() })
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            }
+
             if !hasPeer {
                 ConnectBanner(openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
@@ -2101,6 +2111,53 @@ private struct BypassBanner: View {
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.borderedProminent)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// 出力先のプリセットを読んだ知らせ。形は BypassBanner と同じ。
+/// 閉じるか、Undo か、次の切り替えか、並びを変えるまで残る。
+private struct DevicePresetBanner: View {
+    let notice: EffeTuneDSP.DeviceNotice
+    let undo: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        Card {
+            HStack(spacing: 12) {
+                Image(systemName: notice.symbol)
+                    .font(.system(size: 20))
+                    .foregroundStyle(.tint)
+                    .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Loaded “\(notice.preset)”")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(notice.device)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 4)
+
+                Button(action: undo) {
+                    Text("Undo")
+                        .font(.system(size: 13, weight: .semibold))
+                        // BypassBanner と同じく、押せる面を 44pt に届かせるための余白。
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.bordered)
+
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
