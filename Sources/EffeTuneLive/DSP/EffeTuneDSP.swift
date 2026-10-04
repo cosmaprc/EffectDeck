@@ -283,22 +283,18 @@ final class EffeTuneDSP: ObservableObject {
     ///
     /// **位置は鎖の添字。** 画面の行番号ではない（Section が畳まれていると
     /// 行と鎖はずれる）。呼ぶ側が鎖の添字へ直してから渡すこと。
-    /// `part` が .correction なら、位置は補正の中の添字。
-    func add(_ spec: ETEffect, at index: Int? = nil, in part: ETChainPart = .main) {
-        guard appendSpec(spec, to: part) else { return }
+    func add(_ spec: ETEffect, at index: Int? = nil) {
+        guard appendSpec(spec) else { return }
         // appendSpec は末尾へ積む。差し込む位置が指定されていれば、そこへ移す。
-        var placed = partNodes(part).count - 1
+        var placed = chain.count - 1
         if let index, index >= 0, index < placed {
-            withPart(part) { list in
-                let node = list.removeLast()
-                list.insert(node, at: index)
-            }
+            let node = chain.removeLast()
+            chain.insert(node, at: index)
             placed = index
         }
         publish()
-        let list = partNodes(part)
-        guard list.indices.contains(placed) else { return }
-        let id = list[placed].id
+        guard chain.indices.contains(placed) else { return }
+        let id = chain[placed].id
         expanded.insert(id)
         // 足す先は必ず鎖の末尾で、その末尾が畳んだ Section の配下に当たることがある。
         // 隠す範囲は Section の次から次の Section の手前までで、次が無ければ末尾まで
@@ -311,21 +307,22 @@ final class EffeTuneDSP: ObservableObject {
     /// AU/JSFXをEffectDeckの鎖へ追加するための共通入口。
     /// 実行アダプタはexternalIDをキーに別レジストリから解決する。
     func addExternal(id: String, instanceID: String, name: String, category: String,
-                     externalIndex: UInt8, at index: Int? = nil, in part: ETChainPart = .main) {
+                     externalIndex: UInt8, at index: Int? = nil) {
         let spec = ETEffect.external(type: "External:\(id)", name: name, category: category)
         var node = Node(spec: spec, values: [])
         node.externalID = id
         node.externalInstanceID = instanceID
         node.externalIndex = externalIndex
-        withPart(part) { list in
-            if let index, index >= 0, index < list.count {
-                list.insert(node, at: index)
-            } else {
-                list.append(node)
-            }
+        let placed: Int
+        if let index, index >= 0, index < chain.count {
+            chain.insert(node, at: index)
+            placed = index
+        } else {
+            chain.append(node)
+            placed = chain.count - 1
         }
         publish()
-        expanded.insert(node.id)
+        expanded.insert(chain[placed].id)
     }
 
     /// 1 本足すだけ。publish はしない。
@@ -410,23 +407,21 @@ final class EffeTuneDSP: ObservableObject {
     /// 開かないと動かした行が画面から消え、どこへ行ったのか分からなくなる。
     /// 畳んだ Section と一緒に運ばれた配下は開く理由に数えない。Section ごと
     /// 動かしただけで、畳んでおいた中身が勝手に開いてしまうため。
-    ///
-    /// `part` が .correction なら、位置はどちらも補正の中の添字。部分をまたいでは動かさない。
-    func move(from source: IndexSet, to destination: Int, in part: ETChainPart = .main) {
+    func move(from source: IndexSet, to destination: Int) {
         // 連れて行かれるだけの配下。掴んだ行ではないので開く対象から外す。
         let a = analysis
-        let list = partNodes(part)
-        let moved = Set(source.compactMap { list.indices.contains($0) ? list[$0].id : nil })
+        let moved = Set(source.compactMap { chain.indices.contains($0) ? chain[$0].id : nil })
         var carried: Set<UUID> = []
-        for i in source where list.indices.contains(i) {
-            guard list[i].isSection, !expanded.contains(list[i].id) else { continue }
-            for member in a.members(of: list[i].id) where moved.contains(member) {
+        for i in source where chain.indices.contains(i) {
+            guard chain[i].isSection, !expanded.contains(chain[i].id) else { continue }
+            for member in a.members(of: chain[i].id) where moved.contains(member) {
                 carried.insert(member)
             }
         }
-        let grabbed = moved.subtracting(carried)
+        let grabbed = Set(source.compactMap { chain.indices.contains($0) ? chain[$0].id : nil })
+            .subtracting(carried)
 
-        withPart(part) { $0.move(fromOffsets: source, toOffset: destination) }
+        chain.move(fromOffsets: source, toOffset: destination)
         publish()
         revealHidden(grabbed)
         normalizeRootResets()
@@ -797,12 +792,10 @@ final class EffeTuneDSP: ObservableObject {
     /// 鎖を捨てたいときは ⋯ の Reset Pipeline を使う。
     ///
     /// index を省くと末尾へ足す（上流の insertionIndex = null と同じ）。
-    /// `part` が .correction なら、index は補正の中の添字で、包む Section も補正の中で決める。
-    func addPreset(named name: String, items: [PipelineStore.Loaded], at index: Int? = nil,
-                   in part: ETChainPart = .main) {
+    func addPreset(named name: String, items: [PipelineStore.Loaded], at index: Int? = nil) {
         guard ready, !items.isEmpty else { return }
         let plan = ETChainEditing.presetInsertion(named: name, items: items, at: index,
-                                                  roles: partNodes(part).map(\.role))
+                                                  roles: chain.map(\.role))
         let target = plan.target
 
         var made: [Node] = []
@@ -839,17 +832,15 @@ final class EffeTuneDSP: ObservableObject {
         }
         guard !made.isEmpty else { return }
 
-        withPart(part) { $0.insert(contentsOf: made, at: target) }
+        chain.insert(contentsOf: made, at: target)
         publish()
         // IR は instance を作っただけでは鳴らない。保存済みの資産を新しい
         // instance へ送り直す。既存の段まで再送せず、今回足した段だけにする。
-        // reloadAsset は slot で受けるので、補正なら main の本数を足す。
-        let base = ETChainSlots.slot(target, in: part, mainCount: chain.count)
         for offset in made.indices where !made[offset].irId.isEmpty {
-            _ = reloadAsset(at: base + offset)
+            _ = reloadAsset(at: target + offset)
         }
         // 値だけで設計できる型（Bass Management の Linear）も同じ理由でここで作らせる。
-        ETAssetReattach.loaded(Array(partNodes(part)[target..<(target + made.count)]))
+        ETAssetReattach.loaded(Array(chain[target..<(target + made.count)]))
         // 足したものは開いて出す。上流も expandedPlugins に入れている。
         // publish() の後に入れるのは、persistExpanded に確定後の位置を書かせるため。
         for node in made { expanded.insert(node.id) }
@@ -873,9 +864,8 @@ final class EffeTuneDSP: ObservableObject {
         // afterward would clear the freshly-created adapters as well.
         for id in external { removeExternal(instanceID: id) }
         // 丸ごと入れ替えたら全部畳む。前の鎖の id は残っていても指す先が無い。
-        // 補正の段は入れ替えていないので、開いているものはそのまま残す。
         restoring = true
-        expanded.formIntersection(Set(correction.map(\.id)))
+        expanded.removeAll()
         restoring = false
         for item in items { append(item) }
         publish()
@@ -941,9 +931,8 @@ final class EffeTuneDSP: ObservableObject {
         let external = chain.filter(\.isExternal).map(\.externalInstanceID)
         chain.removeAll()
         // 前の鎖の id は残っていても指す先が無いので捨てる（replaceChain と同じ）。
-        // 出力補正は戻さないので、そちらの開閉は残す。
         restoring = true
-        expanded.formIntersection(Set(correction.map(\.id)))
+        expanded.removeAll()
         restoring = false
         if let meter = ETCatalog.first(where: { $0.type == Self.defaultType }) {
             appendSpec(meter)
