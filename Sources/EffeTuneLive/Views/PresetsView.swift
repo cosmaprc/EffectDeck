@@ -18,6 +18,9 @@ struct PresetsView: View {
     @StateObject private var store = PresetStore.shared
 
     @State private var newName = ""
+    /// いま使っている出力先。**AudioIO はこの画面で観測しない**（3.3Hz で publish する）。
+    /// 落ち着いた出力先だけを受けて、ここに写す。
+    @State private var outputDevice: ETOutputDevice?
 
     /// 押されたものをここで束ねる。ユーザーのものと EffeTune のものを
     /// 同じ経路へ流すため。
@@ -252,6 +255,7 @@ struct PresetsView: View {
         NavigationStack {
             List {
                 saveSection
+                deviceSection
                 userSection
                 systemSection
                 webSection
@@ -259,6 +263,8 @@ struct PresetsView: View {
                 // 扱っているのは設定ではなく、この画面と同じ「保存した鎖」。
                 ETBackupSection()
             }
+            .onAppear { outputDevice = AudioIO.shared.outputDevice }
+            .onReceive(AudioIO.shared.$outputDevice) { outputDevice = $0 }
             .navigationTitle("Presets")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -342,6 +348,46 @@ struct PresetsView: View {
     }
 
     // MARK: - 節
+
+    /// 出力先（ヘッドホンなど）ごとのプリセット。いま使っている出力先と、紐付けてある出力先を並べる。
+    /// 選ぶと紐付く。None で外すと、使っていない出力先は行ごと消える（これで忘れる）。
+    /// ユーザープリセットが無いか、出す出力先が 1 つも無ければ節ごと出さない。
+    @ViewBuilder private var deviceSection: some View {
+        let current = outputDevice
+        let others = store.deviceBindings.filter { $0.key != current?.key }
+        if !store.names.isEmpty && (current != nil || !others.isEmpty) {
+            Section {
+                if let d = current, let key = d.key {
+                    deviceRow(key: key, name: d.name, kind: d.kind, inUse: true)
+                }
+                ForEach(others, id: \.key) { b in
+                    deviceRow(key: b.key, name: b.name,
+                              kind: ETOutputDevice.Kind(rawValue: b.kind) ?? .other, inUse: false)
+                }
+            } header: {
+                Text("Device Presets")
+            }
+        }
+    }
+
+    /// 出力先 1 つの行。標準の Picker を押して別の画面で選ぶ。
+    private func deviceRow(key: String, name: String, kind: ETOutputDevice.Kind, inUse: Bool) -> some View {
+        Picker(selection: Binding(get: { store.preset(forDevice: key) },
+                                  set: { AudioIO.shared.bindOutputDevice(key: key, name: name, kind: kind, preset: $0) })) {
+            Text("None").tag(String?.none)
+            ForEach(store.names, id: \.self) { Text($0).tag(String?.some($0)) }
+        } label: {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                    if inUse { Text("In use").font(.caption).foregroundStyle(.secondary) }
+                }
+            } icon: {
+                Image(systemName: kind.symbol)
+            }
+        }
+        .pickerStyle(.navigationLink)
+    }
 
     private var saveSection: some View {
         Section {
