@@ -67,6 +67,10 @@ final class EffeTuneDSP: ObservableObject {
     var maximumFrames: UInt32 { maxFrames }
     private var kernelIndex: [String: UInt32] = [:]
 
+    /// et_engine_prepare を呼んだ回数。retire が prepare をまたいだかを見るのに使う。
+    /// Engine::prepare は destroyAllInstances を通るので、またいだ後の番号は使い回されうる。
+    private(set) var prepareGeneration = 0
+
     /// 利用できるエフェクト。カーネルとして登録されているものだけ。
     private(set) var available: [ETEffect] = []
 
@@ -111,6 +115,8 @@ final class EffeTuneDSP: ObservableObject {
         // 探りの番号も一緒に死ぬので、控えを捨てて作り直させる。
         probes.removeAll()
 
+        // ここから先の instance は前の世代と番号が重なりうる（retire が見る）。
+        prepareGeneration &+= 1
         // テレメトリの輪を確保しないと、可視化の値が一切出てこない。
         let st = et_engine_prepare(engine, Float(sampleRate), maxChannels, maxFrames,
                                    Self.telemetryRingBytes)
@@ -1440,6 +1446,7 @@ final class EffeTuneDSP: ObservableObject {
         guard !instances.isEmpty, engine != 0 else { return }
         let engine = self.engine
         let mark = ETPipeline_ProcessCount()
+        let generation = prepareGeneration
         Task.detached(priority: .utility) {
             // 音のスレッドが 2 周するのを待つ。鳴っていなければ待っても進まないので、
             // 0.5 秒で諦めて壊す（鳴っていない＝誰も読んでいない）。
@@ -1477,6 +1484,12 @@ final class EffeTuneDSP: ObservableObject {
             // 呼び直す。待ち切ると、そのブロックが終わるまで画面が止まる。
             while true {
                 let done = await MainActor.run { () -> Bool in
+                    // Engine::prepare の destroyAllInstances が既に壊しており、番号が使い回されうる。
+                    // ここで壊すと、組み直した後の生きた instance を消してしまう。
+                    if EffeTuneDSP.shared.prepareGeneration != generation {
+                        EffeTuneDSP.shared.republish(reason: "prepareをまたいだので壊さない")
+                        return true
+                    }
                     let ok = instances.withUnsafeBufferPointer {
                         ETPipeline_DestroyInstances(engine, $0.baseAddress, UInt32($0.count))
                     } != 0
