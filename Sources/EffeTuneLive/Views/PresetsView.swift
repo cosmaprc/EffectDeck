@@ -660,7 +660,10 @@ struct PresetsView: View {
     }
 
     private var webSection: some View {
-        let externalCount = dsp.chain.lazy.filter(\.isExternal).count
+        // 出力補正が入っていれば（入切が切・リモート中は空）、鎖だけか補正込みかを選ばせる。
+        let corrected = !dsp.correction.isEmpty
+        let mainExternal = dsp.chain.lazy.filter(\.isExternal).count
+        let externalCount = mainExternal + (corrected ? dsp.correction.lazy.filter(\.isExternal).count : 0)
         return Section {
             HStack {
                 Text("Compatibility")
@@ -673,21 +676,25 @@ struct PresetsView: View {
                 }
                 .foregroundStyle(externalCount == 0 ? Color.green : Color.orange)
             }
-            // **外から来たものが在るときは、落とさない口を先に出す。**
-            // 上流のリンクは AU と JSFX を落とすので、そちらしか無いと
-            // 「共有したのに向こうで鎖が違う」になる。
-            if externalCount > 0, let deck = ETShareLink.deckURL(for: dsp.chain) {
-                ShareLink(item: deck) {
-                    Label("Share this chain", systemImage: "square.and.arrow.up")
+            if corrected {
+                correctedShareRows(mainExternal: mainExternal, allExternal: externalCount)
+            } else {
+                // **外から来たものが在るときは、落とさない口を先に出す。**
+                // 上流のリンクは AU と JSFX を落とすので、そちらしか無いと
+                // 「共有したのに向こうで鎖が違う」になる。
+                if externalCount > 0, let deck = ETShareLink.deckURL(for: dsp.chain) {
+                    ShareLink(item: deck) {
+                        Label("Share this chain", systemImage: "square.and.arrow.up")
+                    }
                 }
-            }
-            if let url = ETShareLink.url(for: dsp.chain) {
-                ShareLink(item: url) {
-                    Label(externalCount == 0
-                          ? "Share this chain"
-                          : "Export to EffeTune without \(externalCount) external effect\(externalCount == 1 ? "" : "s")",
-                          systemImage: externalCount == 0
-                                       ? "square.and.arrow.up" : "arrow.up.forward.square")
+                if let url = ETShareLink.url(for: dsp.chain) {
+                    ShareLink(item: url) {
+                        Label(externalCount == 0
+                              ? "Share this chain"
+                              : "Export to EffeTune without \(externalCount) external effect\(externalCount == 1 ? "" : "s")",
+                              systemImage: externalCount == 0
+                                           ? "square.and.arrow.up" : "arrow.up.forward.square")
+                    }
                 }
             }
             // **組ませる口と戻す口を並べる。**ChatGPTにCHAIN.mdを読ませて鎖を組ませ、
@@ -712,5 +719,44 @@ struct PresetsView: View {
         } header: {
             Text("EffeTune on the web")
         }
+    }
+
+    /// 出力補正が入っているときの共有の行。行の形は補正が無いときと同じで、それぞれを
+    /// 「鎖だけ」と「鎖＋出力補正」の 2 つから選ぶ Menu にする。
+    /// 補正込みは main・終端・補正を 1 本の普通の鎖に平らげたもの（ETOutputCorrectionForm.flatten）で、
+    /// 受け手には出力先の身元は付かない。
+    @ViewBuilder
+    private func correctedShareRows(mainExternal: Int, allExternal: Int) -> some View {
+        let flat = ETOutputCorrectionForm.flatten(main: dsp.chain.map { PipelineStore.Loaded($0) },
+                                                  correction: dsp.correction.map { PipelineStore.Loaded($0) })
+        if allExternal > 0 {
+            Menu {
+                if let deck = ETShareLink.deckURL(for: dsp.chain) {
+                    ShareLink("Chain", item: deck)
+                }
+                if let deck = ETShareLink.deckURL(for: flat) {
+                    ShareLink("Chain + Output Correction", item: deck)
+                }
+            } label: {
+                Label("Share this chain", systemImage: "square.and.arrow.up")
+            }
+        }
+        Menu {
+            if let url = ETShareLink.url(for: dsp.chain) {
+                ShareLink(Self.exportTitle("Chain", dropping: mainExternal), item: url)
+            }
+            if let url = ETShareLink.url(for: flat) {
+                ShareLink(Self.exportTitle("Chain + Output Correction", dropping: allExternal), item: url)
+            }
+        } label: {
+            Label(allExternal == 0 ? "Share this chain" : "Export to EffeTune",
+                  systemImage: allExternal == 0 ? "square.and.arrow.up" : "arrow.up.forward.square")
+        }
+    }
+
+    /// EffeTune へ出す項目の名前。落とす外の段があれば数を添える。
+    private static func exportTitle(_ base: String, dropping count: Int) -> String {
+        guard count > 0 else { return base }
+        return "\(base) (without \(count) external effect\(count == 1 ? "" : "s"))"
     }
 }
