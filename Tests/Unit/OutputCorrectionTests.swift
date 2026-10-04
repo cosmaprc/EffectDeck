@@ -65,11 +65,6 @@ final class OutputCorrectionTests: XCTestCase {
         XCTAssertEqual(r.correction, IndexSet([0, 1]))
     }
 
-    func testSlotForLocal() {
-        XCTAssertEqual(ETChainSlots.slot(1, in: .correction, mainCount: 3), 4)
-        XCTAssertEqual(ETChainSlots.slot(2, in: .main, mainCount: 3), 2)
-    }
-
     // MARK: - 合わせた分析
 
     func testOffSectionAtEndOfMainDoesNotGateCorrection() throws {

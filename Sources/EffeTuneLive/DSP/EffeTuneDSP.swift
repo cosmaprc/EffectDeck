@@ -104,9 +104,6 @@ final class EffeTuneDSP: ObservableObject {
         return nil
     }
 
-    /// その slot がどちらの部分か。
-    func part(ofSlot slot: Int) -> ETChainPart? { locate(slot)?.part }
-
     /// slot を部分と部分の中の位置へ。数え方は ETChainSlots（OutputCorrectionTests）。
     private func locate(_ slot: Int) -> (part: ETChainPart, local: Int)? {
         ETChainSlots.locate(slot, mainCount: chain.count, correctionCount: correction.count)
@@ -328,7 +325,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 1 本足すだけ。publish はしない。
     /// まとめて足すときに 1 本ごとに configure を走らせないよう、単発用と分けてある。
     @discardableResult
-    private func appendSpec(_ spec: ETEffect, to part: ETChainPart = .main) -> Bool {
+    private func appendSpec(_ spec: ETEffect) -> Bool {
         var node = Node(spec: spec, values: spec.defaults)
         if node.values.count != spec.floatCount {
             node.values = spec.defaults + Array(repeating: 0,
@@ -336,7 +333,7 @@ final class EffeTuneDSP: ObservableObject {
         }
         applyAddDefaults(&node)
         guard instantiate(&node) else { return false }
-        withPart(part) { $0.append(node) }
+        chain.append(node)
         return true
     }
 
@@ -418,8 +415,7 @@ final class EffeTuneDSP: ObservableObject {
                 carried.insert(member)
             }
         }
-        let grabbed = Set(source.compactMap { chain.indices.contains($0) ? chain[$0].id : nil })
-            .subtracting(carried)
+        let grabbed = moved.subtracting(carried)
 
         chain.move(fromOffsets: source, toOffset: destination)
         publish()

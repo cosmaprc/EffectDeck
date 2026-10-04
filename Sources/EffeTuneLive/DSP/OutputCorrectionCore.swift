@@ -33,11 +33,6 @@ enum ETChainSlots {
         return local < correctionCount ? (.correction, local) : nil
     }
 
-    /// 部分の中の位置から slot へ。
-    static func slot(_ local: Int, in part: ETChainPart, mainCount: Int) -> Int {
-        part == .main ? local : mainCount + local
-    }
-
     /// slot の集まりを部分ごとの位置の集まりに分ける。
     static func split(_ slots: IndexSet, mainCount: Int) -> (main: IndexSet, correction: IndexSet) {
         var main = IndexSet()
