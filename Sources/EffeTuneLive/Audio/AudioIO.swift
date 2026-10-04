@@ -20,6 +20,7 @@
 //    音のスレッドの並べ替えと書き出し             AudioBufferOps.swift
 //    無音で休む                                   PowerPolicy.swift
 //    仮想デバイスからの引き剥がし                 RouteEscape.swift
+//    出力先の鍵と、プリセットを切り替える時機     OutputDevice.swift
 //  ここに残すのは AVAudioSession と AVAudioEngine に触る部分だけ。
 
 import AVFoundation
@@ -161,6 +162,14 @@ final class AudioIO: ObservableObject {
     /// NotificationCenter の購読。singleton なので外す機会は無いが、持っておく。
     private var observers: [NSObjectProtocol] = []
 
+    /// 落ち着いた出力先（ヘッドホンなど）。変わったときだけ入れる。プリセットの画面が見る。
+    @Published private(set) var outputDevice: ETOutputDevice?
+    /// 出力先が変わったと決める判断。中身は ETDeviceSwitch（OutputDeviceTests）。
+    private var deviceSwitch = ETDeviceSwitch(settled: nil)
+    /// 待ちが明けたときに経路を読み直す 1 回きりの Task。tick が回っていなくても切り替える。
+    private var deviceRecheck: Task<Void, Never>?
+    private var deviceRecheckAt: TimeInterval?
+
     private init() {
         // 帰還ループの判定は Swift の写し（AudioSessionRules.swift）で見ている。
         // ドライバが名乗る字（ETNames.h）と食い違うと、戻っていても気づけない。
@@ -174,6 +183,9 @@ final class AudioIO: ObservableObject {
             self?.render?.gate.thresholdLinear =
                 PowerGate.linearThreshold(decibels: Preferences.shared.silenceThresholdDb)
         }
+        // 前回落ち着いた出力先から始める。同じ出力先での起動を切り替えと取らないため。
+        // PresetStore.shared はここで作らない（UserDefaults を直に読む）。
+        deviceSwitch = ETDeviceSwitch(settled: UserDefaults.standard.string(forKey: PresetStoreCore.currentDeviceKey))
         observeSession()
 
         // DSP のエンジンは音と関係なく用意しておく。
@@ -942,5 +954,117 @@ final class AudioIO: ObservableObject {
         let nowLoopback = outs.contains { ETAudioSessionRules.isOwnDevice(portName: $0.portName) }
         if loopback != nowLoopback { loopback = nowLoopback }
 
+        followOutputDevice(cur)
+    }
+
+    // MARK: - 出力先ごとのプリセット
+
+    /// 経路の 1 回の読みから、出力先が変わったかを見る。判断は ETDeviceSwitch。
+    ///
+    /// 走っていない・DSP が用意できていない・引き剥がしで本体のスピーカーへ寄せている間は
+    /// 情報にしない（寄せている間の Speaker は本物の出力先ではない）。
+    private func followOutputDevice(_ route: AVAudioSessionRouteDescription) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let device = ETOutputDevice.pick(route.outputs.map {
+            ETOutputDevice(kind: Self.outputKind($0.portType), uid: $0.uid, name: $0.portName)
+        })
+        let step = deviceSwitch.observe(device,
+                                        active: running && !overriding && EffeTuneDSP.shared.ready,
+                                        now: now,
+                                        lastStart: lifecycle.lastStartAttempt,
+                                        lastEscape: escape.lastApply)
+        // 落ち着いている出力先の名前が変わったら（設定で付け直したなど）画面へ出し直す。
+        if let device, device.key == deviceSwitch.settled, outputDevice != device { outputDevice = device }
+        switch step {
+        case .idle:
+            cancelDeviceRecheck()
+        case .wait(let until):
+            scheduleDeviceRecheck(at: until, now: now)
+        case .switched(let d):
+            cancelDeviceRecheck()
+            switchDevicePreset(d)
+        }
+    }
+
+    /// 待ちが明けたら経路だけ読み直す。引き剥がしも入力の固定もしない。
+    private func scheduleDeviceRecheck(at until: TimeInterval, now: TimeInterval) {
+        if deviceRecheckAt == until { return }
+        deviceRecheck?.cancel()
+        deviceRecheckAt = until
+        deviceRecheck = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, until - now) + 0.05))
+            guard !Task.isCancelled, let self else { return }
+            self.deviceRecheck = nil
+            self.deviceRecheckAt = nil
+            self.followOutputDevice(AVAudioSession.sharedInstance().currentRoute)
+        }
+    }
+
+    private func cancelDeviceRecheck() {
+        deviceRecheck?.cancel()
+        deviceRecheck = nil
+        deviceRecheckAt = nil
+    }
+
+    /// 出力先が落ち着いた。覚えて、紐付けがあれば読む。
+    private func switchDevicePreset(_ d: ETOutputDevice) {
+        guard let key = d.key else { return }
+        PresetStore.shared.setCurrentDevice(key)
+        PresetStore.shared.noteDeviceName(key, name: d.name)
+        applyDevicePreset(d, cause: "switch")
+    }
+
+    /// 紐付けたプリセットを読むか、残すか。**uid はログに出さない。**
+    private func applyDevicePreset(_ d: ETOutputDevice, cause: String) {
+        guard let key = d.key else { return }
+        let bound = PresetStore.shared.preset(forDevice: key)
+        let outcome: String
+        switch ETDeviceSwitch.action(device: key, bound: bound, origin: EffeTuneDSP.shared.deviceOrigin) {
+        case .unbound:
+            outcome = "unbound"
+        case .keep:
+            outcome = "kept"
+        case .load(let name):
+            outcome = EffeTuneDSP.shared.loadDevicePreset(name, items: PresetStore.shared.load(name),
+                                                         device: d).rawValue
+        }
+        let line = String(format: "device t=%.3f kind=%@ name=%@ preset=%@ cause=%@ outcome=%@",
+                          ProcessInfo.processInfo.systemUptime, d.kind.rawValue, d.name,
+                          bound ?? "-", cause, outcome)
+        log.notice("\(line, privacy: .public)")
+        ETLogTap.record(line)
+        if ETConsoleLog.on { print(line) }
+    }
+
+    /// 出力先にプリセットを紐付ける（nil で外す）。プリセットの画面から呼ぶ。
+    ///
+    /// いま使っている出力先なら、すぐ読む（切り替えと同じ経路で、帯と Undo が出る）。
+    /// 他の出力先は紐付けを残すだけ。
+    func bindOutputDevice(key: String, name: String, kind: ETOutputDevice.Kind, preset: String?) {
+        let old = PresetStore.shared.preset(forDevice: key)
+        guard PresetStore.shared.bindDevice(key, name: name, kind: kind.rawValue, preset: preset),
+              old != preset else { return }
+        // 別のプリセットへ付け替えたら、前のプリセットから入れたという印は外す。
+        EffeTuneDSP.shared.forgetDeviceOrigin(key)
+        if preset != nil, let d = outputDevice, d.key == key, key == deviceSwitch.settled {
+            applyDevicePreset(d, cause: "bind")
+        }
+    }
+
+    /// 口の型を出力先の種類に直す。AVFoundation に触るのはここだけ（判断は OutputDevice.swift）。
+    /// 自分の仮想デバイスは .airPlay を名乗るので .other に落ち、紐付けられない。
+    private static func outputKind(_ t: AVAudioSession.Port) -> ETOutputDevice.Kind {
+        switch t {
+        case .builtInSpeaker: return .speaker
+        case .headphones: return .wired
+        case .lineOut: return .lineOut
+        case .bluetoothA2DP: return .bluetooth
+        case .bluetoothLE: return .bluetoothLE
+        case .bluetoothHFP: return .hfp
+        case .usbAudio: return .usb
+        case .carAudio: return .car
+        case .HDMI: return .hdmi
+        default: return .other
+        }
     }
 }
