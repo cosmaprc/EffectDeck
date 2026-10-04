@@ -568,4 +568,39 @@ final class OutputCorrectionTests: XCTestCase {
         let bad: [[String: Any]] = [["v": Double.nan]]
         XCTAssertEqual(ETOutputCorrectionTarget.stamp(bad), Data())
     }
+
+    // MARK: - 中身の行
+
+    func testLinesOfEmptyIsEmpty() {
+        XCTAssertEqual(ETOutputCorrectionForm.lines([]), [])
+    }
+
+    func testLinesOfFlatPreset() throws {
+        let peq = try effect("FifteenBandPEQPlugin")
+        let vol = try effect()
+        XCTAssertEqual(ETOutputCorrectionForm.lines([peq, vol]), [
+            ETOutputCorrectionLine(id: 0, name: peq.spec.name, isSection: false, indented: false),
+            ETOutputCorrectionLine(id: 1, name: vol.spec.name, isSection: false, indented: false),
+        ])
+    }
+
+    /// Section の配下は字下げし、終端で戻す。終端そのものは行にしない。
+    func testLinesIndentUnderSectionAndRootResetEndsIt() throws {
+        let peq = try effect("FifteenBandPEQPlugin")
+        let vol = try effect()
+        XCTAssertEqual(ETOutputCorrectionForm.lines([section("Room"), peq, rootReset(), vol]), [
+            ETOutputCorrectionLine(id: 0, name: "Room", isSection: true, indented: false),
+            ETOutputCorrectionLine(id: 1, name: peq.spec.name, isSection: false, indented: true),
+            ETOutputCorrectionLine(id: 2, name: vol.spec.name, isSection: false, indented: false),
+        ])
+    }
+
+    /// 名前の無い Section は "Section"。
+    func testLinesUnnamedSection() throws {
+        let vol = try effect()
+        XCTAssertEqual(ETOutputCorrectionForm.lines([section(""), vol]), [
+            ETOutputCorrectionLine(id: 0, name: "Section", isSection: true, indented: false),
+            ETOutputCorrectionLine(id: 1, name: vol.spec.name, isSection: false, indented: true),
+        ])
+    }
 }

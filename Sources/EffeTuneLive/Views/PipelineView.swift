@@ -2225,11 +2225,18 @@ private struct EmptyChainRow: View {
 /// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット、端末へ渡す音のメーター（OUT）。
 /// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと Presets を開く。
 /// 観測するのは OutputCorrection だけ。30Hz で描き直すのはメーター（ETSignalMeter）だけ。
+/// 開くと紐付けたプリセットの中身を名前だけ並べる（読むだけ）。
 private struct OutputCorrectionRow: View {
     @ObservedObject var oc: OutputCorrection
     /// 鳴っているか。PipelineView が io.running から写した値。
     let running: Bool
     let open: () -> Void
+
+    /// 中身を開いているか。覚えない。
+    @State private var showsContents = false
+
+    /// 中身のうちエフェクトの数（Section の見出しは数えない）。
+    private var effectCount: Int { oc.contents.filter { !$0.isSection }.count }
 
     var body: some View {
         Card {
@@ -2263,6 +2270,28 @@ private struct OutputCorrectionRow: View {
 
                 // 端末へ渡す音（鎖と補正の後）。補正の入切にかかわらず出す。
                 ETSignalMeter(point: .output, active: running)
+
+                // 紐付けたプリセットの中身。メーターの下に置く（開いてもメーターが動かないように）。
+                // 出力先が無い・紐付けが無い・読める段が無いときは出さない。
+                if !oc.contents.isEmpty {
+                    DisclosureGroup(isExpanded: $showsContents) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(oc.contents) { line in
+                                Text(line.name)
+                                    .font(.system(size: 13, weight: line.isSection ? .semibold : .regular))
+                                    .foregroundStyle(line.isSection ? .secondary : .primary)
+                                    .lineLimit(1)
+                                    .padding(.leading, line.indented ? 14 : 0)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        Text("^[\(effectCount) effect](inflect: true)")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(14)
         }

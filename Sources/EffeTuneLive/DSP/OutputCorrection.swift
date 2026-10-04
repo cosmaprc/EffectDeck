@@ -32,6 +32,8 @@ final class OutputCorrection: ObservableObject {
     @Published private(set) var device: ETOutputCorrectionDevice?
     /// 出力先ごとの紐付け（在るプリセットのものだけ）。鎖の下の行と Presets の節が読む。
     @Published private(set) var bindings: [ETOutputCorrectionBinding] = []
+    /// いまの出力先に紐付けたプリセットの中身（名前だけ）。鎖の下の行を開くと並ぶ。入切に関わらず出す。
+    @Published private(set) var contents: [ETOutputCorrectionLine] = []
 
     /// PC の鎖を編集している間（RemoteMirror が知らせる）。補正は外す。
     private var remote = false
@@ -52,6 +54,8 @@ final class OutputCorrection: ObservableObject {
         isOn = core.isOn
         device = core.currentDevice
         bindings = core.bindings(existing: Set(presets.names))
+        // PipelineStore.parse は Foundation だけで、AudioIO にも EffeTuneDSP にも触らない。
+        refreshContents()
     }
 
     /// その出力先に紐付けたプリセットの名前（保存してあるまま。`フォルダ/名前`）。無ければ nil。
@@ -122,6 +126,17 @@ final class OutputCorrection: ObservableObject {
     private func refreshBindings() {
         let next = core.bindings(existing: Set(presets.names))
         if next != bindings { bindings = next }
+        refreshContents()
+    }
+
+    /// 中身の行を読み直す。変わったときだけ出し直す。
+    private func refreshContents() {
+        var items: [PipelineStore.Loaded] = []
+        if let d = device, let name = preset(for: d.key), let form = presets.form(named: name) {
+            items = PipelineStore.parse(form, catalog: ETCatalog)
+        }
+        let next = ETOutputCorrectionForm.lines(items)
+        if next != contents { contents = next }
     }
 
     private func reconcile(cause: String, always: Bool = false) {

@@ -253,7 +253,39 @@ enum ETOutputCorrectionPolicy {
 
 // MARK: - 共有
 
+/// 鎖の下の行を開いたときに並べる 1 行。読むだけ（カードも操作も無い）。
+struct ETOutputCorrectionLine: Equatable, Identifiable {
+    /// 並びの中の位置（終端を除いた通し番号）。
+    let id: Int
+    let name: String
+    let isSection: Bool
+    /// Section の配下。字下げする。
+    let indented: Bool
+}
+
 enum ETOutputCorrectionForm {
+
+    /// プリセットの中身を行にする。終端（rootReset）は出さずに字下げを戻す。
+    /// 名前の無い Section は "Section"（左の一覧と同じ）。
+    static func lines(_ items: [PipelineStore.Loaded]) -> [ETOutputCorrectionLine] {
+        var out: [ETOutputCorrectionLine] = []
+        var inSection = false
+        for item in items {
+            switch role(item) {
+            case .rootReset:
+                inSection = false
+            case .section:
+                out.append(ETOutputCorrectionLine(
+                    id: out.count, name: item.sectionName.isEmpty ? "Section" : item.sectionName,
+                    isSection: true, indented: false))
+                inSection = true
+            case .effect:
+                out.append(ETOutputCorrectionLine(
+                    id: out.count, name: item.spec.name, isSection: false, indented: inSection))
+            }
+        }
+        return out
+    }
 
     /// main + 補正を、受け手が普通の鎖として開ける1本にする。
     /// 補正が空なら main をそのまま返す。
