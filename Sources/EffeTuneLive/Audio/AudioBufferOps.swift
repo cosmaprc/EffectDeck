@@ -154,3 +154,42 @@ struct ETPeakMeter: Equatable {
         peak = max(p, fallen <= Self.floor ? 0 : fallen)
     }
 }
+
+/// IN / OUT のメーターのピークの線（と読み値）。1 秒保持して 20 dB/秒で落ちる（MeterView と同じ数）。
+///
+/// **値は時刻だけで決まる。**MeterView の保持は段の値が変わったときだけ進むので、
+/// 無音で棒が下端に張り付くと段が変わらなくなり、線が下端の 20 dB 上（-76 dB）で止まっていた。
+/// ここは最後に掴んだ山と時刻だけを持ち、線の位置は読むたびに時刻から出す。
+/// 画面は TimelineView の拍の時刻で value(at:) を呼ぶだけでよい。
+struct ETPeakHold: Equatable {
+    var holdTime: Double = 1.0
+    /// dB/秒。
+    var fallRate: Double = 20
+    /// 目盛りの下端。ここより下は出さない。
+    var floorDB: Double = -96
+
+    /// 最後に掴んだ山（dB）と、その時刻。まだ何も掴んでいなければ nil。
+    private(set) var peakDB: Double?
+    private(set) var capturedAt: Date?
+
+    init(holdTime: Double = 1.0, fallRate: Double = 20, floorDB: Double = -96) {
+        self.holdTime = holdTime
+        self.fallRate = fallRate
+        self.floorDB = floorDB
+    }
+
+    /// `now` の線の位置。保持のあいだは掴んだ山、過ぎたら落ちて下端で止まる。
+    func value(at now: Date) -> Double {
+        guard let peakDB, let capturedAt else { return floorDB }
+        let falling = max(0, now.timeIntervalSince(capturedAt) - holdTime)
+        return max(floorDB, peakDB - fallRate * falling)
+    }
+
+    /// 新しい山。いまの線以上なら掴み直す（保持をそこから数え直す）。下なら何もしない。
+    mutating func feed(_ db: Double, at now: Date) {
+        // NaN・inf は捨てる（ETPeakMeter が上限 +24 dB で止めているので、来るのは壊れた値だけ）。
+        guard db.isFinite, db > floorDB, db >= value(at: now) else { return }
+        peakDB = db
+        capturedAt = now
+    }
+}

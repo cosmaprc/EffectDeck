@@ -349,4 +349,53 @@ final class AudioBufferOpsTests: XCTestCase {
         XCTAssertEqual(fed([(0.5, 480), (0, 4800)], sampleRate: 0).peak, 0.5)
         XCTAssertEqual(fed([(0.5, -10)]).peak, 0.5)
     }
+
+    // MARK: - ETPeakHold
+
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    /// 何も掴んでいなければ下端。
+    func testPeakHoldStartsAtFloor() {
+        XCTAssertEqual(ETPeakHold().value(at: t0), -96)
+    }
+
+    /// 1 秒は掴んだ山のまま、そのあと 20 dB/秒で落ちる。
+    func testPeakHoldHoldsThenFalls() {
+        var h = ETPeakHold()
+        h.feed(-3, at: t0)
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(0.9)), -3, accuracy: 1e-9)
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(1.5)), -13, accuracy: 1e-9)
+    }
+
+    /// 無音で段の値が変わらなくなっても、時刻だけで下端まで落ちきる（-76 dB で止まらない）。
+    func testPeakHoldReachesFloorWithoutNewInput() {
+        var h = ETPeakHold()
+        h.feed(-3, at: t0)
+        // 山が下端に張り付いてから、同じ値が来続ける（掴み直さない）。
+        h.feed(-96, at: t0.addingTimeInterval(4.0))
+        h.feed(-96, at: t0.addingTimeInterval(4.1))
+        // 保持 1 秒 + 93 dB / 20 dB/秒 = 5.65 秒で下端。
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(4.1)), -65, accuracy: 1e-6)
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(5.65)), -96, accuracy: 1e-6)
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(60)), -96)
+    }
+
+    /// 線より下の山は掴み直さない。上（同じ値も）なら保持を数え直す。
+    func testPeakHoldOnlyHigherOrEqualRecaptures() {
+        var h = ETPeakHold()
+        h.feed(-3, at: t0)
+        h.feed(-20, at: t0.addingTimeInterval(0.5))
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(1.5)), -13, accuracy: 1e-9)
+        h.feed(-1, at: t0.addingTimeInterval(1.5))
+        XCTAssertEqual(h.value(at: t0.addingTimeInterval(2.4)), -1, accuracy: 1e-9)
+    }
+
+    /// 0 dB を超える山はそのまま持つ（赤にするのは別）。NaN は捨てる。
+    func testPeakHoldAboveZeroAndNaN() {
+        var h = ETPeakHold()
+        h.feed(.nan, at: t0)
+        XCTAssertEqual(h.value(at: t0), -96)
+        h.feed(6, at: t0)
+        XCTAssertEqual(h.value(at: t0), 6)
+    }
 }

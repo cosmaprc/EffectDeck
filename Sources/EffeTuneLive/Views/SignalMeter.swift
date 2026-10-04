@@ -4,6 +4,10 @@
 //  見た目は Level Meter のカードと同じ MeterView（-96〜0 dB、落下 20 dB/秒、ピーク保持 1 秒）。
 //  1 本だけ（全チャンネルの山）。0 dBFS に届いたら LevelMeterView.overloadTime のあいだ赤。
 //
+//  ピークの保持は MeterView に任せない（holdsPeak: false）。MeterView の保持は段の値が
+//  変わったときだけ進むので、無音で棒が下端に張り付くと線が -76 dB で止まり、止めたときは
+//  最後の山のまま残っていた。ここは ETPeakHold を拍の時刻で読み、止めたら捨てる。
+//
 //  **AudioIO は観測しない。**TimelineView の拍（30Hz）ごとに AudioIO.inputMeter / outputMeter
 //  （@Published でない）を読むだけ。作り直されるのはこの View だけで、鎖の画面は動かない。
 //  鳴っていないとき（active が偽）は拍を止めて 0 を出す。
@@ -17,20 +21,27 @@ struct ETSignalMeter: View {
 
     /// 赤を出し続ける終わりの時刻。
     @State private var redUntil: Date?
+    /// ピークの線と読み値。
+    @State private var hold = Self.emptyHold
+
+    private static var emptyHold: ETPeakHold {
+        ETPeakHold(holdTime: LevelMeterView.holdTime, fallRate: LevelMeterView.fallRate,
+                   floorDB: LevelMeterView.floorDB)
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active)) { context in
             let meter = active ? read() : ETPeakMeter()
+            let level = ETdB.fromAmplitude(meter.peak, floor: LevelMeterView.floorDB)
+            // 掴む前の拍でも線が棒より下にならないよう、いまの値とも比べる。止まっていれば下端。
+            let peak = active ? max(level, hold.value(at: context.date)) : LevelMeterView.floorDB
             let red = redUntil.map { context.date < $0 } ?? false
             MeterView(channels: [ETMeterChannel(
                           id: 0, label: point == .input ? "IN" : "OUT",
-                          levelDB: ETdB.fromAmplitude(meter.peak, floor: LevelMeterView.floorDB),
-                          clipped: red)],
+                          levelDB: level, peakDB: peak, clipped: red)],
                       range: LevelMeterView.floorDB...0,
                       ticks: LevelMeterView.ticks,
-                      holdsPeak: true,
-                      holdTime: LevelMeterView.holdTime,
-                      fallRate: LevelMeterView.fallRate,
+                      holdsPeak: false,
                       rowHeight: 13,
                       showsReadout: true,
                       labelWidth: 26)
@@ -41,8 +52,16 @@ struct ETSignalMeter: View {
                         redUntil = context.date.addingTimeInterval(LevelMeterView.overloadTime)
                     }
                 }
+                .onChange(of: level, initial: true) { _, new in
+                    if active { hold.feed(new, at: context.date) }
+                }
         }
-        .onChange(of: active) { _, on in if !on { redUntil = nil } }
+        .onChange(of: active) { _, on in
+            if !on {
+                redUntil = nil
+                hold = Self.emptyHold
+            }
+        }
         .accessibilityIdentifier(point == .input ? "inputMeter" : "outputMeter")
     }
 
