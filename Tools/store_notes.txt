@@ -1,4 +1,20 @@
-New since 2026.09.22.
+New since 2026.09.28.
+
+EffeTune 2.12.0 (DSP 0.12.0)
+- New: Analog Meter, Rhythm Analyzer and Tonal Balance EQ.
+- Note Spectrogram adds keyboard and Volume controls matching EffeTune.
+- Effect resets and default values match upstream. Pitch Meter adds orientation.
+- Analog Meter improves needle sizing and loudness statistics in narrow cards.
+- Rhythm Analyzer keeps history for each tap when collapsed and reopened.
+- AM Radio, TV Audio and Vinyl controls use tabs matching EffeTune.
+- IR Reverb adds preprocessing controls, and Room EQ adds its graph.
+- Sub Synth's dry response graph respects Dry Level.
+
+Fixes
+- Connection timeout detection uses data received from the current peer.
+- JSFX fixes address integer overflow and memory handling.
+
+Previous updates (2026.09.28):
 
 iPad
 - A wide window shows the chain as a list on the left and every card open on the right. Reorder in the list, and drop effects into it.
