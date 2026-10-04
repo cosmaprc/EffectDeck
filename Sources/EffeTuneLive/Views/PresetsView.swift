@@ -354,6 +354,17 @@ struct PresetsView: View {
                 }
                 .disabled(!canSave)
             }
+            // **組ませる口は、保存の節の頭に置く。**ChatGPT に CHAIN.md を読ませて鎖を組ませ、
+            // 返ってきたものは下の Share の節の Import from clipboard で入れる。
+            // 説明は足さず、札だけ置く。エフェクト一覧の Presets の面の頭にも同じ口がある。
+            // 中国本土の店では出さない（ETStorefrontGate）。
+            if ETStorefrontGate.shared.allowsChatGPT {
+                Button {
+                    openURL(EffectPickerView.buildChain)
+                } label: {
+                    Label("Build a chain with ChatGPT", systemImage: "sparkles")
+                }
+            }
         } header: {
             Text("Save current chain")
         } footer: {
@@ -697,16 +708,8 @@ struct PresetsView: View {
                     }
                 }
             }
-            // **組ませる口と戻す口を並べる。**ChatGPTにCHAIN.mdを読ませて鎖を組ませ、
-            // 返ってきたものはすぐ下のImport from clipboardで入れる。説明は足さず、札だけ置く。
-            // 中国本土の店では出さない（ETStorefrontGate）。
-            if ETStorefrontGate.shared.allowsChatGPT {
-                Button {
-                    openURL(EffectPickerView.buildChain)
-                } label: {
-                    Label("Build a chain with ChatGPT", systemImage: "sparkles")
-                }
-            }
+            // 組ませる口（Build a chain with ChatGPT）は、ここではなく保存の節にある。
+            // ここは共有するための節で、デスクトップの EffeTune も共有リンクを開くので "Share" と呼ぶ。
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、
                 // 押しても確認も知らせも出ないまま何も起きなかった。
@@ -717,7 +720,7 @@ struct PresetsView: View {
                 Label("Import from clipboard", systemImage: "doc.on.clipboard")
             }
         } header: {
-            Text("EffeTune on the web")
+            Text("Share")
         }
     }
 
