@@ -125,3 +125,32 @@ enum ETAudioBufferOps {
         previous + (spent / max(budget, 1e-9) - previous) * 0.1
     }
 }
+
+/// 鎖の外に出す IN / OUT のメーターの値。**音のスレッドが 1 ブロックごとに進め、画面は読むだけ。**
+///
+/// 画面が読むのは TimelineView の 30Hz で、ブロックは 5〜20ms ごとに来る。その瞬間のピークだけを
+/// 置くと、読む間に来たブロックの山とクリップを取りこぼす。だから山はここで持って落とし
+/// （Level Meter と同じ 20 dB/秒。LevelMeterView.fallRate / level_meter.js:16）、
+/// 0 dBFS に届いたブロックは数で残す（読む側は数が増えたかで赤にする）。
+/// 確保も待ちもしない（pow を 1 回呼ぶだけ）。
+struct ETPeakMeter: Equatable {
+    /// 線形の振幅。上がるときはそのブロックの山へ跳び、下がるときは 20 dB/秒で落ちる。
+    private(set) var peak: Float = 0
+    /// 山が 1.0（0 dBFS）以上だったブロックの数。回り込む（&+=）。
+    private(set) var clips: UInt32 = 0
+
+    static let fallDBPerSecond: Double = 20
+    /// ここまで落ちたら 0 にする（-100 dB。目盛りの下端 -96 dB の外）。
+    static let floor: Float = 1e-5
+    /// 山の上限（+24 dB）。inf が来ても落ちなくならないように。
+    static let ceiling: Float = 16
+
+    mutating func feed(blockPeak: Float, frames: Int, sampleRate: Double) {
+        let p = blockPeak.isNaN ? 0 : min(max(blockPeak, 0), Self.ceiling)
+        // ちょうど 1.0 も数える（LevelMeterView は > 1 だが、ここは 0 dBFS に届いたら赤）。
+        if p >= 1 { clips &+= 1 }
+        let seconds = sampleRate > 0 ? Double(max(frames, 0)) / sampleRate : 0
+        let fallen = peak * Float(pow(10, -Self.fallDBPerSecond * seconds / 20))
+        peak = max(p, fallen <= Self.floor ? 0 : fallen)
+    }
+}

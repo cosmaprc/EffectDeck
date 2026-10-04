@@ -39,7 +39,10 @@ private final class RenderState {
     let hi: UnsafeMutablePointer<Float>            // capacity * factor * channels
     var resampler: OpaquePointer?
 
-    var meter: Float = 0
+    /// 入口（リンクから受けた音、鎖の前）と出口（鎖と補正を通って端末へ渡す音）のメーター。
+    /// 音のスレッドだけが書き、メインは inputMeter / outputMeter で読むだけ（tick が meter を読んでいたのと同じ形）。
+    var inMeter = ETPeakMeter()
+    var outMeter = ETPeakMeter()
     var applied: UInt32 = 0
     /// 直近の ETPipeline_Process の戻り値（et_status）。ET_OK は 0。
     var pipeStatus: Int32 = 0
@@ -122,11 +125,13 @@ final class AudioIO: ObservableObject {
     @Published var listening = false
     @Published var hasPeer = false
     @Published var received: UInt64 = 0
-    /// 出力のピーク。**@Published ではない。**
-    /// Sources のどのビューも読んでいない（メーターは Telemetry の枠を読む）のに
-    /// 30Hz で publish していて、観測している側の body を 33ms ごとに作り直していた。
-    /// 読み手が増えるときは、ここではなく Telemetry を見ること。
-    private(set) var level: Float = 0
+    /// 入口と出口のメーター（ETPeakMeter）。**@Published ではない。**
+    /// 鎖の頭（IN）と出力補正の行（OUT）の小さなメーターが TimelineView の拍ごとに読む（SignalMeter.swift）。
+    /// 30Hz で publish すると観測している側の body を 33ms ごとに作り直すので、ここは読まれるだけにする。
+    /// 止まっている（render が無い）ときは 0。読み書きは tick() が render?.load を読むのと同じ形
+    /// （音のスレッドが書き、メインが読む。山とクリップの数が別のブロックのものになることはあるが、出すだけなので構わない）。
+    var inputMeter: ETPeakMeter { render?.inMeter ?? ETPeakMeter() }
+    var outputMeter: ETPeakMeter { render?.outMeter ?? ETPeakMeter() }
     @Published var applied: Int = 0
     /// このアプリの音がどこへ出ているか。
     /// 仮想デバイス（名前に ET_NAME_STEM を含む）を指していたら帰還ループ。
@@ -483,6 +488,8 @@ final class AudioIO: ObservableObject {
             //    2ch なので、s の 2n サンプルから同じ値が出る。
             let s = state.interleaved
             let inPeak = ETAudioBufferOps.peak(s, count: n * 2)
+            // 入口のメーター。ゲートと休みより前に置くので、鎖が休んでいる間も落ちていく。
+            state.inMeter.feed(blockPeak: inPeak, frames: n, sampleRate: state.sampleRate)
             // ゲートは毎回通す。silentFor を溜めているのがこれ。
             //
             // **トーンはゲートと論理和にする。**前はプレーナに足したあとで走査して
@@ -519,7 +526,8 @@ final class AudioIO: ObservableObject {
                 for buffer in abl {
                     if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
                 }
-                state.meter = 0
+                // 出力は全部ゼロ。メーターも同じ落ち方で下げる。
+                state.outMeter.feed(blockPeak: 0, frames: n, sampleRate: state.sampleRate)
                 state.applied = 0
                 state.pipeStatus = 0
                 state.elapsed += Double(n) / state.sampleRate
@@ -558,11 +566,12 @@ final class AudioIO: ObservableObject {
 
             // 7. 出力へ書く。インターリーブの口・本数の過不足・容量を超えたフレームは
             //    ETAudioBufferOps.writeOutput が受け持つ（AudioBufferOpsTests）。
-            state.meter = ETAudioBufferOps.writeOutput(
+            let outPeak = ETAudioBufferOps.writeOutput(
                 planar: p, frames: n, channels: channels,
                 frameCount: Int(frameCount), bufferCount: abl.count) { k in
                     (abl[k].mData?.assumingMemoryBound(to: Float.self), Int(abl[k].mNumberChannels))
                 }
+            state.outMeter.feed(blockPeak: outPeak, frames: n, sampleRate: state.sampleRate)
 
             let spent = state.now() - began
             let budget = Double(n) / state.sampleRate
@@ -612,7 +621,6 @@ final class AudioIO: ObservableObject {
         if !keepListening { ETLinkReceiver.shared.stop() }
         EffeTuneDSP.shared.reset()
         render = nil
-        level = 0
         // start() は毎回ここを通るので、同じ値を書かない（publish が増えるだけ）。
         if running { running = false }
         if status != "Stopped" { status = "Stopped" }
@@ -672,9 +680,6 @@ final class AudioIO: ObservableObject {
         }
 
         refreshRoute()
-
-        // level は publish しないので、そのまま書いてよい。
-        level = render?.meter ?? 0
 
         let nowApplied = Int(render?.applied ?? 0)
         if applied != nowApplied { applied = nowApplied }

@@ -281,4 +281,72 @@ final class AudioBufferOpsTests: XCTestCase {
         XCTAssertTrue(load.isFinite)
         XCTAssertEqual(load, 100, accuracy: 1e-9)
     }
+
+    // MARK: - ETPeakMeter
+
+    private func fed(_ peaks: [(Float, Int)], sampleRate: Double = 48000) -> ETPeakMeter {
+        var m = ETPeakMeter()
+        for (p, frames) in peaks { m.feed(blockPeak: p, frames: frames, sampleRate: sampleRate) }
+        return m
+    }
+
+    /// 上がるときはそのブロックの山へすぐ跳ぶ。
+    func testPeakMeterRisesAtOnce() {
+        let m = fed([(0.5, 480)])
+        XCTAssertEqual(m.peak, 0.5)
+        XCTAssertEqual(m.clips, 0)
+    }
+
+    /// 下がるときは 20 dB/秒。0.1 秒で -2 dB。
+    func testPeakMeterFallsTwentyDBPerSecond() {
+        let m = fed([(1.0, 480), (0, 4800)])
+        XCTAssertEqual(m.clips, 1)
+        XCTAssertEqual(m.peak, Float(pow(10, -2.0 / 20)), accuracy: 1e-4)
+    }
+
+    /// 落ちている途中でも高いブロックが来ればそちらへ。低いブロックは落ちた値を持ち上げない。
+    func testPeakMeterHigherBlockWinsLowerDoesNotRaise() {
+        let higher = fed([(0.5, 480), (0, 4800), (0.8, 480)])
+        XCTAssertEqual(higher.peak, 0.8)
+        let falling = fed([(1.0, 480), (0, 4800)])
+        let lower = fed([(1.0, 480), (0, 4800), (0.1, 480)])
+        XCTAssertLessThan(lower.peak, falling.peak)
+        XCTAssertGreaterThan(lower.peak, 0.1)
+    }
+
+    /// ちょうど 1.0 は数え、その少し下は数えない。
+    func testPeakMeterClipEdge() {
+        XCTAssertEqual(fed([(1.0, 480)]).clips, 1)
+        XCTAssertEqual(fed([(0.99999, 480)]).clips, 0)
+        XCTAssertEqual(fed([(1.0, 480), (0.5, 480), (1.2, 480)]).clips, 2)
+    }
+
+    /// inf は上限で止めてクリップに数える。そのあと落ちきって 0 に戻る（張り付かない）。
+    func testPeakMeterInfinityIsCappedAndFalls() {
+        var m = fed([(.infinity, 480)])
+        XCTAssertEqual(m.peak, ETPeakMeter.ceiling)
+        XCTAssertEqual(m.clips, 1)
+        m.feed(blockPeak: 0, frames: 480000, sampleRate: 48000)
+        XCTAssertTrue(m.peak.isFinite)
+        XCTAssertEqual(m.peak, 0)
+    }
+
+    /// NaN は 0 として扱い、クリップにしない。
+    func testPeakMeterNaNIsZero() {
+        let m = fed([(.nan, 480)])
+        XCTAssertEqual(m.peak, 0)
+        XCTAssertEqual(m.clips, 0)
+    }
+
+    /// -100 dB（5 秒）まで落ちたらちょうど 0。
+    func testPeakMeterFloorsToZero() {
+        XCTAssertEqual(fed([(1.0, 480), (0, 240000)]).peak, 0)
+    }
+
+    /// フレーム数 0 やレート 0 では落ちない（割り算で飛ばない）。
+    func testPeakMeterDegenerateInputDoesNotFall() {
+        XCTAssertEqual(fed([(0.5, 480), (0, 0)]).peak, 0.5)
+        XCTAssertEqual(fed([(0.5, 480), (0, 4800)], sampleRate: 0).peak, 0.5)
+        XCTAssertEqual(fed([(0.5, -10)]).peak, 0.5)
+    }
 }
