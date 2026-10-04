@@ -6,7 +6,7 @@
 //  （PipelineAnalysis.swiftと同じ分け方）。試すのはTests/Unit/ChainEditingTests.swift。
 //
 //  持っているもの:
-//    - 既定の鎖（Level Meter 1本）と、それを残さない決まり
+//    - 既定の鎖（空）と、まだ何も残していないうちはそれを残さない決まり
 //    - プリセットを足すときの組み立て（上流 preset-manager.js addPresetToPipeline）
 //    - 外部の段（AU/JSFX）の身元がぶつかったときの付け直し
 //    - 上流が受けないChに置かれた段（descriptorでは切で渡す）
@@ -20,24 +20,20 @@ enum ETChainEditing {
 
     // MARK: - 既定の鎖
 
-    /// 何も無いときに置く1本。restore()の既定とresetToDefault()が同じものを指すように、
-    /// 型名はここだけに書く。
-    static let defaultType = "LevelMeterPlugin"
-
-    /// いま並んでいるのが既定そのもの（Level Meter 1本）か。
-    static func isDefaultChain(types: [String]) -> Bool {
-        types.count == 1 && types[0] == defaultType
-    }
+    /// いま並んでいるのが既定そのもの（空）か。初めての起動と Reset chain が並べるもの。
+    /// 前は Level Meter を 1 本置いていたが、IN / OUT のメーターを鎖の外に固定したので要らなくなった
+    /// （端末に残っている Level Meter 入りの鎖は使う人のものなので触らない）。
+    static func isDefaultChain(types: [String]) -> Bool { types.isEmpty }
 
     /// 端末（pipeline.lastとiCloud）へ残してよいか。
     ///
-    /// **restore()が置いた既定の1本は残さない。**「まだ何も残していない（hasSavedが偽）」かつ
-    /// 「並んでいるのが既定そのもの」は、人が組んだ鎖ではなくrestore()の第二の枝が置いたものしか
-    /// ありえない。これを書くと2つ壊れる:
-    ///   - iCloud側の鎖がLevel Meter 1本で上書きされる（CloudMirror）
+    /// **まだ何も残していないうちは、空の鎖を書かない。**
+    /// publish()は何も編集していなくても走る（起動時に補正を入れる OutputCorrection.dspPrepared、
+    /// PCの鎖の編集から出たとき）。そこで[]を書くと2つ壊れる:
+    ///   - iCloud側の鎖が空の鎖で上書きされる（CloudMirror）
     ///   - "pipeline.last"が埋まるので、遅れて降りてくる鎖を受ける口
     ///     （CloudMirror.seedの「手元が空の鍵だけ」）が閉じる
-    /// 人が消して既定に戻した場合はhasSavedが真なので残す。
+    /// 一度でも残したあとに人が空にした場合はhasSavedが真なので、空の鎖を書く。
     static func shouldPersist(types: [String], hasSaved: Bool) -> Bool {
         !(isDefaultChain(types: types) && !hasSaved)
     }

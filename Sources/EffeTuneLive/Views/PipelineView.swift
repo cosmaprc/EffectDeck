@@ -5,7 +5,8 @@
 //    - 左のエフェクト一覧は常時は出さない。iPhone の幅では鎖が読めなくなるので + から出す
 //    - 再生の開始/停止は持たない。拡張が繋がったら自分で鳴らし始める。
 //      鎖を切りたいときは頭の ON を切る（素通しになる）
-//    - レベルメーターは下の帯に置かない。要る人は Level Meter を鎖に入れる
+//    - レベルメーターは下の帯に置かない。鎖の頭に IN、出力補正の行に OUT を固定で出す
+//      （SignalMeter.swift）。既定の鎖は空
 //    - Section を畳むと配下の**行ごと**消える。上流はパラメータの表示を畳むだけで
 //      行は残る（js/ui/pipeline/pipeline-item-builder.js:795-836）。
 //      横に並べられない幅なので、ここだけ変えてある
@@ -406,7 +407,7 @@ struct PipelineView: View {
                 Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Removes every effect and leaves a single Level Meter.")
+                Text("Removes every effect.")
             }
             .confirmationDialog("Replace chain?",
                                 isPresented: Binding(
@@ -1938,10 +1939,8 @@ private struct PipelineToolbar: ToolbarContent {
                 Button("Settings", systemImage: "gearshape") { present(.settings) }
                 Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
                 Divider()
-                // 上流に鎖を空にする操作は無く、既定を組む所を
-                // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
-                // 戻す先が空ではなく既定なので、Clear ではなく
-                // 上流の Reset Audio / Reset Zoom と同じ Reset に寄せた。
+                // 既定（初めての起動と同じ）へ戻す。既定は空なので Clear と同じ結果になるが、
+                // 上流の Reset Audio / Reset Zoom に揃えた名前のまま。
                 //
                 // 押した時点では何もしない。走らせるのは親の確認を通ってから。
                 Button(role: .destructive) {
@@ -1949,7 +1948,7 @@ private struct PipelineToolbar: ToolbarContent {
                 } label: {
                     Label("Reset chain", systemImage: "trash")
                 }
-                // 既に Level Meter 1 本なら押しても何も変わらない。
+                // 鎖が空なら押しても何も変わらない。
                 .disabled(dsp.isDefaultChain)
             } label: {
                 Label("More", systemImage: "ellipsis")
@@ -2208,17 +2207,13 @@ private struct EmptyChainRow: View {
     let add: () -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 30))
-                .foregroundStyle(.secondary)
-            Text("No effects")
-                .font(.system(size: 16, weight: .semibold))
+        // 初めての起動・Reset chain の後はこれが出る（既定の鎖は空）。標準の空の表示に、足す口だけ。
+        ContentUnavailableView {
+            Label("No Effects", systemImage: "slider.horizontal.3")
+        } actions: {
             Button("Add Effect", action: add)
                 .buttonStyle(.borderedProminent)
-                .padding(.top, 2)
         }
-        .frame(maxWidth: .infinity)
     }
 }
 
