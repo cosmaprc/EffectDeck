@@ -75,6 +75,8 @@ struct GraphCanvas<Overlay: View>: View {
     /// 畳んだカードから渡る高さの上限。nil なら height をそのまま使う。
     @Environment(\.etGraphMaxHeight) private var maxHeight
     @Environment(\.scenePhase) private var scenePhase
+    /// PoC: PC の鎖を編集しているあいだの Analyzer（Views/RemoteScannerView.swift の ETRemoteMeasurementDim）。
+    @Environment(\.etMeasurementDimmed) private var measurementDimmed
     @GestureState private var previewActive = false
     var insets: ETGraphInsets
     /// 掴んでいる値。空なら caption を出す。
@@ -161,6 +163,8 @@ struct GraphCanvas<Overlay: View>: View {
             }
             .frame(height: min(height, maxHeight ?? height))
         }
+        // 読み値の行ごと沈める。数字も手元の音のもの。
+        .etDimmedWhenMeasuring(measurementDimmed)
         .onDisappear { ETPreviewTone_SetFrequency(0) }
         .onChange(of: previewActive) { wasActive, active in
             if wasActive && !active { ETPreviewTone_SetFrequency(0) }

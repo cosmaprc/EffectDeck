@@ -54,7 +54,12 @@ final class EffeTuneDSP: ObservableObject {
     /// restore() の最中だけ true。読み込みで入れた値を書き戻さないため。
     private var restoring = false
     @Published private(set) var ready = false
-    @Published var bypass = false { didSet { ETPipeline_SetBypass(bypass ? 1 : 0) } }
+    @Published var bypass = false {
+        didSet {
+            ETPipeline_SetBypass(bypass ? 1 : 0)
+            RemoteMirror.shared.bypassChanged(bypass)   // PoC: PC の EffeTune へ写す
+        }
+    }
 
     /// テレメトリを読むのに要るので外へ出す。
     private(set) var engine: UInt32 = 0
@@ -407,6 +412,15 @@ final class EffeTuneDSP: ObservableObject {
         pendingPersist?.cancel()
         pendingPersist = nil
 
+        // PoC: PC の EffeTune へ写す（DSP/RemoteMirror.swift）。下の門は端末へ残すかの話で、
+        // PC の鎖を編集しているあいだは端末へは書かずに PC へだけ送るので、門より前に呼ぶ。
+        RemoteMirror.shared.chainChanged(chain)
+
+        // **PC の鎖を編集しているあいだは端末へ書かない**（RemoteMirror.isRemote）。
+        // いま並んでいるのは PC の鎖で、手元の鎖は退避してある。書くと pipeline.last と
+        // iCloud（CloudMirror）が PC の鎖で上書きされ、切ったときに戻す先が消える。
+        guard !RemoteMirror.shared.isRemote else { return }
+
         // **restore() が置いた既定の 1 本は残さない**（ETChainEditing.shouldPersist）。
         // 書くと iCloud 側の鎖が Level Meter 1 本で上書きされ、遅れて降りてくる鎖を
         // 受ける口も閉じる。入れ直した端末では、この 2 つが同じ起動の数ミリ秒差で起きていた。
@@ -428,6 +442,19 @@ final class EffeTuneDSP: ObservableObject {
         }
         PipelineStore.saveLast(chain)
         persistExpanded()
+    }
+
+    /// PoC: PC の鎖を編集する前に、手元の鎖を退避する形（RemoteMirror）。
+    ///
+    /// **待っている遅延保存を先に書き切る。**退避した後は persist() が書かないので、
+    /// 0.5 秒待ちの編集が落ちる。外部の段は persist() と同じく生きた instance の state を取る。
+    func remoteStashForm() -> [[String: Any]] {
+        if pendingPersist != nil { persist() }
+        var nodes = chain
+        for index in nodes.indices where nodes[index].isExternal {
+            nodes[index].externalState = externalState(for: nodes[index]) ?? nodes[index].externalState
+        }
+        return PipelineStore.shortForm(nodes)
     }
 
     /// 走っている遅延保存。まとめるために持っている。
@@ -453,6 +480,8 @@ final class EffeTuneDSP: ObservableObject {
     }
 
     private func persistExpanded() {
+        // PC の鎖の開閉は手元の鎖の位置と合わない。persist() と同じく書かない。
+        guard !RemoteMirror.shared.isRemote else { return }
         PipelineStore.saveExpanded(chain.indices.filter { expanded.contains(chain[$0].id) })
     }
 
@@ -531,7 +560,8 @@ final class EffeTuneDSP: ObservableObject {
     /// 人が何か足していれば isDefaultChain が false になり、ここは素通りする。
     /// 遅れて届いた古い鎖で、いま触っている鎖を潰さないため。
     func adoptSeededChain() {
-        guard ready, isDefaultChain else { return }
+        // PC の鎖を編集している最中に降りてきた鎖で、PC の鎖を潰さない（RemoteMirror）。
+        guard ready, isDefaultChain, !RemoteMirror.shared.isRemote else { return }
         guard let saved = PipelineStore.loadLast(catalog: ETCatalog), !saved.isEmpty else { return }
         replaceChain(with: saved)
     }
@@ -547,6 +577,14 @@ final class EffeTuneDSP: ObservableObject {
         }
         // 組み直しは ETIRLoader.load が送るたびにやっている
         // （素材が入って初めてカーネルがその段を有効と数えるため）。
+    }
+
+    /// 鍵が `ids` に入っている段だけ入れ直す。PC から IR が届いたとき（RemoteMirror）。
+    /// 鳴っている最中に、届いた IR と関係ない段まで組み直さない。
+    func reloadAssets(ids: Set<String>) {
+        for i in chain.indices where !chain[i].irId.isEmpty && ids.contains(chain[i].irId) {
+            reloadAsset(at: i)
+        }
     }
 
     /// 1 段だけ入れ直す。
@@ -930,6 +968,7 @@ final class EffeTuneDSP: ObservableObject {
         let before = instanceLatency(of: chain[index])
         pushParams(chain[index])
         settleAfterParams(at: index, changed: offset, before: before)
+        RemoteMirror.shared.paramsChanged(at: index)
         // publish() は通さない。descriptor に載るのは並びと入切と鎖の形だけで、
         // 値は pushParams が instance へ直に渡している。
         // ただし端末には残す。残さないと、次に鎖を足す/消す/動かすまで
@@ -993,6 +1032,7 @@ final class EffeTuneDSP: ObservableObject {
         if !changed.isEmpty || redesign {
             ETAssetReattach.paramsChanged(chain[index])
         }
+        RemoteMirror.shared.paramsChanged(at: index)
         // setValue と同じ理由で publish() は通さず、端末にだけ残す。
         persistSoon()
     }
@@ -1044,6 +1084,7 @@ final class EffeTuneDSP: ObservableObject {
         }
         // setValues と同じ。値から材料を引く designer に、戻した値を読ませる。
         ETAssetReattach.paramsChanged(chain[index])
+        RemoteMirror.shared.paramsChanged(at: index)
         persistSoon()
     }
 
@@ -1181,6 +1222,10 @@ final class EffeTuneDSP: ObservableObject {
     /// 段の id → 探り。
     private var probes: [UUID: ProbePair] = [:]
 
+    /// 探りを足した・外したら 1 進む。探りは publish() で作るので、$chain の後になることがある。
+    /// PoC: RemoteMirror が PC の重ね表示を映す tap を決め直すのに見る。
+    @Published private(set) var probeRevision = 0
+
     /// 図に音を重ねる段の型。上流の対応表（plugins/spectrum-overlay.js:17-37）から、
     /// こちらに専用の図があるものだけ。
     private static let probedTypes: Set<String> = ["FiveBandPEQPlugin", "FifteenBandPEQPlugin"]
@@ -1231,9 +1276,12 @@ final class EffeTuneDSP: ObservableObject {
         let want = Set(candidates.prefix(budget))
 
         var doomed: [UInt32] = []
+        var changed = false
+        defer { if changed { probeRevision &+= 1 } }
         for id in Array(probes.keys) where !want.contains(id) {
             if let pair = probes[id] { doomed += [pair.before.instance, pair.after.instance] }
             probes[id] = nil
+            changed = true
         }
 
         guard let spec = ETCatalog.first(where: { $0.type == Self.probeType }) else { return doomed }
@@ -1249,6 +1297,7 @@ final class EffeTuneDSP: ObservableObject {
                 continue
             }
             probes[id] = ProbePair(before: before, after: after)
+            changed = true
         }
         return doomed
     }

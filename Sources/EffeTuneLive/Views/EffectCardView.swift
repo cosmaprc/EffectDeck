@@ -125,6 +125,11 @@ struct EffectCardView: View {
             }
         }
         .opacity(node.isMuted ? 0.55 : 1)
+        // PoC: PC の鎖を編集しているあいだ、PC の測定値を映していない Analyzer の図を沈める
+        // （Views/RemoteScannerView.swift）。
+        .modifier(ETRemoteMeasurementDim(applies: node.spec.isAnalyzer, tap: node.tapId))
+        // PoC: PC の EffeTune が持っていない効果の段に、送れないことを出す。
+        .modifier(ETRemoteUnsupportedMark(effect: node.spec.name))
         .sheet(item: $sheet) { which in
             switch which {
             case .routing: EffectRoutingSheet(index: index, node: node, dsp: dsp)
