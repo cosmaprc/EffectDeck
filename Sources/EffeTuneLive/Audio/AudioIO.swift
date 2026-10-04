@@ -963,13 +963,15 @@ final class AudioIO: ObservableObject {
     ///
     /// 走っていない・DSP が用意できていない・引き剥がしで本体のスピーカーへ寄せている間は
     /// 情報にしない（寄せている間の Speaker は本物の出力先ではない）。
+    /// PC の鎖を編集している間（RemoteMirror.isRemote）も見送る。切ったあとに出力先が違えばそこで切り替える。
     private func followOutputDevice(_ route: AVAudioSessionRouteDescription) {
         let now = ProcessInfo.processInfo.systemUptime
         let device = ETOutputDevice.pick(route.outputs.map {
             ETOutputDevice(kind: Self.outputKind($0.portType), uid: $0.uid, name: $0.portName)
         })
         let step = deviceSwitch.observe(device,
-                                        active: running && !overriding && EffeTuneDSP.shared.ready,
+                                        active: running && !overriding && EffeTuneDSP.shared.ready
+                                            && !RemoteMirror.shared.isRemote,
                                         now: now,
                                         lastStart: lifecycle.lastStartAttempt,
                                         lastEscape: escape.lastApply)

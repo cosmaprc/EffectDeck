@@ -51,6 +51,8 @@ struct PipelineView: View {
     /// ツールバーを別の型へ出したので、その型からも見えるところに置く。
     enum Sheet: String, Identifiable, Equatable {
         case picker, settings, routing, presets, ir, tips
+        /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
+        case remote
         var id: String { rawValue }
     }
 
@@ -105,6 +107,8 @@ struct PipelineView: View {
     /// ここへ届くのは本当に変わったときだけ。初期値は onAppear で合わせる。
     @State private var running = false
     @State private var hasPeer = false
+    /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
+    @State private var isRemote = false
     @State private var processingRate: Double = 48000
 
     // MARK: - 並べ方（1列/2列）
@@ -251,6 +255,8 @@ struct PipelineView: View {
                 PresetsView(dsp: dsp)
             case .ir:
                 IRLibraryView()
+            case .remote:
+                RemotePanelView()
             // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
             case .tips:
                 NavigationStack {
@@ -297,7 +303,8 @@ struct PipelineView: View {
             }
             // 写した値の初期合わせ。購読の初回配信に頼らない。
             running = io.running
-            hasPeer = io.hasPeer
+            hasPeer = io.hasPeer || RemoteMirror.shared.isRemote
+            isRemote = RemoteMirror.shared.isRemote
             processingRate = io.processingRate
         }
         .onReceive(slow) { _ in io.tick() }
@@ -321,6 +328,8 @@ struct PipelineView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { ETDisplayPump.shared.stop() }
             else { ETDisplayPump.shared.start { io.pollTelemetry() } }
+            // 背景では PC にアナライザの枠を作らせない。同じく .background だけで切る。
+            RemoteMirror.shared.setAppActive(phase != .background)
             if phase == .active { drainShared() }
         }
         // **共有シートや「このアプリで開く」から来たファイルを受ける。**
@@ -357,7 +366,12 @@ struct PipelineView: View {
         }
         // io を丸ごと観測せず、要る値だけを写す。
         .onReceive(io.$running) { running = $0 }
-        .onReceive(io.$hasPeer) { hasPeer = $0 }
+        // PC の鎖を編集しているあいだは、この端末に音が来ていなくても「繋がっている」扱いにする。
+        // 鳴っているのは PC で、No audio yet の帯や電源の沈みはこの端末の話でしかない。
+        .onReceive(io.$hasPeer.combineLatest(RemoteMirror.shared.$isRemote)) { peer, remote in
+            hasPeer = peer || remote
+            isRemote = remote
+        }
         .onReceive(io.$processingRate) { processingRate = $0 }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
@@ -832,7 +846,12 @@ struct PipelineView: View {
                     .padding(.bottom, 8)
             }
 
-            if !hasPeer {
+            if isRemote {
+                RemoteBanner(openRemote: { presentSheet(.remote) })
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            } else if !hasPeer {
                 ConnectBanner(openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
@@ -1857,9 +1876,17 @@ private struct PipelineToolbar: ToolbarContent {
         ToolbarItem(placement: .principal) {
             // 帯を 1 行使うのをやめて、ナビゲーションの中に入れた。
             // 観測するのはこのビューだけ。
-            LiveStatusStrip(io: io)
+            // PoC: リモート中は Remote Control の札に替わる（RemoteStatusSlot）。
+            RemoteStatusSlot(io: io) { present(.remote) }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            // PoC: PC の EffeTune を操る画面を開くアイコン（シート。つなぐ・切るもシートの中）。
+            // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
+            // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは
+            // 設定画面の Remote の面から開く。
+            if pickerAsPopover {
+                RemoteToolbarButton { present(.remote) }
+            }
             Button("Presets", systemImage: "square.stack") { present(.presets) }
             if pickerAsPopover {
                 // **+から出す。**選ぶたびに閉じる。つまんで運ぶと自分で閉じ、
@@ -2069,6 +2096,48 @@ private struct ConnectBanner: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Known limitations")
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// PC の鎖を編集しているあいだ、No audio yet の代わりに鎖の頭に出る。
+/// 状態だけを言う。つなぎ先は host だけ（トークンは出さない）。
+private struct RemoteBanner: View {
+    let openRemote: () -> Void
+
+    var body: some View {
+        Card {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.blue)
+                    .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Remote Control")
+                        .font(.system(size: 15, weight: .semibold))
+                    if let host = ETRemoteAddress.parse(Preferences.shared.remoteAddress)?.host {
+                        Text(host)
+                            .font(.system(size: 12))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                // 大きさは ConnectBanner の Help に揃える。
+                Button(action: openRemote) {
+                    Text("Settings")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Remote Control Settings")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
