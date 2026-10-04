@@ -79,7 +79,7 @@ final class EffeTuneDSP: ObservableObject {
     // MARK: - 出力補正（Output Correction）
 
     /// いまの出力先の補正。**chain（使う人の鎖）とは別の並び**で、エンジンへは chain の後ろに付けて渡す。
-    /// 入れ替えるのは OutputCorrection（出力先が替わる・入切・リモートの出入り）だけ。
+    /// 入れ替えるのは OutputCorrection（出力先が替わる・入切・紐付けやプリセットの変更・リモートの出入り）だけ。
     /// プリセット・共有・バックアップ・iCloud・pipeline.last・リモートの退避は chain しか見ないので、
     /// ここに入っているものは載らない。
     @Published private(set) var correction: [Node] = []
@@ -515,11 +515,6 @@ final class EffeTuneDSP: ObservableObject {
         pendingPersist?.cancel()
         pendingPersist = nil
 
-        // 出力補正の写しを端末に残す（OutputCorrection.persistLoaded）。
-        // 下のリモートと既定の門より前に置く。補正は手元の出力先の話で、どちらの門とも関係ない
-        // （リモートの間は補正を外してあるので何も書かない）。
-        OutputCorrection.shared.persistLoaded()
-
         // PoC: PC の EffeTune へ写す（DSP/RemoteMirror.swift）。下の門は端末へ残すかの話で、
         // PC の鎖を編集しているあいだは端末へは書かずに PC へだけ送るので、門より前に呼ぶ。
         RemoteMirror.shared.chainChanged(chain)
@@ -907,7 +902,7 @@ final class EffeTuneDSP: ObservableObject {
         restoring = false
         collapsedFully.subtract(old)
         correction.removeAll()
-        // replaceChain と同じく、作り直す前に外す。同じ身元を持つ写しを入れ直すことがある。
+        // replaceChain と同じく、作り直す前に外す。同じプリセットを入れ直すことがある。
         for id in external { removeExternal(instanceID: id) }
         for item in items { append(item, to: .correction) }
         publish()
@@ -922,12 +917,6 @@ final class EffeTuneDSP: ObservableObject {
     /// 出力補正を外す。
     func unloadCorrection() {
         loadCorrection([])
-    }
-
-    /// 出力補正の短い形。外の host の生きた state を写してから作る（persist() の main と同じ）。
-    func correctionForm() -> [[String: Any]] {
-        refreshExternalStates(.correction)
-        return PipelineStore.shortForm(correction)
     }
 
     /// いま並んでいるのが既定そのもの（Level Meter 1 本）か。

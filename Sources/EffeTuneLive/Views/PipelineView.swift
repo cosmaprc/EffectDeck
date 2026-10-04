@@ -2224,7 +2224,7 @@ private struct OutputCorrectionRow: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.primary)
                         if let d = oc.device {
-                            Label("\(d.name) · \(oc.source ?? "None")",
+                            Label("\(d.name) · \(oc.preset(for: d.key) ?? "None")",
                                   systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)

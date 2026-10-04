@@ -989,7 +989,7 @@ final class AudioIO: ObservableObject {
             scheduleDeviceRecheck(at: until, now: now)
         case .switched(let d):
             cancelDeviceRecheck()
-            // 補正の写しだけを入れ替える。main には触らない。記録の 1 行も向こうで出す（uid は出さない）。
+            // 紐付けたプリセットを読み直すか外す。main には触らない。記録の 1 行も向こうで出す（uid は出さない）。
             OutputCorrection.shared.deviceSettled(d)
         }
     }

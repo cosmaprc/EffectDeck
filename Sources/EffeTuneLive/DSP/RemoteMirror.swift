@@ -531,7 +531,7 @@ final class RemoteMirror: ObservableObject {
         UserDefaults.standard.set(dsp.bypass, forKey: Self.stashBypassKey)
         // 出力補正は手元の出力先の話なので、PC の鎖を編集している間は外す。
         // **isRemote を立てる前に呼ぶ。**外すときの publish → persist() → chainChanged が
-        // isRemote を見て手元の鎖を PC へ送らないように。外す前の書き出し（flush）もつなぐ前の状態で行う。
+        // isRemote を見て手元の鎖を PC へ送らないように。
         OutputCorrection.shared.setRemote(true)
         // 先に立てる。入れ替えの persist() が端末へ書かないように。
         isRemote = true

@@ -399,7 +399,7 @@ targets:
       # Foundationだけ（OutputDeviceTests）。自分の仮想デバイスを名前で外すのにAudioSessionRules、
       # 待つ秒数にRouteEscape（どちらも上で入れてある）を引く。
       - path: Sources/EffeTuneLive/Audio/OutputDevice.swift
-      # 出力補正（Output Correction）の値だけの判断：slot の数え方・端末ごとの写し・切り替えの段取り・共有の平らげ。Foundationだけ（OutputCorrectionTests）。
+      # 出力補正（Output Correction）の値だけの判断：slot の数え方・端末ごとのプリセットの紐付け・切り替えの段取り・共有の平らげ。Foundationだけ（OutputCorrectionTests）。
       - path: Sources/EffeTuneLive/DSP/OutputCorrectionCore.swift
       # FeedbackLoopTestsがET_NAME_STEMをSwiftの写しと照らすために読む。コンパイルはしない。
       - path: Sources/Shared/ETNames.h

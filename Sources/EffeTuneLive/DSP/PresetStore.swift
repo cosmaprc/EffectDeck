@@ -37,35 +37,42 @@ final class PresetStore: ObservableObject {
         emptyFolders = core.emptyFolders
     }
 
+    /// 中身が変わった。一覧を読み直して、出力補正に知らせる（紐付けたプリセットの上書き・付け替え・削除。
+    /// 読み直すかは OutputCorrection.presetsChanged が決める）。init からは呼ばない。
+    private func changed() {
+        reload()
+        OutputCorrection.shared.presetsChanged()
+    }
+
     /// 空のフォルダを作る。**入れ子は作らない。**`/` は名前から落とす。
     func addFolder(_ name: String) {
         core.addFolder(name)
-        reload()
+        changed()
     }
 
     func removeFolder(_ name: String) {
         core.removeFolder(name)
-        reload()
+        changed()
     }
 
     /// フォルダの名前を替える。**全部移すか、何も動かさないか。**
     @discardableResult
     func renameFolder(_ old: String, to new: String) -> Bool {
-        defer { reload() }
+        defer { changed() }
         return core.renameFolder(old, to: new)
     }
 
     /// 名前を付け替える。**フォルダの出し入れもこれ。**
     @discardableResult
     func rename(_ old: String, to new: String) -> Bool {
-        defer { reload() }
+        defer { changed() }
         return core.rename(old, to: new)
     }
 
     func save(_ name: String, chain: [EffeTuneDSP.Node]) {
         guard !chain.isEmpty else { return }
         core.save(name, form: PipelineStore.shortForm(chain))
-        reload()
+        changed()
     }
 
     /// PC のホスト名のフォルダを PC のプリセットの写しにする（PresetStoreCore.mirrorFolder。DSP/RemoteMirror.swift）。
@@ -73,7 +80,7 @@ final class PresetStore: ObservableObject {
     @discardableResult
     func mirrorFolder(_ hostName: String, incoming: [String: [[String: Any]]],
                       unreadable: Set<String> = []) -> (folder: String, written: Int, deleted: Int) {
-        defer { reload() }
+        defer { changed() }
         return core.mirrorFolder(hostName, incoming: incoming, unreadable: unreadable)
     }
 
@@ -91,7 +98,7 @@ final class PresetStore: ObservableObject {
 
     func remove(_ name: String) {
         core.remove(name)
-        reload()
+        changed()
     }
 
     /// 貼られた字から鎖を読む。直したもの・落としたもの（ETChainText.Report）も返す。
@@ -110,7 +117,7 @@ final class PresetStore: ObservableObject {
     /// 返すのは入れた本数。
     @discardableResult
     func merge(_ incoming: [String: [[String: Any]]]) -> Int {
-        defer { reload() }
+        defer { changed() }
         return core.merge(incoming)
     }
 }

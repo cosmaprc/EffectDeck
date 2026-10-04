@@ -2,12 +2,12 @@
 //  出力補正（Output Correction）の、値だけで決まる判断。**Foundationだけ**（OutputCorrectionTests）。
 //
 //  出力補正は、使う人の鎖（main）の後ろに付く固定の層。出力先（ヘッドホンなど）ごとに
-//  自分の補正の写しを持ち、出力先が替わると写しだけが入れ替わる。main には触らない。
+//  ユーザープリセットを 1 つ紐付け、出力先が替わるとそのプリセットを読み直す。main には触らない。
 //
 //  ここに置くのは4つ。
 //    - slot の数え方：エンジンへ渡す並び（main + 補正）の中の位置と、部分ごとの位置の行き来
-//    - 端末ごとの写しの入れ物：UserDefaults にだけ持つ（iCloud・バックアップへは出さない）
-//    - 読み込み・外し・書き出しの段取り：いまの状態から「何をどの順でやるか」だけを返す
+//    - 端末ごとの紐付けの入れ物：出力先 → ユーザープリセットの名前（UserDefaults だけ）
+//    - 読み込み・外し・名前だけの直しの段取り：いまの状態から「何をやるか」だけを返す
 //    - 共有のための平らげ：main + 終端 + 補正を、受け手が普通の鎖として開ける1本にする
 
 import Foundation
@@ -49,7 +49,7 @@ enum ETChainSlots {
     }
 }
 
-// MARK: - 端末ごとの写し
+// MARK: - 端末ごとの紐付け
 
 /// 補正を持つ出力先。`key` は ETOutputDevice.key、`name` は最後に見た名前、
 /// `kind` は ETOutputDevice.Kind の字。
@@ -59,13 +59,12 @@ struct ETOutputCorrectionDevice: Equatable {
     let kind: String
 }
 
-/// 1台ぶんの写し。`chain` は短い形の JSON（鍵を並べたもの）。
-/// `source` は写し元のプリセット名で、画面に出すだけ。
-struct ETOutputCorrectionEntry: Equatable {
+/// 出力先 1 台の紐付け。`preset` は保存してある名前そのもの（`フォルダ/名前`）。
+struct ETOutputCorrectionBinding: Equatable {
+    let key: String
     let name: String
     let kind: String
-    let source: String?
-    let chain: Data
+    let preset: String
 }
 
 /// 出力補正の入れ物。**UserDefaults だけ**（iCloud・バックアップへは出さない。patch も持たない）。
@@ -73,8 +72,8 @@ struct ETOutputCorrectionEntry: Equatable {
 /// 持つのは3つ。
 ///   - 入切（既定は切）
 ///   - 最後に落ち着いた出力先
-///   - 出力先ごとの写し `{ "<鍵>": { name, kind, source?, chain } }`
-/// 値は字と Data だけなので plist に載る。
+///   - 出力先ごとの紐付け `{ "<鍵>": { preset, name, kind } }`
+/// 値は字だけなので plist に載る。紐付けてある出力先だけを持つ。
 final class ETOutputCorrectionStoreCore {
 
     static let onKey = "outputCorrection.on"
@@ -113,69 +112,109 @@ final class ETOutputCorrectionStoreCore {
         storage.set(["key": d.key, "name": d.name, "kind": d.kind], forKey: Self.deviceKey)
     }
 
-    // MARK: 写し
+    // MARK: 紐付け
 
-    /// その出力先の写し。形の崩れたもの（辞書でない・chain が Data でない）は nil。
-    func entry(for key: String) -> ETOutputCorrectionEntry? {
-        guard let raw = devices()[key] as? [String: Any],
-              let chain = raw["chain"] as? Data else { return nil }
-        return ETOutputCorrectionEntry(name: raw["name"] as? String ?? "",
-                                       kind: raw["kind"] as? String ?? "",
-                                       source: raw["source"] as? String,
-                                       chain: chain)
+    /// 紐付け。形の崩れたもの・preset が空のものは nil。**プリセットが在るかは見ない。**
+    func binding(for key: String) -> ETOutputCorrectionBinding? {
+        guard let entry = stored()[key] else { return nil }
+        return Self.binding(key, entry)
     }
 
-    /// chain を JSON に戻したもの（PipelineStore.parse へ渡す）。読めなければ nil。
-    func form(for key: String) -> Any? {
-        guard let e = entry(for: key) else { return nil }
-        return try? JSONSerialization.jsonObject(with: e.chain)
-    }
-
-    /// 写しを書く。**空なら消す**（source ごと）。
-    ///
-    /// JSON にできない形（NaN など）は false で何も書かない。data(withJSONObject:) は
-    /// 不正な値だとトラップするので、先に isValidJSONObject で見る。
-    /// 中身が同じなら書かない。
-    @discardableResult
-    func save(_ d: ETOutputCorrectionDevice, source: String?, form: [[String: Any]]) -> Bool {
-        var all = devices()
-        if form.isEmpty {
-            guard all.removeValue(forKey: d.key) != nil else { return true }
-            write(all)
-            return true
+    /// 在るプリセットの紐付けだけ。名前（大文字小文字を問わない）、同じなら鍵の順。
+    func bindings(existing: Set<String>) -> [ETOutputCorrectionBinding] {
+        stored().compactMap { key, entry -> ETOutputCorrectionBinding? in
+            guard let b = Self.binding(key, entry), existing.contains(b.preset) else { return nil }
+            return b
+        }.sorted {
+            let c = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return c == .orderedSame ? $0.key < $1.key : c == .orderedAscending
         }
-        guard JSONSerialization.isValidJSONObject(form),
-              let data = try? JSONSerialization.data(withJSONObject: form, options: [.sortedKeys])
-        else { return false }
-
-        let next = ETOutputCorrectionEntry(name: d.name, kind: d.kind, source: source, chain: data)
-        guard entry(for: d.key) != next else { return true }
-
-        var raw: [String: Any] = ["name": d.name, "kind": d.kind, "chain": data]
-        if let source { raw["source"] = source }
-        all[d.key] = raw
-        write(all)
-        return true
     }
 
-    func remove(key: String) {
-        var all = devices()
-        guard all.removeValue(forKey: key) != nil else { return }
+    /// 紐付ける。nil なら外す。中身が同じなら書かない。無いものを外しても書かない。
+    func bind(_ d: ETOutputCorrectionDevice, preset: String?) {
+        var all = stored()
+        guard let preset, !preset.isEmpty else {
+            guard all.removeValue(forKey: d.key) != nil else { return }
+            write(all)
+            return
+        }
+        let entry = ["preset": preset, "name": d.name, "kind": d.kind]
+        guard all[d.key] != entry else { return }
+        all[d.key] = entry
+        write(all)
+    }
+
+    /// 紐付けてある出力先だけ、名前・種類が違えば直す（見出しに最後に見た名前を出す）。
+    func noteName(_ d: ETOutputCorrectionDevice) {
+        var all = stored()
+        guard var entry = all[d.key], Self.binding(d.key, entry) != nil,
+              entry["name"] != d.name || entry["kind"] != d.kind else { return }
+        entry["name"] = d.name
+        entry["kind"] = d.kind
+        all[d.key] = entry
+        write(all)
+    }
+
+    /// プリセットの名前が変わった・消えた（to が nil）。**合うものがあるときだけ 1 回書く。**
+    /// 元の名前で引いて 1 度で決める（A→B と B→A の入れ替えでも順に当たらない）。
+    func retarget(_ moves: [(from: String, to: String?)]) {
+        guard !moves.isEmpty else { return }
+        var map: [String: String?] = [:]
+        for m in moves { map.updateValue(m.to, forKey: m.from) }
+        var all = stored()
+        var changed = false
+        for (key, entry) in all {
+            guard let preset = entry["preset"], let move = map[preset] else { continue }
+            changed = true
+            if let to = move {
+                var e = entry
+                e["preset"] = to
+                all[key] = e
+            } else {
+                all.removeValue(forKey: key)
+            }
+        }
+        guard changed else { return }
         write(all)
     }
 
     // MARK: 中
 
-    private func devices() -> [String: Any] {
-        storage.dictionary(forKey: Self.devicesKey) ?? [:]
+    /// 紐付けの中身。字だけの辞書でないもの（前の形の写しなど）は読み飛ばす。
+    /// 読み飛ばしたものは次に書くときに落ちる。
+    private func stored() -> [String: [String: String]] {
+        (storage.dictionary(forKey: Self.devicesKey) ?? [:]).compactMapValues { $0 as? [String: String] }
     }
 
-    private func write(_ all: [String: Any]) {
+    private static func binding(_ key: String, _ entry: [String: String]) -> ETOutputCorrectionBinding? {
+        guard let preset = entry["preset"], !preset.isEmpty else { return nil }
+        return ETOutputCorrectionBinding(key: key, name: entry["name"] ?? "",
+                                         kind: entry["kind"] ?? "", preset: preset)
+    }
+
+    private func write(_ all: [String: [String: String]]) {
         storage.set(all, forKey: Self.devicesKey)
     }
 }
 
 // MARK: - 段取り
+
+/// 入れたい・入っている補正。出力先の鍵、プリセットの名前、その中身の印。
+struct ETOutputCorrectionTarget: Equatable {
+    var device: String
+    var preset: String
+    var stamp: Data
+
+    /// 中身の印。鍵の順を固定した JSON。JSON にできない形は空の Data（落ちない）。
+    /// data(withJSONObject:) は不正な値（NaN など）だとトラップするので、先に isValidJSONObject で見る。
+    static func stamp(_ form: Any) -> Data {
+        guard JSONSerialization.isValidJSONObject(form),
+              let data = try? JSONSerialization.data(withJSONObject: form, options: [.sortedKeys])
+        else { return Data() }
+        return data
+    }
+}
 
 /// 段取りを決めるための、いまの状態。
 struct ETOutputCorrectionState: Equatable {
@@ -183,42 +222,37 @@ struct ETOutputCorrectionState: Equatable {
     var isRemote: Bool
     /// エンジンが立っているか。
     var ready: Bool
-    /// 落ち着いた出力先の鍵。
-    var device: String?
-    /// dsp.correction に入っている写しの鍵。
-    var loaded: String?
+    /// 落ち着いた出力先に紐付いた、在るプリセット。無ければ nil。
+    var wanted: ETOutputCorrectionTarget?
+    /// dsp.correction に入っているもの。
+    var loaded: ETOutputCorrectionTarget?
 }
 
 enum ETOutputCorrectionStep: Equatable {
-    /// 外へ出す前に、入っている補正をその鍵で書く。
-    case flush(String)
     /// 補正を外す。
     case unload
-    /// その鍵の写しを入れる（いま入っているものは置き換わる）。
-    case load(String)
+    /// 読み直す（入っているものは置き換わる）。
+    case load(ETOutputCorrectionTarget)
+    /// 名前だけ変わった。段には触らない。
+    case relabel(ETOutputCorrectionTarget)
 }
 
 enum ETOutputCorrectionPolicy {
 
-    /// いまの状態から、やることを順に返す。**切り替え・切・リモートの出入り・準備完了の
-    /// どれが起きても、この1つで決める。**
+    /// いまの状態から、やることを返す。**入切・切り替え・紐付けの変更・プリセットの変更・
+    /// リモートの出入り・準備完了のどれが起きても、この1つで決める。**
     ///
     /// - エンジンが立っていないときは何もしない（段に触らない）。
-    /// - 欲しい鍵は「入っていて、リモートでなく、出力先が在る」ときだけその出力先。
-    /// - 外す前、入れ替える前には、出ていく鍵で flush する（debounce 待ちの編集を拾うため）。
+    /// - 欲しいものは「入っていて、リモートでない」ときだけ wanted。
+    /// - 同じ出力先で中身の印が同じなら、名前の付け替えなので読み直さない（音が途切れない）。
+    /// - 出力先が替われば、同じプリセットでも読み直す。
     static func steps(_ s: ETOutputCorrectionState) -> [ETOutputCorrectionStep] {
         guard s.ready else { return [] }
-        let desired = (s.isOn && !s.isRemote) ? s.device : nil
+        let desired = (s.isOn && !s.isRemote) ? s.wanted : nil
         guard desired != s.loaded else { return [] }
-
-        var out: [ETOutputCorrectionStep] = []
-        if let loaded = s.loaded { out.append(.flush(loaded)) }
-        if let desired {
-            out.append(.load(desired))
-        } else {
-            out.append(.unload)
-        }
-        return out
+        guard let d = desired else { return [.unload] }
+        if let l = s.loaded, l.device == d.device, l.stamp == d.stamp { return [.relabel(d)] }
+        return [.load(d)]
     }
 }
 

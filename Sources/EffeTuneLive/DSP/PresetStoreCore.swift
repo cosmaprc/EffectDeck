@@ -8,6 +8,11 @@
 //
 //  入れ物の形は `presets = { "<名前>": [ ショート形式の段 … ] }`。
 //  **フォルダは名前の付け方だけで表す**（`Rock/Heavy`、ETUserPresetName）。
+//
+//  出力先との紐付けは端末だけに持つ。iCloudへもバックアップへも出さない
+//  （uidはこの端末の機器の番号、プリセットの一覧は端末ごとに違う）。
+//  入れ物は ETOutputCorrectionStoreCore（OutputCorrectionCore.swift）。ここは名前の付け替え・
+//  消すに紐付けを付いていかせるだけ。
 
 import Foundation
 
@@ -37,6 +42,9 @@ final class PresetStoreCore {
 
     private let storage: ETKeyValueStorage
     private let patch: CloudPatch
+
+    /// 出力補正の紐付け（端末だけ）。名前の付け替え・消すに付いていく。**patch は呼ばない。**
+    private var corrections: ETOutputCorrectionStoreCore { ETOutputCorrectionStoreCore(storage: storage) }
 
     /// `storage` は手元の入れ物（アプリでは UserDefaults.standard）。
     /// `patch` は iCloud へ触った項目だけを当てる口（アプリでは CloudMirror.patch）。
@@ -122,6 +130,8 @@ final class PresetStoreCore {
             write(d)
             patch(Self.key, moved.map { CloudChange(path: [$0.from], value: nil) }
                           + moved.map { CloudChange(path: [$0.to], value: $0.form) })
+            // 出力補正の紐付けも動かした先へ付いていく。
+            corrections.retarget(moved.map { (from: $0.from, to: Optional($0.to)) })
         }
         if emptyFolders.contains(old) {
             removeFolder(old)
@@ -181,6 +191,8 @@ final class PresetStoreCore {
             write(d)
             if !plan.delete.isEmpty {
                 patch(Self.key, plan.delete.sorted().map { CloudChange(path: [$0], value: nil) })
+                // PC から消えたものに紐付けた出力補正は外す。
+                corrections.retarget(plan.delete.map { (from: $0, to: nil) })
             }
             // 1 本ずつ当てる（merge と同じ。まとめると、大きさの上限に当たったときに 1 本も写らない）。
             for name in plan.write.keys.sorted() {
@@ -207,6 +219,7 @@ final class PresetStoreCore {
         write(d)
         patch(Self.key, [CloudChange(path: [old], value: nil),
                          CloudChange(path: [target], value: form)])
+        corrections.retarget([(from: old, to: target)])
         pruneRemoteFolders()
         return true
     }
@@ -251,6 +264,7 @@ final class PresetStoreCore {
         d.removeValue(forKey: name)
         write(d)
         patch(Self.key, [CloudChange(path: [name], value: nil)])
+        corrections.retarget([(from: name, to: nil)])
         pruneRemoteFolders()
     }
 

@@ -1,9 +1,10 @@
 //  OutputCorrectionTests.swift
-//  出力補正の、値だけで決まる判断（OutputCorrectionCore.swift・ETPipelineAnalysis.merged）。
+//  出力補正の、値だけで決まる判断（OutputCorrectionCore.swift・ETPipelineAnalysis.merged）と、
+//  プリセットの付け替え・削除に紐付けが付いていくこと（PresetStoreCore）。
 //
 //  壊れると: main の終わりの OFF Section が補正まで止める、補正の Section が main を引き込む、
-//  slot の数え違いで別の段を消す、別の出力先の写しが混ざる、OFF にしても残る、
-//  共有した鎖で補正が最後の組に呑まれる。
+//  slot の数え違いで別の段を消す、別の出力先のプリセットが混ざる、名前を付け替えると紐付けが外れる、
+//  消したプリセットを指したまま残る、OFF にしても効いたまま、共有した鎖で補正が最後の組に呑まれる。
 
 import XCTest
 
@@ -208,22 +209,17 @@ final class OutputCorrectionTests: XCTestCase {
     private let dev = ETOutputCorrectionDevice(key: "bluetooth:AA", name: "AirPods", kind: "bluetooth")
     private let speaker = ETOutputCorrectionDevice(key: "speaker", name: "iPhone Speaker", kind: "speaker")
 
+    /// ショート形式の 1 本。中身は見ないので、見分けが付けば何でもよい。
     private func form(_ vl: Double = 0) -> [[String: Any]] {
-        [["nm": "Volume", "en": true, "vl": vl],
-         ["nm": "Section", "cm": "Room", "en": false, "rr": true,
-          "sub": [1, 2.5, ["x": true]] as [Any], "st": "AQID"]]
-    }
-
-    private func jsonData(_ x: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: x, options: [.sortedKeys])
+        [["nm": "Volume", "en": true, "vl": vl]]
     }
 
     func testDefaultsOffAndNoDevice() {
         let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
         XCTAssertFalse(core.isOn)
         XCTAssertNil(core.currentDevice)
-        XCTAssertNil(core.entry(for: "x"))
-        XCTAssertNil(core.form(for: "x"))
+        XCTAssertNil(core.binding(for: "x"))
+        XCTAssertEqual(core.bindings(existing: ["P"]), [])
     }
 
     func testSetOnRoundTripAndSkipsSameValue() {
@@ -255,178 +251,326 @@ final class OutputCorrectionTests: XCTestCase {
         XCTAssertTrue(s.rejected.isEmpty)
     }
 
-    func testSaveIsPlistSafe() {
+    // MARK: - 紐付け
+
+    func testBindRoundTripIsPlistSafe() throws {
         let s = ETMemoryStorage()
         let core = ETOutputCorrectionStoreCore(storage: s)
-        XCTAssertTrue(core.save(dev, source: "Flat", form: form()))
-        XCTAssertTrue(s.rejected.isEmpty)
-        core.setCurrentDevice(dev)
-        core.setOn(true)
-        XCTAssertTrue(s.rejected.isEmpty)
-    }
-
-    func testSaveRoundTripForm() throws {
-        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
-        let f = form(-3.5)
-        XCTAssertTrue(core.save(dev, source: "Flat", form: f))
-        let back = try XCTUnwrap(core.form(for: dev.key))
-        XCTAssertEqual(try jsonData(back), try jsonData(f))
-        let e = try XCTUnwrap(core.entry(for: dev.key))
-        XCTAssertEqual(e.name, "AirPods")
-        XCTAssertEqual(e.kind, "bluetooth")
-        XCTAssertEqual(e.source, "Flat")
-    }
-
-    func testSaveSkipsIdenticalBytes() {
-        let s = ETMemoryStorage()
-        let core = ETOutputCorrectionStoreCore(storage: s)
-        core.save(dev, source: "Flat", form: form())
-        let w = s.writes
-        XCTAssertTrue(core.save(dev, source: "Flat", form: form()))
-        XCTAssertEqual(s.writes, w)
-        // 名前や source が変われば書く。
-        core.save(ETOutputCorrectionDevice(key: dev.key, name: "AirPods Pro", kind: dev.kind),
-                  source: "Flat", form: form())
-        XCTAssertEqual(s.writes, w + 1)
-        core.save(ETOutputCorrectionDevice(key: dev.key, name: "AirPods Pro", kind: dev.kind),
-                  source: nil, form: form())
-        XCTAssertEqual(s.writes, w + 2)
-    }
-
-    func testSaveEmptyRemovesEntry() {
-        let s = ETMemoryStorage()
-        let core = ETOutputCorrectionStoreCore(storage: s)
-        core.save(dev, source: "Flat", form: form())
-        XCTAssertNotNil(core.entry(for: dev.key))
-        XCTAssertTrue(core.save(dev, source: "Flat", form: []))
-        XCTAssertNil(core.entry(for: dev.key))
-        XCTAssertNil(core.form(for: dev.key))
-        // 無いものを空で保存しても書かない。
-        let w = s.writes
-        XCTAssertTrue(core.save(dev, source: nil, form: []))
-        XCTAssertEqual(s.writes, w)
-    }
-
-    func testSourceOmittedWhenNil() throws {
-        let s = ETMemoryStorage()
-        let core = ETOutputCorrectionStoreCore(storage: s)
-        core.save(dev, source: nil, form: form())
-        XCTAssertNil(core.entry(for: dev.key)?.source)
+        core.bind(dev, preset: "EQ/AirPods")
+        XCTAssertEqual(core.binding(for: dev.key),
+                       ETOutputCorrectionBinding(key: dev.key, name: "AirPods", kind: "bluetooth",
+                                                 preset: "EQ/AirPods"))
         let all = try XCTUnwrap(s.dictionary(forKey: ETOutputCorrectionStoreCore.devicesKey))
-        let raw = try XCTUnwrap(all[dev.key] as? [String: Any])
-        XCTAssertNil(raw["source"])
-        XCTAssertNotNil(raw["chain"] as? Data)
+        let raw = try XCTUnwrap(all[dev.key] as? [String: String])
+        XCTAssertEqual(Set(raw.keys), ["preset", "name", "kind"])
+        XCTAssertTrue(s.rejected.isEmpty)
+        XCTAssertEqual(s.writes, 1)
     }
 
-    func testDevicesAreIndependent() throws {
-        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
-        core.save(dev, source: "A", form: form(1))
-        core.save(speaker, source: nil, form: form(2))
-        XCTAssertEqual(try jsonData(try XCTUnwrap(core.form(for: dev.key))), try jsonData(form(1)))
-        XCTAssertEqual(try jsonData(try XCTUnwrap(core.form(for: speaker.key))), try jsonData(form(2)))
-        XCTAssertEqual(core.entry(for: dev.key)?.source, "A")
-        XCTAssertNil(core.entry(for: speaker.key)?.source)
-        core.save(speaker, source: nil, form: [])
-        XCTAssertNotNil(core.entry(for: dev.key))
-    }
-
-    func testRemove() {
+    func testBindSameValueDoesNotWrite() {
         let s = ETMemoryStorage()
         let core = ETOutputCorrectionStoreCore(storage: s)
-        core.save(dev, source: nil, form: form())
-        core.save(speaker, source: nil, form: form())
-        core.remove(key: dev.key)
-        XCTAssertNil(core.entry(for: dev.key))
-        XCTAssertNotNil(core.entry(for: speaker.key))
+        core.bind(dev, preset: "A")
+        core.bind(dev, preset: "A")
+        XCTAssertEqual(s.writes, 1)
+        // 別のプリセットなら書く。
+        core.bind(dev, preset: "B")
+        XCTAssertEqual(s.writes, 2)
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "B")
+    }
+
+    func testBindNilUnbinds() {
+        let s = ETMemoryStorage()
+        let core = ETOutputCorrectionStoreCore(storage: s)
+        core.bind(dev, preset: "A")
+        core.bind(dev, preset: nil)
+        XCTAssertNil(core.binding(for: dev.key))
+        // 無いものを外しても書かない。
         let w = s.writes
-        core.remove(key: "nothing")
+        core.bind(dev, preset: nil)
+        core.bind(speaker, preset: nil)
         XCTAssertEqual(s.writes, w)
     }
 
-    func testMalformedEntryIgnored() throws {
-        let good = try jsonData(form())
+    func testDevicesAreIndependent() {
+        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
+        core.bind(dev, preset: "A")
+        core.bind(speaker, preset: "B")
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "A")
+        XCTAssertEqual(core.binding(for: speaker.key)?.preset, "B")
+        core.bind(speaker, preset: nil)
+        XCTAssertNil(core.binding(for: speaker.key))
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "A")
+    }
+
+    func testBindingsHideMissingPresetsAndSort() {
+        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
+        core.bind(ETOutputCorrectionDevice(key: "k3", name: "C", kind: "wired"), preset: "P")
+        core.bind(ETOutputCorrectionDevice(key: "k2", name: "b", kind: "wired"), preset: "P")
+        core.bind(ETOutputCorrectionDevice(key: "k1", name: "b", kind: "wired"), preset: "P")
+        core.bind(ETOutputCorrectionDevice(key: "k0", name: "a", kind: "wired"), preset: "Gone")
+        let list = core.bindings(existing: ["P"])
+        XCTAssertEqual(list.map(\.key), ["k1", "k2", "k3"])
+        // 隠すだけで、紐付けは残っている（プリセットが戻れば出る）。
+        XCTAssertEqual(core.binding(for: "k0")?.preset, "Gone")
+    }
+
+    func testNoteNameUpdatesOnlyBound() {
+        let s = ETMemoryStorage()
+        let core = ETOutputCorrectionStoreCore(storage: s)
+        core.noteName(dev)
+        XCTAssertEqual(s.writes, 0)
+        XCTAssertNil(core.binding(for: dev.key))
+
+        core.bind(dev, preset: "A")
+        let w = s.writes
+        let renamed = ETOutputCorrectionDevice(key: dev.key, name: "AirPods Pro", kind: dev.kind)
+        core.noteName(renamed)
+        XCTAssertEqual(s.writes, w + 1)
+        XCTAssertEqual(core.binding(for: dev.key)?.name, "AirPods Pro")
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "A")
+        core.noteName(renamed)
+        XCTAssertEqual(s.writes, w + 1)
+    }
+
+    func testRetargetRenames() {
+        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
+        core.bind(dev, preset: "A")
+        core.retarget([(from: "A", to: "B")])
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "B")
+    }
+
+    func testRetargetNilUnbinds() {
+        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
+        core.bind(dev, preset: "A")
+        core.bind(speaker, preset: "B")
+        core.retarget([(from: "A", to: nil)])
+        XCTAssertNil(core.binding(for: dev.key))
+        XCTAssertEqual(core.binding(for: speaker.key)?.preset, "B")
+    }
+
+    func testRetargetSwapResolvesOnce() {
+        let core = ETOutputCorrectionStoreCore(storage: ETMemoryStorage())
+        core.bind(dev, preset: "A")
+        core.bind(speaker, preset: "B")
+        core.retarget([(from: "A", to: "B"), (from: "B", to: "A")])
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "B")
+        XCTAssertEqual(core.binding(for: speaker.key)?.preset, "A")
+    }
+
+    func testRetargetNoMatchDoesNotWrite() {
+        let s = ETMemoryStorage()
+        let core = ETOutputCorrectionStoreCore(storage: s)
+        core.bind(dev, preset: "A")
+        let w = s.writes
+        core.retarget([(from: "X", to: "Y"), (from: "Z", to: nil)])
+        core.retarget([])
+        XCTAssertEqual(s.writes, w)
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "A")
+    }
+
+    func testMalformedBindingsIgnored() {
         let s = ETMemoryStorage([
             ETOutputCorrectionStoreCore.devicesKey: [
-                "notDict": "oops",
-                "noChain": ["name": "X", "kind": "wired"],
-                "badChain": ["name": "X", "kind": "wired", "chain": "text"],
-                "good": ["name": "G", "kind": "wired", "chain": good],
+                "x": "oops",
+                "y": ["name": "Y"],
+                // 前の形（写しを持っていた）。
+                "z": ["name": "Z", "chain": Data()] as [String: Any],
+                "g": ["preset": "G", "name": "Good", "kind": "wired"],
             ] as [String: Any],
         ])
         let core = ETOutputCorrectionStoreCore(storage: s)
-        XCTAssertNil(core.entry(for: "notDict"))
-        XCTAssertNil(core.entry(for: "noChain"))
-        XCTAssertNil(core.entry(for: "badChain"))
-        XCTAssertEqual(core.entry(for: "good")?.name, "G")
-        XCTAssertNotNil(core.form(for: "good"))
-        // 壊れたものが居ても、別の出力先は保存できて、読めたものは残る。
-        XCTAssertTrue(core.save(dev, source: nil, form: form()))
-        XCTAssertNotNil(core.entry(for: "good"))
+        XCTAssertNil(core.binding(for: "x"))
+        XCTAssertNil(core.binding(for: "y"))
+        XCTAssertNil(core.binding(for: "z"))
+        XCTAssertEqual(core.binding(for: "g")?.preset, "G")
+        // 壊れたものが居ても、別の出力先は紐付けられて、読めたものは残る。
+        core.bind(dev, preset: "A")
+        XCTAssertEqual(core.binding(for: dev.key)?.preset, "A")
+        XCTAssertEqual(core.binding(for: "g")?.name, "Good")
+        XCTAssertTrue(s.rejected.isEmpty)
     }
 
-    func testUnencodableFormWritesNothing() {
+    // MARK: - プリセットの出し入れに付いていく
+
+    /// 同じ入れ物の PresetStoreCore と紐付け。patch に渡された鍵を `patchedKeys` に残す。
+    private func stores(_ initial: [String: Any] = [:])
+        -> (s: ETMemoryStorage, presets: PresetStoreCore, oc: ETOutputCorrectionStoreCore) {
         let s = ETMemoryStorage()
-        let core = ETOutputCorrectionStoreCore(storage: s)
-        let bad: [[String: Any]] = [["nm": "Volume", "vl": Double.nan]]
-        XCTAssertFalse(core.save(dev, source: nil, form: bad))
-        XCTAssertEqual(s.writes, 0)
-        // すでに在る写しを壊さない。
-        core.save(dev, source: nil, form: form())
-        let w = s.writes
-        XCTAssertFalse(core.save(dev, source: nil, form: bad))
-        XCTAssertEqual(s.writes, w)
-        XCTAssertNotNil(core.entry(for: dev.key))
+        if !initial.isEmpty { s.set(initial, forKey: PresetStoreCore.key) }
+        let presets = PresetStoreCore(storage: s, patch: { [unowned self] key, _ in
+            self.patchedKeys.append(key)
+        })
+        return (s, presets, ETOutputCorrectionStoreCore(storage: s))
+    }
+
+    private var patchedKeys: [String] = []
+
+    override func setUp() {
+        super.setUp()
+        patchedKeys = []
+    }
+
+    func testPresetRenameFollows() {
+        let x = stores(["A": form(1)])
+        x.oc.bind(dev, preset: "A")
+        XCTAssertTrue(x.presets.rename("A", to: "B"))
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "B")
+    }
+
+    func testPresetRenameFolderFollows() {
+        let x = stores(["F/A": form(1), "Solo": form(2)])
+        x.oc.bind(dev, preset: "F/A")
+        x.oc.bind(speaker, preset: "Solo")
+        XCTAssertTrue(x.presets.renameFolder("F", to: "G"))
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "G/A")
+        XCTAssertEqual(x.oc.binding(for: speaker.key)?.preset, "Solo")
+    }
+
+    func testFailedRenameKeepsBinding() {
+        let x = stores(["A": form(1), "B": form(2)])
+        x.oc.bind(dev, preset: "A")
+        XCTAssertFalse(x.presets.rename("A", to: "B"))
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "A")
+    }
+
+    func testFailedRenameFolderKeepsBinding() {
+        let x = stores(["F/A": form(1), "G/B": form(2)])
+        x.oc.bind(dev, preset: "F/A")
+        XCTAssertFalse(x.presets.renameFolder("F", to: "G"))
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "F/A")
+    }
+
+    func testPresetRemoveUnbinds() {
+        let x = stores(["A": form(1), "B": form(2)])
+        x.oc.bind(dev, preset: "A")
+        x.oc.bind(speaker, preset: "B")
+        x.presets.remove("A")
+        XCTAssertNil(x.oc.binding(for: dev.key))
+        XCTAssertEqual(x.oc.binding(for: speaker.key)?.preset, "B")
+    }
+
+    func testMirrorFolderDeleteUnbinds() {
+        let x = stores()
+        let f = form(1)
+        // 先に 1 回写して "PC" を PC のものにする（前から在る人の "PC" なら "PC 2" へずれる）。
+        XCTAssertEqual(x.presets.mirrorFolder("PC", incoming: ["Keep": f, "Gone": f]).folder, "PC")
+        x.oc.bind(dev, preset: "PC/Keep")
+        x.oc.bind(speaker, preset: "PC/Gone")
+        x.presets.mirrorFolder("PC", incoming: ["Keep": f])
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "PC/Keep")
+        XCTAssertNil(x.oc.binding(for: speaker.key))
+    }
+
+    func testSaveAndMergeKeepBinding() {
+        let x = stores(["A": form(1)])
+        x.oc.bind(dev, preset: "A")
+        XCTAssertEqual(x.presets.save("A", form: form(2)), "A")
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "A")
+        XCTAssertEqual(x.presets.merge(["A": form(3)]), 1)
+        XCTAssertEqual(x.oc.binding(for: dev.key)?.preset, "A")
+    }
+
+    func testBindingsNeverPatchCloud() {
+        let x = stores(["A": form(1), "F/B": form(2)])
+        x.oc.bind(dev, preset: "A")
+        x.oc.bind(speaker, preset: "F/B")
+        x.presets.rename("A", to: "C")
+        x.presets.renameFolder("F", to: "G")
+        x.presets.remove("C")
+        x.oc.bind(speaker, preset: nil)
+        XCTAssertFalse(patchedKeys.isEmpty)
+        XCTAssertFalse(patchedKeys.contains(ETOutputCorrectionStoreCore.devicesKey))
+        XCTAssertEqual(Set(patchedKeys), [PresetStoreCore.key])
+        XCTAssertTrue(x.s.rejected.isEmpty)
+    }
+
+    func testExportedExcludesBindings() {
+        let x = stores(["A": form(1), "F/B": form(2)])
+        x.oc.bind(dev, preset: "A")
+        x.oc.setOn(true)
+        x.oc.setCurrentDevice(dev)
+        XCTAssertEqual(Set(x.presets.exported().keys), ["A", "F/B"])
     }
 
     // MARK: - 段取り
 
-    private func state(on: Bool = true, remote: Bool = false, ready: Bool = true,
-                       device: String? = "A", loaded: String? = nil) -> ETOutputCorrectionState {
-        ETOutputCorrectionState(isOn: on, isRemote: remote, ready: ready, device: device, loaded: loaded)
+    private func t(_ dev: String = "A", _ preset: String = "P", _ s: UInt8 = 1) -> ETOutputCorrectionTarget {
+        ETOutputCorrectionTarget(device: dev, preset: preset, stamp: Data([s]))
+    }
+
+    private func steps(on: Bool = true, remote: Bool = false, ready: Bool = true,
+                       wanted: ETOutputCorrectionTarget?, loaded: ETOutputCorrectionTarget?)
+        -> [ETOutputCorrectionStep] {
+        ETOutputCorrectionPolicy.steps(ETOutputCorrectionState(
+            isOn: on, isRemote: remote, ready: ready, wanted: wanted, loaded: loaded))
     }
 
     func testOffLoadsNothing() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(on: false)), [])
+        XCTAssertEqual(steps(on: false, wanted: t(), loaded: nil), [])
     }
 
-    func testOnLoadsDevice() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state()), [.load("A")])
+    func testOnLoadsWanted() {
+        XCTAssertEqual(steps(wanted: t(), loaded: nil), [.load(t())])
     }
 
-    func testSwitchFlushesOutgoingFirst() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(device: "B", loaded: "A")),
-                       [.flush("A"), .load("B")])
+    func testUnboundLoadsNothing() {
+        XCTAssertEqual(steps(wanted: nil, loaded: nil), [])
     }
 
-    func testTurningOffFlushesAndUnloads() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(on: false, loaded: "A")),
-                       [.flush("A"), .unload])
+    /// 出力先が替わったら、同じプリセットでも読み直す。
+    func testDeviceSwitchReloadsSamePreset() {
+        XCTAssertEqual(steps(wanted: t("B"), loaded: t("A")), [.load(t("B"))])
     }
 
-    func testEnteringRemoteFlushesAndUnloads() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(remote: true, loaded: "A")),
-                       [.flush("A"), .unload])
+    func testSwitchToUnboundUnloads() {
+        XCTAssertEqual(steps(wanted: nil, loaded: t()), [.unload])
+    }
+
+    func testOverwriteReloads() {
+        XCTAssertEqual(steps(wanted: t("A", "P", 2), loaded: t("A", "P", 1)), [.load(t("A", "P", 2))])
+    }
+
+    /// 名前の付け替え（フォルダへ動かすのも）は中身が同じなので、段に触らない。
+    func testRenameRelabels() {
+        XCTAssertEqual(steps(wanted: t("A", "Q", 1), loaded: t("A", "P", 1)), [.relabel(t("A", "Q", 1))])
+    }
+
+    func testRebindReloads() {
+        XCTAssertEqual(steps(wanted: t("A", "Q", 2), loaded: t("A", "P", 1)), [.load(t("A", "Q", 2))])
+    }
+
+    func testTurningOffUnloads() {
+        XCTAssertEqual(steps(on: false, wanted: t(), loaded: t()), [.unload])
+    }
+
+    func testEnteringRemoteUnloads() {
+        XCTAssertEqual(steps(remote: true, wanted: t(), loaded: t()), [.unload])
     }
 
     func testLeavingRemoteReloads() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(remote: false, loaded: nil)),
-                       [.load("A")])
+        XCTAssertEqual(steps(remote: false, wanted: t(), loaded: nil), [.load(t())])
     }
 
     func testNotReadyDoesNothing() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(ready: false, device: "B", loaded: "A")), [])
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(on: false, ready: false, loaded: "A")), [])
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(ready: false)), [])
+        XCTAssertEqual(steps(ready: false, wanted: t("B"), loaded: t("A")), [])
+        XCTAssertEqual(steps(on: false, ready: false, wanted: t(), loaded: t()), [])
+        XCTAssertEqual(steps(ready: false, wanted: t(), loaded: nil), [])
     }
 
-    func testSameDeviceNoSteps() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(loaded: "A")), [])
+    func testSameTargetNoSteps() {
+        XCTAssertEqual(steps(wanted: t(), loaded: t()), [])
     }
 
-    func testOnWithoutDeviceNoSteps() {
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(device: nil)), [])
-        // 入っているのに出力先が無くなった（ありえないが）なら外す。
-        XCTAssertEqual(ETOutputCorrectionPolicy.steps(state(device: nil, loaded: "A")),
-                       [.flush("A"), .unload])
+    func testStampIgnoresKeyOrder() {
+        let a: [[String: Any]] = [["a": 1, "b": 2]]
+        let b: [[String: Any]] = [["b": 2, "a": 1]]
+        let c: [[String: Any]] = [["a": 1, "b": 3]]
+        XCTAssertEqual(ETOutputCorrectionTarget.stamp(a), ETOutputCorrectionTarget.stamp(b))
+        XCTAssertNotEqual(ETOutputCorrectionTarget.stamp(a), ETOutputCorrectionTarget.stamp(c))
+        XCTAssertFalse(ETOutputCorrectionTarget.stamp(a).isEmpty)
+        // JSON にできない値でも落ちない。
+        let bad: [[String: Any]] = [["v": Double.nan]]
+        XCTAssertEqual(ETOutputCorrectionTarget.stamp(bad), Data())
     }
 }
