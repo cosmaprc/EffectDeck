@@ -104,4 +104,23 @@ extension PipelineStore {
     static func loadExpanded() -> [Int] {
         UserDefaults.standard.array(forKey: expandedKey) as? [Int] ?? []
     }
+
+    // MARK: - 鎖の出どころ（出力先）
+
+    /// 鎖をどの出力先のプリセットから入れたか。端末だけ・iCloudへ写さない。
+    /// 出力先の鍵は名前が変わらないので、プリセットの名前の変更を追わなくてよい。
+    static let deviceOriginKey = "pipeline.deviceOrigin"
+
+    /// nil なら消す。
+    static func saveDeviceOrigin(_ key: String?) {
+        if let key {
+            UserDefaults.standard.set(key, forKey: deviceOriginKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: deviceOriginKey)
+        }
+    }
+
+    static func loadDeviceOrigin() -> String? {
+        UserDefaults.standard.string(forKey: deviceOriginKey)
+    }
 }
