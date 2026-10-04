@@ -122,6 +122,29 @@ class AscReleaseTest(unittest.TestCase):
         post = [c for c in fake.calls if c[0] == "POST"]
         self.assertEqual(len(post), 1)
         self.assertEqual(post[0][2], {"data": [{"type": "builds", "id": "b-1"}]})
+        self.assertNotIn("filter[name]", fake.calls[0][1])
+
+    def test_add_internal_finds_group_on_next_page(self):
+        path = "/v1/apps/%s/betaGroups" % self.asc.APP
+        first = {"data": [{"id": "other", "attributes": {"name": "Public", "isInternalGroup": False}}],
+                 "links": {"next": self.asc.BASE + path + "?cursor=2"}}
+        second = {"data": [{"id": "g-int", "attributes": {"name": "Internal", "isInternalGroup": True}}]}
+        fake = Fake({("GET", path): [first, second],
+                     ("POST", "/v1/betaGroups/g-int/relationships/builds"): [{}]})
+        rc, _, _ = run(self.asc, fake, "add-internal", "b-1")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len([c for c in fake.calls if c[0] == "GET"]), 2)
+
+    def test_add_internal_refuses_duplicate_across_pages(self):
+        path = "/v1/apps/%s/betaGroups" % self.asc.APP
+        group = {"id": "g-int", "attributes": {"name": "Internal", "isInternalGroup": True}}
+        fake = Fake({("GET", path): [
+            {"data": [group], "links": {"next": self.asc.BASE + path + "?cursor=2"}},
+            {"data": [dict(group, id="duplicate")]},
+        ]})
+        rc, _, _ = run(self.asc, fake, "add-internal", "b-1")
+        self.assertEqual(rc, 1)
+        self.assertFalse([c for c in fake.calls if c[0] == "POST"])
 
     def test_add_internal_refuses_external_or_ambiguous_group(self):
         app = self.asc.APP

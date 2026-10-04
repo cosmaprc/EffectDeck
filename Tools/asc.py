@@ -173,8 +173,9 @@ def closed_train(version: str):
 
 def internal_group_id() -> str:
     """名前が Internal で、内部グループであるものの ID。ちょうど 1 つでなければ止まる。"""
-    d = call("GET", f"/v1/apps/{APP}/betaGroups?filter[name]=Internal&limit=50")
-    groups = [g for g in d.get("data", [])
+    # This relationship endpoint does not accept filter[name]. Fetch all pages
+    # and match locally, retaining the unique-name and internal-only checks.
+    groups = [g for g in pages(f"/v1/apps/{APP}/betaGroups?limit=200")
               if (g.get("attributes") or {}).get("name") == "Internal"]
     if len(groups) != 1:
         print(f"!! Internal という名前のグループが {len(groups)} 個ある（1 個のはず）", file=sys.stderr)
