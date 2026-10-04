@@ -73,6 +73,8 @@ struct MeterView: View {
     var showsReadout: Bool
     /// 読み値の行の右端に出す札。
     var badge: String?
+    /// 段の名前の幅。"OUT" は 3 字あるので広げる（既定は L/R の 16）。
+    var labelWidth: CGFloat
 
     /// 保持しているピーク。段ごと。
     @State private var held: [Int: Hold] = [:]
@@ -92,7 +94,8 @@ struct MeterView: View {
          rowHeight: CGFloat = 16,
          caption: String? = nil,
          showsReadout: Bool = true,
-         badge: String? = nil) {
+         badge: String? = nil,
+         labelWidth: CGFloat = 16) {
         self.channels = channels
         self.range = range
         self.ticks = ticks
@@ -103,6 +106,7 @@ struct MeterView: View {
         self.caption = caption
         self.showsReadout = showsReadout
         self.badge = badge
+        self.labelWidth = labelWidth
     }
 
     private var height: CGFloat {
@@ -115,7 +119,7 @@ struct MeterView: View {
             x: ETAxis.decibels(range, step: 0).with(ticks: tickMarks),
             y: .blank(),
             height: height,
-            insets: ETGraphInsets(leading: 16, trailing: 8, top: 4, bottom: 14),
+            insets: ETGraphInsets(leading: labelWidth, trailing: 8, top: 4, bottom: 14),
             readout: showsReadout ? readout : [],
             caption: caption,
             badge: badge,

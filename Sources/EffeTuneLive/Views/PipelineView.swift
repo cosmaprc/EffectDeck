@@ -211,6 +211,8 @@ struct PipelineView: View {
     private static let chainSpace = "chain"
     /// 出力補正の行の矩形を、カードの行と同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこの行のぶんも引くように。
     private static let correctionRowID = UUID()
+    /// 鎖の頭の IN メーターの矩形を、同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこのカードのぶんも引くように。
+    private static let inputRowID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
     private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
@@ -850,6 +852,17 @@ struct PipelineView: View {
                     .padding(.bottom, 8)
             }
 
+            // 入口のメーター。鎖の外に固定で 1 本。PC の鎖を編集している間は出さない（ここに来る音の話ではないので）。
+            if !isRemote {
+                Card { ETSignalMeter(point: .input, active: running).padding(14) }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: .named(Self.chainSpace))
+                    } action: { measured(Self.inputRowID, $0) }
+            }
+
             // 鎖の真上に出す。ここより下のカードが効いていない、という話なので。
             // 鎖が空のときは出さない。EmptyChainRow が同じことを既に言っている。
             if dsp.bypass && !dsp.chain.isEmpty {
@@ -968,7 +981,7 @@ struct PipelineView: View {
             // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは Presets で選ぶ（押すと開く）。
             // PC の鎖を編集している間は出さない（補正も外してある）。
             if !isRemote {
-                OutputCorrectionRow(oc: OutputCorrection.shared, open: { presentSheet(.presets) })
+                OutputCorrectionRow(oc: OutputCorrection.shared, running: running, open: { presentSheet(.presets) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 5)
                     .onGeometryChange(for: CGRect.self) {
@@ -2209,39 +2222,47 @@ private struct EmptyChainRow: View {
     }
 }
 
-/// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット。
+/// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット、端末へ渡す音のメーター（OUT）。
 /// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと Presets を開く。
+/// 観測するのは OutputCorrection だけ。30Hz で描き直すのはメーター（ETSignalMeter）だけ。
 private struct OutputCorrectionRow: View {
     @ObservedObject var oc: OutputCorrection
+    /// 鳴っているか。PipelineView が io.running から写した値。
+    let running: Bool
     let open: () -> Void
 
     var body: some View {
         Card {
-            HStack(spacing: 12) {
-                Button(action: open) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Output Correction")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        if let d = oc.device {
-                            Label("\(d.name) · \(oc.preset(for: d.key) ?? "None")",
-                                  systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        } else {
-                            Text("No output device")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Button(action: open) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Output Correction")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            if let d = oc.device {
+                                Label("\(d.name) · \(oc.preset(for: d.key) ?? "None")",
+                                      systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            } else {
+                                Text("No output device")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
 
-                Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
-                    .labelsHidden()
+                    Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
+                        .labelsHidden()
+                }
+
+                // 端末へ渡す音（鎖と補正の後）。補正の入切にかかわらず出す。
+                ETSignalMeter(point: .output, active: running)
             }
             .padding(14)
         }
