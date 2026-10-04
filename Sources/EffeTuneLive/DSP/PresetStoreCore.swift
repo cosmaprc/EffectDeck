@@ -8,6 +8,9 @@
 //
 //  入れ物の形は `presets = { "<名前>": [ ショート形式の段 … ] }`。
 //  **フォルダは名前の付け方だけで表す**（`Rock/Heavy`、ETUserPresetName）。
+//
+//  出力先との紐付けは端末だけに持つ。iCloudへもバックアップへも出さない
+//  （uidはこの端末の機器の番号、プリセットの一覧は端末ごとに違う）。
 
 import Foundation
 
@@ -25,6 +28,23 @@ final class PresetStoreCore {
     /// **iCloud へは写さない。**中身が入れば名前の側に現れるし、
     /// 空の入れ物を端末間で合わせる意味が薄い。
     static let emptyFoldersKey = "presetEmptyFolders"
+
+    /// 出力先（ヘッドホンなど）ごとのプリセットの紐付け。
+    /// `{ "<出力先の鍵>": { "preset": "<保存してある名前>", "name": "<最後に見た名前>", "kind": "<種類>" } }`。
+    /// 字だけなので plist に載る。紐付けてある出力先だけを持つ。
+    /// **iCloudへもバックアップへも写さない。**patch は一度も呼ばない。
+    static let devicesKey = "presetDevices"
+
+    /// 最後に落ち着いた出力先の鍵。切り替えの判断のたびに書く（紐付けの有る無しによらず）。
+    static let currentDeviceKey = "presetDeviceCurrent"
+
+    /// 紐付け 1 件。`name` は最後に見た名前（画面の見出し）、`kind` は ETOutputDevice.Kind の字。
+    struct DeviceBinding: Equatable {
+        let key: String
+        let name: String
+        let kind: String
+        let preset: String
+    }
 
     private let storage: ETKeyValueStorage
     private let patch: CloudPatch
@@ -49,6 +69,68 @@ final class PresetStoreCore {
 
     /// 保存してあるショート形式。無ければ nil。
     func form(named name: String) -> Any? { dict()[name] }
+
+    // MARK: - 出力先との紐付け
+
+    /// 紐付けの一覧。**プリセットが無くなっているものは出さない**（読むときに隠す）。
+    /// 名前（大文字小文字を問わない）、同じなら鍵の順。
+    var deviceBindings: [DeviceBinding] {
+        let existing = Set(dict().keys)
+        return storedDevices().compactMap { key, entry -> DeviceBinding? in
+            guard let preset = entry["preset"], existing.contains(preset) else { return nil }
+            return DeviceBinding(key: key, name: entry["name"] ?? "", kind: entry["kind"] ?? "", preset: preset)
+        }.sorted {
+            let c = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return c == .orderedSame ? $0.key < $1.key : c == .orderedAscending
+        }
+    }
+
+    /// その出力先に紐付けたプリセットの名前。紐付けが無いか、プリセットが無ければ nil。
+    func preset(forDevice key: String) -> String? {
+        guard let preset = storedDevices()[key]?["preset"], dict()[preset] != nil else { return nil }
+        return preset
+    }
+
+    /// 出力先にプリセットを紐付ける。`preset` が nil なら外す。
+    /// **在るプリセットだけ紐付けられる**（無ければ false で何も書かない）。
+    /// 中身が同じなら書かない。**patch は呼ばない**（iCloudへは出さない）。
+    @discardableResult
+    func bindDevice(_ key: String, name: String, kind: String, preset: String?) -> Bool {
+        var devices = storedDevices()
+        guard let preset else {
+            guard devices.removeValue(forKey: key) != nil else { return true }
+            storage.set(devices, forKey: Self.devicesKey)
+            return true
+        }
+        guard dict()[preset] != nil else { return false }
+        let entry = ["preset": preset, "name": name, "kind": kind]
+        guard devices[key] != entry else { return true }
+        devices[key] = entry
+        storage.set(devices, forKey: Self.devicesKey)
+        return true
+    }
+
+    /// 見出しの名前を最後に見たものへ直す。**紐付けてある出力先だけ**、名前が違うときだけ書く。
+    func noteDeviceName(_ key: String, name: String) {
+        var devices = storedDevices()
+        guard var entry = devices[key], entry["name"] != name else { return }
+        entry["name"] = name
+        devices[key] = entry
+        storage.set(devices, forKey: Self.devicesKey)
+    }
+
+    /// 最後に落ち着いた出力先の鍵。
+    var currentDevice: String? { storage.object(forKey: Self.currentDeviceKey) as? String }
+
+    /// 落ち着いた出力先を覚える。変わらなければ書かない。nil なら消す。
+    func setCurrentDevice(_ key: String?) {
+        guard key != currentDevice else { return }
+        if let key {
+            storage.set(key, forKey: Self.currentDeviceKey)
+        } else {
+            storage.removeObject(forKey: Self.currentDeviceKey)
+        }
+    }
 
     // MARK: - フォルダ
 
@@ -112,6 +194,8 @@ final class PresetStoreCore {
             write(d)
             patch(Self.key, moved.map { CloudChange(path: [$0.from], value: nil) }
                           + moved.map { CloudChange(path: [$0.to], value: $0.form) })
+            // 紐付けも動かした先へ付いていく。
+            retargetDevices(moved.map { (from: $0.from, to: Optional($0.to)) })
         }
         if emptyFolders.contains(old) {
             removeFolder(old)
@@ -135,6 +219,7 @@ final class PresetStoreCore {
         write(d)
         patch(Self.key, [CloudChange(path: [old], value: nil),
                          CloudChange(path: [target], value: form)])
+        retargetDevices([(from: old, to: target)])
         return true
     }
 
@@ -178,6 +263,7 @@ final class PresetStoreCore {
         d.removeValue(forKey: name)
         write(d)
         patch(Self.key, [CloudChange(path: [name], value: nil)])
+        retargetDevices([(from: name, to: nil)])
     }
 
     // MARK: - ファイルとのやり取り（ETBackup）
@@ -212,6 +298,34 @@ final class PresetStoreCore {
 
     private func dict() -> [String: Any] {
         storage.dictionary(forKey: Self.key) ?? [:]
+    }
+
+    /// 紐付けの中身。字だけの辞書でないものは読み飛ばす。
+    private func storedDevices() -> [String: [String: String]] {
+        (storage.dictionary(forKey: Self.devicesKey) ?? [:]).compactMapValues { $0 as? [String: String] }
+    }
+
+    /// プリセットの名前が変わった・消えたとき、紐付けをそれに合わせる。
+    /// `to` が nil なら紐付けを消す。**変わったものがあるときだけ 1 回書く。**
+    /// 入れ替え（A→B と B→A）でも順に当たらないよう、元の名前を引いて 1 度で決める。
+    private func retargetDevices(_ moves: [(from: String, to: String?)]) {
+        var map: [String: String?] = [:]
+        for m in moves { map.updateValue(m.to, forKey: m.from) }
+        var devices = storedDevices()
+        var changed = false
+        for (key, entry) in devices {
+            guard let preset = entry["preset"], let move = map[preset] else { continue }
+            changed = true
+            if let to = move {
+                var e = entry
+                e["preset"] = to
+                devices[key] = e
+            } else {
+                devices.removeValue(forKey: key)
+            }
+        }
+        guard changed else { return }
+        storage.set(devices, forKey: Self.devicesKey)
     }
 
     private func storedEmptyFolders() -> [String] {
