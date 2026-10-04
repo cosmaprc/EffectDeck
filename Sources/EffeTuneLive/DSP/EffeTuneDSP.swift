@@ -71,6 +71,31 @@ final class EffeTuneDSP: ObservableObject {
     /// Engine::prepare は destroyAllInstances を通るので、またいだ後の番号は使い回されうる。
     private(set) var prepareGeneration = 0
 
+    // MARK: - 出力先ごとのプリセット
+
+    /// 出力先が変わってプリセットを読んだときの知らせ（鎖の上の帯）。
+    /// `ids` は読んだ直後の鎖の段。並びが変わったら（足す・消す・動かす・読み込む）消す。
+    struct DeviceNotice: Equatable {
+        let preset: String
+        let device: String
+        let symbol: String
+        let ids: [UUID]
+    }
+
+    @Published private(set) var deviceNotice: DeviceNotice?
+
+    /// 切り替える前の鎖と出どころ。Undo で戻す。**メモリにだけ持つ**（終了すると消える）。
+    private var deviceUndo: (items: [PipelineStore.Loaded], origin: String?)?
+
+    /// いまの鎖をどの出力先のプリセットから入れたか（出力先の鍵）。
+    /// 同じ出力先へ戻ったときに読み直さず、手で直したぶんを残すのに使う。
+    /// 鎖を丸ごと入れ替える他の経路（手で読む・貼る・復元・Reset・iCloud）では消える。
+    private(set) var deviceOrigin: String? = PipelineStore.loadDeviceOrigin() {
+        didSet { if deviceOrigin != oldValue { PipelineStore.saveDeviceOrigin(deviceOrigin) } }
+    }
+
+    enum DeviceLoad: String { case loaded, unchanged, unreadable, notReady }
+
     /// 利用できるエフェクト。カーネルとして登録されているものだけ。
     private(set) var available: [ETEffect] = []
 
@@ -428,12 +453,17 @@ final class EffeTuneDSP: ObservableObject {
         // 同じファイルを入れ直しても段は戻るが値は戻らない。
         // 生きていれば host は読み込んだ state から始めて上書きしていくので、
         // 普通の段の結果は変わらない。
+        refreshExternalStates()
+        PipelineStore.saveLast(chain)
+        persistExpanded()
+    }
+
+    /// 外の host（AU・JSFX）の生きた state を鎖へ写す。読めなければ前の値を残す。
+    private func refreshExternalStates() {
         for index in chain.indices where chain[index].isExternal {
             chain[index].externalState = externalState(for: chain[index])
                 ?? chain[index].externalState
         }
-        PipelineStore.saveLast(chain)
-        persistExpanded()
     }
 
     /// 走っている遅延保存。まとめるために持っている。
@@ -712,8 +742,11 @@ final class EffeTuneDSP: ObservableObject {
     /// 鎖をまるごと入れ替える。共有リンクの取り込みで使う。
     ///
     /// プリセットはこちらを通さない。上流は足す側なので addPreset(named:items:at:) を使う。
-    func replaceChain(with items: [PipelineStore.Loaded]) {
+    ///
+    /// `origin` は出力先のプリセットから入れたときだけ渡す。他の経路は nil（出どころを消す）。
+    func replaceChain(with items: [PipelineStore.Loaded], origin: String? = nil) {
         guard ready else { return }
+        deviceOrigin = origin
         let doomed = chain.map(\.instance).filter { $0 != 0 }
         let external = chain.filter(\.isExternal).map(\.externalInstanceID)
         chain.removeAll()
@@ -735,6 +768,47 @@ final class EffeTuneDSP: ObservableObject {
         retire(doomed)
     }
 
+    /// 出力先に紐付けたプリセットを読む。手で読むのと同じく鎖を丸ごと入れ替え、帯と Undo を出す。
+    ///
+    /// いまの鎖と中身が同じなら入れ替えない（AU・JSFX・IR を作り直さない）。帯も出さず、
+    /// 出どころだけこの出力先にする。
+    func loadDevicePreset(_ name: String, items: [PipelineStore.Loaded], device: ETOutputDevice) -> DeviceLoad {
+        guard ready else { return .notReady }
+        guard !items.isEmpty else { return .unreadable }
+        // Undo で AU・JSFX の中身まで戻すため、生きた state を写してから控える。
+        refreshExternalStates()
+        let before = chain.map { PipelineStore.Loaded($0) }
+        if ETDeviceSwitch.sameForm(PipelineStore.shortForm(before), PipelineStore.shortForm(items)) {
+            deviceOrigin = device.key
+            return .unchanged
+        }
+        let prior = deviceOrigin
+        replaceChain(with: items, origin: device.key)
+        deviceUndo = (items: before, origin: prior)
+        deviceNotice = DeviceNotice(preset: name, device: device.name,
+                                    symbol: device.kind.symbol, ids: chain.map(\.id))
+        return .loaded
+    }
+
+    /// 切り替える前の鎖と出どころへ戻す。
+    func undoDeviceSwitch() {
+        guard let undo = deviceUndo else { return }
+        deviceUndo = nil
+        deviceNotice = nil
+        replaceChain(with: undo.items, origin: undo.origin)
+    }
+
+    /// 帯を閉じる。Undo も捨てる。
+    func dismissDeviceNotice() {
+        deviceNotice = nil
+        deviceUndo = nil
+    }
+
+    /// その出力先から入れたという印を外す（紐付けを別のプリセットへ変えたとき）。
+    func forgetDeviceOrigin(_ key: String) {
+        if deviceOrigin == key { deviceOrigin = nil }
+    }
+
     /// いま並んでいるのが既定そのもの（Level Meter 1 本）か。
     /// 画面で「戻す」を押せなくするのに使う。型名を画面側に持たせないため、
     /// 何が既定かの判断はここに置く。
@@ -753,6 +827,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 壊すと、音のスレッドがまだ読んでいる古い descriptor の指す先が消える。
     func resetToDefault() {
         guard ready else { return }
+        deviceOrigin = nil
         let doomed = chain.map(\.instance).filter { $0 != 0 }
         let external = chain.filter(\.isExternal).map(\.externalInstanceID)
         chain.removeAll()
@@ -1054,6 +1129,7 @@ final class EffeTuneDSP: ObservableObject {
     }
 
     func clear() {
+        deviceOrigin = nil
         let doomed = chain.map(\.instance).filter { $0 != 0 }
         let external = chain.filter(\.isExternal).map(\.externalInstanceID)
         chain.removeAll()
@@ -1322,6 +1398,8 @@ final class EffeTuneDSP: ObservableObject {
 
     /// 有効なものだけを並べて音のスレッドへ渡す。
     private func publish() {
+        // 並びが変わったら（足す・消す・動かす・読み込む）帯と Undo を捨てる。値の調整では残る。
+        if let n = deviceNotice, n.ids != chain.map(\.id) { deviceNotice = nil; deviceUndo = nil }
         applySectionGates()
         let retiredProbes = syncProbes()
         // Section は instance を持たないのでここで落ちる。上流も同じく
