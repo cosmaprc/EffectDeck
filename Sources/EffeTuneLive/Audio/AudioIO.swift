@@ -1007,10 +1007,16 @@ final class AudioIO: ObservableObject {
     }
 
     /// 出力先が落ち着いた。覚えて、紐付けがあれば読む。
+    ///
+    /// 前の出力先で出した帯と Undo は、読むかどうかに関わらずここで消す。
+    /// 残すと、別の出力先で鳴っているのに前の出力先の名前が出たままになり、Undo を押すと
+    /// 鎖を丸ごと戻したうえ、この切り替えで記した出どころ（鎖が同じだったとき）も前の値で上書きする。
+    /// 読んだときは loadDevicePreset が新しい帯を出す。
     private func switchDevicePreset(_ d: ETOutputDevice) {
         guard let key = d.key else { return }
         PresetStore.shared.setCurrentDevice(key)
         PresetStore.shared.noteDeviceName(key, name: d.name)
+        EffeTuneDSP.shared.dismissDeviceNotice()
         applyDevicePreset(d, cause: "switch")
     }
 
