@@ -331,8 +331,6 @@ private struct SpectrogramGraph: View {
                 push(column)
             }
             .onChange(of: column?.sequence) { _, _ in push(column) }
-            // 手元と PC で時計が違う。入れ替わったら溜めた列を捨てる（残すと span が狂う）。
-            .onChange(of: telemetry.mirrored.contains(tapId)) { _, _ in band.reset() }
             .onChange(of: scale) { _, new in band.scale = new }
             .onChange(of: lut) { _, new in band.lut = new }
     }
@@ -544,18 +542,6 @@ final class ETSpectrogramBand: ObservableObject {
         head = (head + 1) % Self.columns
         if count < Self.columns { count += 1 }
         image = makeImage()
-        revision &+= 1
-    }
-
-    /// 溜めた列を全部捨てる。枠の出どころ（手元・PC）が替わったとき。
-    func reset() {
-        head = 0
-        count = 0
-        lastSequence = nil
-        for i in canonical.indices { canonical[i] = 0 }
-        for i in pixels.indices { pixels[i] = 0 }
-        for i in times.indices { times[i] = .nan }
-        image = nil
         revision &+= 1
     }
 

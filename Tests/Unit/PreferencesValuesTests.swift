@@ -89,19 +89,4 @@ final class PreferencesValuesTests: XCTestCase {
                        ["pref.rate", "pref.latency", "pref.power", "pref.silence", "pref.awake",
                         "pref.syncVisualsToAudio", "pref.jsfxCanvasMode"])
     }
-
-    // MARK: - Remote Control（入切をやめた）
-
-    func testRemoteWantsConnectionMigratesTheOldEnabledFlag() {
-        // 新しい鍵が無ければ、前の版の入切を引き継ぐ。
-        XCTAssertTrue(PreferencesValues.remoteWantsConnection(stored: nil, legacy: true))
-        XCTAssertFalse(PreferencesValues.remoteWantsConnection(stored: nil, legacy: false))
-        // どちらも無い（一度も使っていない）はつながない。
-        XCTAssertFalse(PreferencesValues.remoteWantsConnection(stored: nil, legacy: nil))
-        // 新しい鍵があればそちらが勝つ（Disconnect した後に前の鍵が残っていても戻らない）。
-        XCTAssertFalse(PreferencesValues.remoteWantsConnection(stored: false, legacy: true))
-        XCTAssertTrue(PreferencesValues.remoteWantsConnection(stored: true, legacy: false))
-        // 型が違うものは無いのと同じ。
-        XCTAssertFalse(PreferencesValues.remoteWantsConnection(stored: "yes", legacy: nil))
-    }
 }

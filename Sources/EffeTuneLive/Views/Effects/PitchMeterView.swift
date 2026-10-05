@@ -25,8 +25,6 @@ struct PitchMeterView: View {
     let node: EffeTuneDSP.Node
     @ObservedObject var dsp: EffeTuneDSP
     @Environment(\.etGraphOnly) private var graphOnly
-    /// PoC: PC の鎖を編集しているあいだ（GraphCanvas と同じ。Views/RemoteScannerView.swift）。
-    @Environment(\.etMeasurementDimmed) private var measurementDimmed
     /// 既定は Normal（pitch_meter.js v2.11.0:48）。
     @State private var color: ETPitchColor = .normal
     /// 既定は Horizontal（pitch_meter.js v2.11.0:47）。綴りは Note Spectrogram と同じ
@@ -37,7 +35,6 @@ struct PitchMeterView: View {
         VStack(alignment: .leading, spacing: 12) {
             PitchMeterGraph(tap: node.tapId, minimum: value("mn"), maximum: value("mx"),
                             reference: value("rf"), color: color, layout: layout)
-                .etDimmedWhenMeasuring(measurementDimmed)
             if !graphOnly {
                 // 上流は Color → Layout を数値の行より先に置く（pitch_meter.js v2.11.0:410-417）。
                 colorPicker

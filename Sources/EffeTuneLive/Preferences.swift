@@ -50,24 +50,6 @@ final class Preferences: ObservableObject {
         didSet { save(jsfxCanvasMode.rawValue, Key.jsfxCanvasMode) }
     }
 
-    /// PC の EffeTune を LAN から操る PoC（DSP/RemoteMirror.swift）。
-    /// 入切のスイッチではない。つないでいる（つなぎたい）あいだ真で、Disconnect まで起動のたびにつなぎ直す。
-    /// 書くのは RemoteMirror だけ（書いてもつなぎ直さない。つなぐのは RemoteMirror の遷移）。
-    @Published var remoteWantsConnection: Bool {
-        didSet { save(remoteWantsConnection, Key.remoteConnect) }
-    }
-    /// `host:port/token`。書くのは RemoteMirror（pair・forget）だけ。
-    @Published var remoteAddress: String {
-        didSet { save(remoteAddress, Key.remoteAddress) }
-    }
-    /// PC の鎖を編集しているあいだ、Analyzer の図を PC の測定値で描く。既定は切。
-    @Published var remoteMirrorAnalyzers: Bool {
-        didSet {
-            save(remoteMirrorAnalyzers, Key.remoteMirrorAnalyzers)
-            RemoteMirror.shared.telemetryPreferenceChanged()
-        }
-    }
-
     /// しきい値だけが変わったときに呼ばれる。組み直さずに値を差し替える。
     var onSilenceThresholdChange: (() -> Void)?
 
@@ -91,16 +73,6 @@ final class Preferences: ObservableObject {
         syncVisualsToAudio = d.bool(forKey: Key.syncVisualsToAudio)
         // 既定は Adaptive（PreferencesValues.jsfxCanvasMode の注記）。
         jsfxCanvasMode = PreferencesValues.jsfxCanvasMode(d.string(forKey: Key.jsfxCanvasMode))
-        let wantsConnection = PreferencesValues.remoteWantsConnection(
-            stored: d.object(forKey: Key.remoteConnect), legacy: d.object(forKey: Key.remoteEnabled))
-        // 前の版の鍵は引き継いだら消す（init の代入では didSet が走らないので、ここで書く）。
-        if d.object(forKey: Key.remoteEnabled) != nil {
-            d.set(wantsConnection, forKey: Key.remoteConnect)
-            d.removeObject(forKey: Key.remoteEnabled)
-        }
-        remoteWantsConnection = wantsConnection
-        remoteAddress = d.string(forKey: Key.remoteAddress) ?? ""
-        remoteMirrorAnalyzers = d.bool(forKey: Key.remoteMirrorAnalyzers)
 
         // **init の代入では didSet が走らない。**
         // そのため、保存値が true でも起動直後だけ画面が落ちていた。

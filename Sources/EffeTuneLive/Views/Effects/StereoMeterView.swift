@@ -170,8 +170,6 @@ private struct StereoMeterFigure: View {
             .onChange(of: reading == nil) { _, gone in
                 if gone { trail.reset() }
             }
-            // 手元と PC で時計が違う。入れ替わったら貯めた点を捨てる。
-            .onChange(of: telemetry.mirrored.contains(tapId)) { _, _ in trail.reset() }
     }
 
     private func readout(_ r: Reading?) -> [ETReadoutItem] {
