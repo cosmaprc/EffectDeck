@@ -13,7 +13,6 @@ import UIKit
 
 struct PresetsView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
     @ObservedObject var dsp: EffeTuneDSP
     @StateObject private var store = PresetStore.shared
 
@@ -350,26 +349,11 @@ struct PresetsView: View {
             HStack {
                 TextField("Preset name", text: $newName)
                     .textInputAutocapitalization(.words)
-                    // **下の線の始まりを入力欄の頭に合わせる。**List は行の中で最初に見つけた
-                    // 字に線の頭を揃える。この行では右端の Save の字に揃ってしまい、
-                    // 線が Save の下だけの短いものになって、下の ChatGPT の行との境が見えなかった。
-                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                 Button("Save") {
                     store.save(trimmedName, chain: dsp.chain)
                     newName = ""
                 }
                 .disabled(!canSave)
-            }
-            // **組ませる口は、保存の節の頭に置く。**ChatGPT に CHAIN.md を読ませて鎖を組ませ、
-            // 返ってきたものは下の Share の節の Import from clipboard で入れる。
-            // 説明は足さず、札だけ置く。エフェクト一覧の Presets の面の頭にも同じ口がある。
-            // 中国本土の店では出さない（ETStorefrontGate）。
-            if ETStorefrontGate.shared.allowsChatGPT {
-                Button {
-                    openURL(EffectPickerView.buildChain)
-                } label: {
-                    Label("Build a chain with ChatGPT", systemImage: "sparkles")
-                }
             }
         } header: {
             Text("Save current chain")
@@ -714,7 +698,9 @@ struct PresetsView: View {
                     }
                 }
             }
-            // 組ませる口（Build a chain with ChatGPT）は、ここではなく保存の節にある。
+            // 鎖を ChatGPT に組ませる口（Build with ChatGPT…）はプリセットの口ではない。結果は
+            // プリセットとして保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner）ので、
+            // 鎖の口（ツールバーの ⋯ と、空の鎖の表示）に置いてある。
             // ここは共有するための節で、デスクトップの EffeTune も共有リンクを開くので "Share" と呼ぶ。
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、

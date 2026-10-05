@@ -812,14 +812,6 @@ struct EffectPickerView: View {
                     Divider()
                 }
                 List {
-                    // **鎖を組ませる口を、一覧の頭で見せる。**返ってきた鎖は Presets 画面の
-                    // Import from clipboard で入れる。説明は足さず、札だけ置く。
-                    // 中国本土の店では出さない（ETStorefrontGate）。
-                    if ETStorefrontGate.shared.allowsChatGPT {
-                        Button("Build a chain with ChatGPT", systemImage: "sparkles") {
-                            openURL(Self.buildChain)
-                        }
-                    }
                     userSections
                     systemSections
                 }
@@ -1088,9 +1080,10 @@ struct EffectPickerView: View {
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md " +
         "and follow it. Then ask me what effect I want.")
 
-    /// 同じ形で、内蔵のエフェクトの鎖を組ませる依頼（CHAIN.md）。返ってきた鎖は
-    /// Presets → Import from clipboardで入れる。依頼を開くボタンは、Presets画面のSaveの節と
-    /// このシートのPresetsの面の頭に置いてある。
+    /// 同じ形で、内蔵のエフェクトの鎖を組ませる依頼（CHAIN.md）。返ってきた鎖はプリセットとして
+    /// 保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner・Presets → Import from clipboard）。
+    /// なので依頼を開くボタンはプリセットの面ではなく、鎖の口に置く（PipelineToolbarの⋯のBuild with ChatGPT…と、
+    /// 空の鎖の表示）。
     static let buildChain: URL = chatGPT(
         "Build an effect chain for \(requestVersion). " +
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md " +

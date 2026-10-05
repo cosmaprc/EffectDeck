@@ -120,7 +120,7 @@ await test("llms.txt names the app and links README, JSFX.md, App Store, GitHub,
 await test("no release status in the text: no TestFlight or beta outside the footer label", async () => {
   const release = /testflight|\bbeta\b|App Store version|build/i;
   // アプリのボタンの名札は機能の名前で、ビルドの話ではない。外してから見る。
-  const label = (s) => s.replaceAll("Build a chain with ChatGPT", "");
+  const label = (s) => s.replaceAll("Build with ChatGPT…", "");
   for (const [k, v] of Object.entries(TEXT)) {
     if (k === "betaLink") continue;
     assert.ok(!release.test(label(JSON.stringify(v))), `TEXT.${k}: ${JSON.stringify(v)}`);
@@ -162,10 +162,10 @@ await test("CHAIN.md: linked next to JSFX.md on the home page and in llms.txt", 
   assert.ok(TEXT.jsfxLinks[0].includes(`href="${JSFX_MD}"`));
   const para = TEXT.jsfx.find((p) => p.includes(CHAIN_MD));
   assert.ok(para, "the JSFX section says what CHAIN.md is for");
-  assert.match(para, /Build a chain with ChatGPT/);
+  assert.match(para, /Build with ChatGPT…/);
   assert.match(para, /Import from clipboard/);
   assert.ok(LLMS_TXT.includes(`- CHAIN.md: ${CHAIN_MD}`));
-  assert.match(LLMS_TXT, /Build a chain with ChatGPT \(under Presets\)/);
+  assert.match(LLMS_TXT, /Build with ChatGPT… \(in the More menu, or on an empty chain\)/);
   assert.match(LLMS_TXT, /Import from clipboard/);
 });
 

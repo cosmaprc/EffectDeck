@@ -126,6 +126,8 @@ struct PipelineView: View {
     // 窓を狭めると、iPhoneで最後に置いた開閉のまま出る。
 
     @Environment(\.horizontalSizeClass) private var hSize
+    /// 鎖を ChatGPT に組ませる依頼を開く（ツールバーの ⋯ と空の鎖の表示。EffectPickerView.buildChain）。
+    @Environment(\.openURL) private var openURL
     /// 窓の幅が2列に足りるか。**640で立て、620を切るまで落とさない。**
     /// 1本の線にすると、Stage Managerで窓の端を引いているあいだ行き来する。
     /// 書くのは跨いだときだけ（updateWideEnough）。
@@ -512,7 +514,8 @@ struct PipelineView: View {
                         pickerAnchored: $pickerAnchored, pickerInSheet: $pickerInSheet,
                         pickerPane: $pickerPane, freshJSFX: $freshJSFX,
                         pickerOnScreen: $pickerOnScreen,
-                        pluginError: $pluginError, afterSheet: $afterSheet)
+                        pluginError: $pluginError, afterSheet: $afterSheet,
+                        buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
     }
 
     /// 根の.sheetに渡すもの。**2列ではピッカーを普通はここへ出さない。**+に付けたpopoverが出す。
@@ -893,7 +896,8 @@ struct PipelineView: View {
                 // 背面（下の .background）の口は ScrollView の後ろに居て、中身の上で放したものは
                 // そこまで届かない（実機で、空の鎖にだけ落ちなかった）。余白ごと受けるように、
                 // 口は padding の外側に付け、Color.clear と同じく contentShape で面を持たせる。
-                EmptyChainRow { presentPicker() }
+                EmptyChainRow(add: { presentPicker() },
+                              buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity)
@@ -1860,6 +1864,8 @@ private struct PipelineToolbar: ToolbarContent {
     @Binding var pickerOnScreen: Bool
     @Binding var pluginError: String?
     @Binding var afterSheet: (() -> Void)?
+    /// ⋯ の Build with ChatGPT…。ToolbarContent は View でなく openURL を持てないので、親が開き方を渡す。
+    let buildWithChatGPT: () -> Void
 
     /// popoverを出しているか。中身はsheetの.pickerで、根の.sheetはそれを見ない（presentedSheet）。
     /// 親がシートで出したときは偽のまま。
@@ -1999,6 +2005,12 @@ private struct PipelineToolbar: ToolbarContent {
                 // 紐付けが無い間は鎖の下に出力補正の行が出ないので、最初の紐付けはここから。
                 // 行が出ている間も同じシートを開ける（他の出力先の紐付けを見直す口）。
                 Button("Output Correction…", systemImage: "headphones") { present(.outputCorrection) }
+                // **鎖を組ませる口は、プリセットではなく鎖の口に置く。**返ってきた鎖はプリセットとして
+                // 保存されず、クリップボードから鎖として読み込まれる（ClipboardBanner）。説明は足さず、札だけ置く。
+                // 中国本土の店では出さない（ETStorefrontGate）。
+                if ETStorefrontGate.shared.allowsChatGPT {
+                    Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
+                }
                 Divider()
                 // 上流に鎖を空にする操作は無く、既定を組む所を
                 // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
@@ -2268,6 +2280,8 @@ private struct BypassBanner: View {
 
 private struct EmptyChainRow: View {
     let add: () -> Void
+    /// ChatGPT に鎖を組ませる依頼を開く。Add Effect の脇の 2 番目のボタン。
+    let buildWithChatGPT: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -2276,11 +2290,29 @@ private struct EmptyChainRow: View {
                 .foregroundStyle(.secondary)
             Text("No effects")
                 .font(.system(size: 16, weight: .semibold))
-            Button("Add Effect", action: add)
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 2)
+            // **主は Add Effect、ChatGPT は脇役。**横に並べて入らない幅（2 列の細い側）では縦に積む。
+            // 返ってきた鎖はクリップボードから鎖として読み込まれる（ClipboardBanner）。
+            // 中国本土の店では 2 番目を出さない（ETStorefrontGate）。
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { addButton; chatGPTButton }
+                VStack(spacing: 8) { addButton; chatGPTButton }
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var addButton: some View {
+        Button("Add Effect", action: add)
+            .buttonStyle(.borderedProminent)
+    }
+
+    @ViewBuilder
+    private var chatGPTButton: some View {
+        if ETStorefrontGate.shared.allowsChatGPT {
+            Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
+                .buttonStyle(.bordered)
+        }
     }
 }
 
