@@ -59,6 +59,8 @@ final class ETAUHost: ObservableObject {
 
     private let log = Logger(subsystem: "ai.nemut.effetune", category: "au")
     private var observers: [NSObjectProtocol] = []
+    /// 通知の束をまとめる待ち（scheduleRefresh）。
+    private var pendingRefresh: Task<Void, Never>?
     /// 前に報告へ書いた Apple 以外の名前の行。同じなら書き直さない（前面へ戻るたびに増えないように）。
     private var lastOutsiderLine: String?
 
@@ -102,12 +104,27 @@ final class ETAUHost: ObservableObject {
         for (name, reason) in triggers {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) {
                 [weak self] _ in
-                Task { @MainActor in self?.refresh(reason: reason) }
+                Task { @MainActor in self?.scheduleRefresh(reason: reason) }
             })
         }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             self?.refresh(reason: "launch+5s")
+        }
+    }
+
+    /// 通知からの数え直しはまとめてから 1 回にする。
+    ///
+    /// **登録の変更通知は束で来る。**シミュレータの起動直後に avf-registrations が
+    /// 20ms のあいだに 81 回届き、そのたびに全部の部品を数えて同じ報告の行を 81 本残した。
+    /// 最後の通知から少し待って 1 回だけ数える。理由は最後に来たものを残す。
+    private func scheduleRefresh(reason: String) {
+        pendingRefresh?.cancel()
+        pendingRefresh = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingRefresh = nil
+            self.refresh(reason: reason)
         }
     }
 
