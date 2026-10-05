@@ -214,6 +214,8 @@ struct PipelineView: View {
     private static let correctionRowID = UUID()
     /// 鎖の頭の IN メーターの矩形を、同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこのカードのぶんも引くように。
     private static let inputRowID = UUID()
+    /// 鎖が空のときの表示（EmptyChainRow）の矩形を、同じ箱（geometry）へ入れるときの鍵。
+    private static let emptyRowID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
     private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
@@ -630,6 +632,15 @@ struct PipelineView: View {
         }
     }
 
+    /// 鎖の外の行（空の表示・IN・出力補正）が画面から外れた。高さの合計から抜く。
+    /// これらは鎖の中身と関係なく出たり消えたりするので、残すと最後の帯（tailHeight）が
+    /// 足りなくなる（帯の下に落とし所の無い所ができる）。
+    private func unmeasured(_ id: UUID) {
+        geometry.forget(id)
+        let height = geometry.contentHeight
+        if rowsHeight != height { rowsHeight = height }
+    }
+
     /// 行の中身の中での上端が変わった（送っただけでは来ない）。**2列のときだけ。**
     /// 読んでいるカードなら、動いたぶん送り直す（ETReadingKeeper）。
     ///
@@ -862,6 +873,7 @@ struct PipelineView: View {
                     .onGeometryChange(for: CGRect.self) {
                         $0.frame(in: .named(Self.chainSpace))
                     } action: { measured(Self.inputRowID, $0) }
+                    .onDisappear { unmeasured(Self.inputRowID) }
             }
 
             // 鎖の真上に出す。ここより下のカードが効いていない、という話なので。
@@ -874,9 +886,25 @@ struct PipelineView: View {
             }
 
             if dsp.chain.isEmpty {
+                // **空の鎖にも落とし所を置く。**行（ForEach）が無いので、行に付いた口も無い。
+                // 背面（下の .background）の口は ScrollView の後ろに居て、中身の上で放したものは
+                // そこまで届かない（実機で、空の鎖にだけ落ちなかった）。余白ごと受けるように、
+                // 口は padding の外側に付け、Color.clear と同じく contentShape で面を持たせる。
                 EmptyChainRow { presentPicker() }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let type = items.first else { return false }
+                        return addDropped(type, at: nil)
+                    }
+                    // 末尾の帯が空の表示のぶんも引くように測る。鎖が埋まって消えたら外す
+                    // （残すと高さの合計が多いままになり、帯が足りなくなる）。
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: .named(Self.chainSpace))
+                    } action: { measured(Self.emptyRowID, $0) }
+                    .onDisappear { unmeasured(Self.emptyRowID) }
             } else {
                 ForEach(visible) { row in
                     // 見えているかを左の一覧へ知らせ、2列では見えていない図を止める。
@@ -988,25 +1016,25 @@ struct PipelineView: View {
                     .onGeometryChange(for: CGRect.self) {
                         $0.frame(in: .named(Self.chainSpace))
                     } action: { measured(Self.correctionRowID, $0) }
+                    .onDisappear { unmeasured(Self.correctionRowID) }
             }
 
-            if !dsp.chain.isEmpty {
-                // **最後の行より下の余白も受ける。**
-                // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
-                // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
-                // つもりで落としているので、末尾へ足す。
-                //
-                // **contentShape を必ず付ける。**Color.clear は描くものが無いので、
-                // 枠を持っていても当たりを取らない。帯が在っても落ちなかったのはこれで、
-                // 高さの問題ではなかった。
-                Color.clear
-                    .frame(height: tailHeight)
-                    .contentShape(Rectangle())
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let type = items.first else { return false }
-                        return addDropped(type, at: nil)
-                    }
-            }
+            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No Effects」と
+            // 出力補正の行の下がここになる。背面の口には届かないので、敷かないと受ける所が無い）。
+            // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
+            // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
+            // つもりで落としているので、末尾へ足す。
+            //
+            // **contentShape を必ず付ける。**Color.clear は描くものが無いので、
+            // 枠を持っていても当たりを取らない。帯が在っても落ちなかったのはこれで、
+            // 高さの問題ではなかった。
+            Color.clear
+                .frame(height: tailHeight)
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    guard let type = items.first else { return false }
+                    return addDropped(type, at: nil)
+                }
             }
             .coordinateSpace(name: Self.contentSpace)
             .modifier(ETDetailColumn(split: split, brake: brake))
@@ -1026,6 +1054,9 @@ struct PipelineView: View {
         // GeometryReader で包むと外側の寸法の決まり方が変わって余白が崩れた。
         // 背面なら、行に落ちたものは行が先に受け、余った所だけここへ来る。
         // 2列の両脇の余白もここへ落ちる。
+        // **ただし ScrollView の中身の上で放したものはここへ来ない。**背面は中身の祖先ではなく
+        // 後ろに居る兄弟なので、空の鎖（行も末尾の帯も無かった）では何も受けなかった。
+        // 中身の上の落とし所は、行・空の表示・末尾の帯がそれぞれ持つ。
         .background {
             GeometryReader { geo in
                 Color.clear

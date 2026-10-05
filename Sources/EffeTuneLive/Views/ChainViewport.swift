@@ -118,6 +118,12 @@ final class ETRowGeometry {
         }
     }
 
+    /// もう出ていない行を外す。高さの合計からも抜く。
+    func forget(_ id: UUID) {
+        guard rects.removeValue(forKey: id) != nil else { return }
+        heights = rects.values.reduce(0) { $0 + $1.height }
+    }
+
     /// 行の高さの合計に行の間を足したもの。最後の帯の高さ（tailHeight）が使う。
     /// 行が1つも測れていなければ0。
     var contentHeight: CGFloat {
