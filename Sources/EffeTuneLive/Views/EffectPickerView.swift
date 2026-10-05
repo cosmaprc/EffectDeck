@@ -79,8 +79,11 @@ struct EffectPickerView: View {
 
     /// 上の段階の切り替え。効果 / プラグイン / プリセット。
     ///
-    /// プリセットは自分のもの（User Presets）と同梱のもの（System Presets）を 1 面に縦に並べる。
+    /// プリセットの面には自分のもの（User Presets）だけを並べ、同梱のもの（System Presets）は
+    /// 一覧の末尾の 1 行から押し込んだ先の画面に出す。
     /// 以前は User と Factory の 2 面だったが、探しに来た人に先にどちらかを当てさせていた。
+    /// 次に 1 本の List へ縦に並べたが、群の見出し（User / System）とフォルダ・カテゴリの見出しの
+    /// 2 段が 1 列に潰れて、どこからどこまでが同梱のものか読みにくかった。
     /// 呼び名は上流に合わせて System（js/locales/en.json5 の ui.title.systemPresets）。
     /// "Factory" はこちらが勝手に付けた言葉だった。
     /// rawValue はどこにも保存していない（持ち主の PipelineView は @State）ので、.user / .system からの移行は要らない。
@@ -364,12 +367,16 @@ struct EffectPickerView: View {
             .sheet(item: $viewingSource) { entry in
                 JSFXSourceView(entry: entry)
             }
-            // **半分の高さで出す。** 全画面だと鎖が隠れて、つまんだものを
-            // 落とす先が画面に無くなる。上半分に鎖を残す。
-            .presentationDetents([Self.opened, .large], selection: $detent)
-            .presentationDragIndicator(.visible)
-            .presentationBackgroundInteraction(.enabled(upThrough: Self.opened))
         }
+        // **半分の高さで出す。** 全画面だと鎖が隠れて、つまんだものを
+        // 落とす先が画面に無くなる。上半分に鎖を残す。
+        //
+        // **NavigationStack の外に付ける。**System Presets の画面を押し込むようになった。
+        // 中身（根の画面）の側に付けたままだと、押し込んだ先が前に出ている間は
+        // シートが根の画面の指定を読まず、高さや背後の操作の指定が外れることがある。
+        .presentationDetents([Self.opened, .large], selection: $detent)
+        .presentationDragIndicator(.visible)
+        .presentationBackgroundInteraction(.enabled(upThrough: Self.opened))
     }
 
     /// 下の一覧への飛び先。現在地は見出しが上に張り付いて出すので、
@@ -829,20 +836,23 @@ struct EffectPickerView: View {
         .menuStyle(.button)
     }
 
-    /// プリセットの面。**自分のもの（User Presets）を先に、同梱のもの（System Presets）をその下に、
-    /// 1 本の List へ縦に並べる。**開いたときは List の頭（User Presets の先頭）。
-    /// 上の帯は飛び先の 2 組で、左が自分のフォルダ・右が同梱のカテゴリ（帯は 1 段のまま）。
+    /// プリセットの面。**自分のもの（User Presets）だけを並べ、末尾に System Presets へ進む 1 行を置く。**
+    /// 同梱のものは押し込んだ先の画面（systemPresetList）。前は同じ List の下に続けていたが、
+    /// 群の見出しとフォルダ・カテゴリの見出しの 2 段が 1 列に潰れて読みにくかった（Pane の注記）。
+    /// 開いたときは List の頭（User Presets の先頭）。上の帯は自分のフォルダだけ。
     private var presetList: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                let chips = presetChips
-                if !chips.isEmpty {
-                    chipStrip(chips)
+                // フォルダが 1 つだけ（仕切っていない・空）なら帯は出さない。飛ぶ先が他に無い。
+                if userFolders.count > 1 {
+                    chipStrip(presetChips)
                     Divider()
                 }
                 List {
                     userSections
-                    systemSections
+                    // **同梱のものへは標準の NavigationLink で進む。**一覧の一番下に置き、
+                    // 自分のものを探す邪魔をしない。押し込んだ先でも行は同じ presetRow。
+                    NavigationLink("System Presets") { systemPresetList }
                 }
                 .listStyle(.plain)
             }
@@ -854,7 +864,7 @@ struct EffectPickerView: View {
     }
 
     /// 自分で保存したプリセット。`/` で仕切るとフォルダごとの節にする。
-    /// **空でも節は出す。**1 行だけの空の表示を置き、下の System Presets へは帯から飛べる。
+    /// **空でも節は出す。**1 行だけの空の表示を置き、その下に System Presets へ進む行が続く。
     @ViewBuilder
     private var userSections: some View {
         let folders = userFolders
@@ -895,54 +905,54 @@ struct EffectPickerView: View {
         }
     }
 
-    /// 同梱のプリセット。上流の分け方をそのまま見出しにする。
-    @ViewBuilder
-    private var systemSections: some View {
-        ForEach(systemCategories, id: \.self) { category in
-            let key = Self.systemChipKey(category)
-            Section {
-                if category == Self.debugJSFXCategory {
-                    // **Debugの版だけ。**見出し（systemCategories）はDebugでしか出ないが、
-                    // 呼ぶ側を囲わないとDebugPresets.swiftの鎖の字がReleaseにも入る
-                    // （Scripts/check_release_binary.shのdebugonlyが見る）。
-                    #if DEBUG
-                    presetRow(name: "JSFX Host Test",
-                              payload: "preset:debug:jsfx-host") {
-                        jsfx.debugPresetItems()
-                    }
-                    .id(Self.jumpTarget(key))
-                    // 手で組み直さずに見るための鎖（DSP/DebugPresets.swift）。
-                    ForEach(Array(ETDebugPresets.all.enumerated()), id: \.offset) {
-                        _, item in
-                        presetRow(name: item.name,
-                                  payload: "preset:debug:" + item.name) {
-                            ETShareLink.parse(item.json, catalog: ETCatalog)
+    /// 同梱のプリセット。Presets の面の末尾の System Presets の行から押し込んだ先の画面。
+    /// 上流の分け方をそのまま見出しにする。**見出しは 1 段（カテゴリ）だけ。**群の名前は画面の題が持つ。
+    /// 行は前と同じ presetRow なので、押せば入り、つまめば鎖へ落とせる（つまんだらシートごと閉じる。
+    /// dismiss は EffectPickerView のもので、押し込んだ画面を戻すのではなくシートを閉じる）。
+    /// 帯は付けず、current も書かない。帯の塗りは Presets の面の自分のフォルダのもの。
+    private var systemPresetList: some View {
+        List {
+            ForEach(systemCategories, id: \.self) { category in
+                Section {
+                    if category == Self.debugJSFXCategory {
+                        // **Debugの版だけ。**見出し（systemCategories）はDebugでしか出ないが、
+                        // 呼ぶ側を囲わないとDebugPresets.swiftの鎖の字がReleaseにも入る
+                        // （Scripts/check_release_binary.shのdebugonlyが見る）。
+                        #if DEBUG
+                        presetRow(name: "JSFX Host Test",
+                                  payload: "preset:debug:jsfx-host") {
+                            jsfx.debugPresetItems()
+                        }
+                        // 手で組み直さずに見るための鎖（DSP/DebugPresets.swift）。
+                        ForEach(Array(ETDebugPresets.all.enumerated()), id: \.offset) {
+                            _, item in
+                            presetRow(name: item.name,
+                                      payload: "preset:debug:" + item.name) {
+                                ETShareLink.parse(item.json, catalog: ETCatalog)
+                            }
+                        }
+                        #endif
+                    } else {
+                        let inCategory = ETSystemPresets.filter { $0.category == category }
+                        ForEach(inCategory) { preset in
+                            presetRow(name: preset.name,
+                                      payload: "preset:system:" + preset.name) {
+                                ETShareLink.parse(preset.json, catalog: ETCatalog)
+                            }
                         }
                     }
-                    #endif
-                } else {
-                    let inCategory = ETSystemPresets.filter { $0.category == category }
-                    ForEach(Array(inCategory.enumerated()), id: \.element.id) { offset, preset in
-                        presetRow(name: preset.name,
-                                  payload: "preset:system:" + preset.name) {
-                            ETShareLink.parse(preset.json, catalog: ETCatalog)
-                        }
-                        .id(offset == 0 ? Self.jumpTarget(key)
-                                        : "system-preset-" + preset.name)
-                    }
+                } header: {
+                    Text(category.categoryLabel)
                 }
-            } header: {
-                presetHeader(group: category == systemCategories.first ? "System Presets" : nil,
-                             title: category.categoryLabel)
-                    .onScrollVisibilityChange(threshold: 0.1) { visible in
-                        if visible { current = key }
-                    }
             }
         }
+        .listStyle(.plain)
+        .navigationTitle("System Presets")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// プリセットの面の節の見出し。**群の先頭の節にだけ、群の名前（User Presets / System Presets）を上に付ける。**
-    /// 見出しを群ごとに別の節にすると、中身の無い節が出来て飛び先も塗り分けも合わなくなる。
+    /// プリセットの面の節の見出し。**先頭の節にだけ、群の名前（User Presets）を上に付ける。**
+    /// 群の名前だけの節を別に作ると、中身の無い節が出来て飛び先も塗り分けも合わなくなる。
     private func presetHeader(group: String?, title: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let group { Text(group).font(.headline) }
@@ -951,35 +961,23 @@ struct EffectPickerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// プリセットの面の帯。左が自分のフォルダ、右が同梱のカテゴリ。
-    /// 自分のものが 1 つも無いときは同梱のものだけ（区切りも出さない）。
+    /// プリセットの面の帯。自分のフォルダだけ（同梱のものは押し込んだ先の画面にあり、ここからは飛ばない）。
+    /// 帯が出るのはフォルダが 2 つ以上のときだけなので、仕切っていないものは節の見出しと同じ "Others"。
     private var presetChips: [JumpChip] {
-        let folders = userFolders
-        var chips = folders.map { folder in
-            // 仕切っていないものだけのときは、帯に "Others" と出しても何の他か分からない。
+        userFolders.map { folder in
             JumpChip(key: Self.userChipKey(folder.name),
-                     label: folder.name.isEmpty ? (folders.count > 1 ? "Others" : "User Presets")
-                                                : folder.name)
+                     label: folder.name.isEmpty ? "Others" : folder.name)
         }
-        let hasUser = !chips.isEmpty
-        for (index, category) in systemCategories.enumerated() {
-            chips.append(JumpChip(key: Self.systemChipKey(category), label: category.categoryLabel,
-                                  startsGroup: hasUser && index == 0))
-        }
-        return chips
     }
 
-    /// 帯の飛び先の鍵。自分のフォルダと同梱のカテゴリは同じ名前がありうる（Reverb など）ので、
-    /// 頭に群を付けて別の鍵にする。仕切っていないものは folder が空。
+    /// 帯の飛び先の鍵。仕切っていないものは folder が空なので、頭に "user:" を付けて
+    /// 「どれも塗らない」（current が空）と区別する。
     static func userChipKey(_ folder: String) -> String { "user:" + folder }
-    static func systemChipKey(_ category: String) -> String { "system:" + category }
 
     /// 帯の 1 つ。key が飛び先と塗り分けの鍵（current）、label が字。
     private struct JumpChip: Identifiable {
         let key: String
         let label: String
-        /// 立っていれば、この前に縦の区切りを置く（プリセットの面の自分と同梱のあいだ）。
-        var startsGroup = false
         var id: String { key }
     }
 
@@ -992,9 +990,6 @@ struct EffectPickerView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(chips) { chip in
-                    if chip.startsGroup {
-                        Divider().frame(height: 18)
-                    }
                     Button {
                         current = chip.key
                         jump = Jump(name: chip.key, count: jump.count + 1)
