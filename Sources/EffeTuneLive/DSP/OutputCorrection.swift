@@ -30,7 +30,7 @@ final class OutputCorrection: ObservableObject {
     @Published private(set) var isOn: Bool
     /// 落ち着いた出力先。鎖の下の行に名前を出す。
     @Published private(set) var device: ETOutputCorrectionDevice?
-    /// 出力先ごとの紐付け（在るプリセットのものだけ）。鎖の下の行と Presets の節が読む。
+    /// 出力先ごとの紐付け（在るプリセットのものだけ）。鎖の下の行と出力補正のシート（OutputCorrectionView）が読む。
     @Published private(set) var bindings: [ETOutputCorrectionBinding] = []
     /// いまの出力先に紐付けたプリセットの中身（名前だけ）。鎖の下の行を開くと並ぶ。入切に関わらず出す。
     @Published private(set) var contents: [ETOutputCorrectionLine] = []
@@ -92,7 +92,7 @@ final class OutputCorrection: ObservableObject {
         refreshBindings()
     }
 
-    /// 出力先にプリセットを紐付ける。nil なら外す。Presets の節の Picker から。
+    /// 出力先にプリセットを紐付ける。nil なら外す。出力補正のシート（OutputCorrectionView）の Picker から。
     /// 切のときは書くだけ（鳴らすのは入のときだけ）。
     func bind(_ d: ETOutputCorrectionDevice, preset: String?) {
         core.bind(d, preset: preset)

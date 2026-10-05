@@ -53,6 +53,9 @@ struct PipelineView: View {
         case picker, settings, routing, presets, ir, tips
         /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
         case remote
+        /// 出力補正の専用シート（鎖の下の出力補正の行から。OutputCorrectionView.swift）。
+        /// Presets を開くと、行を押しただけで鎖ごと読み込まれてしまうので分けた。
+        case outputCorrection
         var id: String { rawValue }
     }
 
@@ -261,6 +264,8 @@ struct PipelineView: View {
                 IRLibraryView()
             case .remote:
                 RemotePanelView()
+            case .outputCorrection:
+                OutputCorrectionView(isRemote: isRemote)
             // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
             case .tips:
                 NavigationStack {
@@ -992,10 +997,11 @@ struct PipelineView: View {
                 }
             }
 
-            // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは Presets で選ぶ（押すと開く）。
+            // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは専用のシートで選ぶ（押すと開く）。
+            // Presets は開かない。あちらは行を押すと鎖ごと読み込むので、補正を選ぶつもりで鎖を置き換えてしまう。
             // PC の鎖を編集している間は出さない（補正も外してある）。
             if !isRemote {
-                OutputCorrectionRow(oc: OutputCorrection.shared, open: { presentSheet(.presets) })
+                OutputCorrectionRow(oc: OutputCorrection.shared, open: { presentSheet(.outputCorrection) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 5)
                     // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
@@ -2247,7 +2253,7 @@ private struct EmptyChainRow: View {
 }
 
 /// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット。
-/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと Presets を開く。
+/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと出力補正のシートを開く。
 /// 開くと紐付けたプリセットの中身を名前だけ並べる（読むだけ）。
 private struct OutputCorrectionRow: View {
     @ObservedObject var oc: OutputCorrection

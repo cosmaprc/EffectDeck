@@ -16,9 +16,6 @@ struct PresetsView: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject var dsp: EffeTuneDSP
     @StateObject private var store = PresetStore.shared
-    /// 出力先ごとの出力補正の紐付け。**AudioIO はこの画面で観測しない**（3.3Hz で publish する）。
-    /// いまの出力先も OutputCorrection.device から読む。
-    @ObservedObject private var oc = OutputCorrection.shared
 
     @State private var newName = ""
 
@@ -255,7 +252,8 @@ struct PresetsView: View {
         NavigationStack {
             List {
                 saveSection
-                correctionSection
+                // 出力補正の紐付けはここに置かない（OutputCorrectionView.swift）。この画面は行を押すと
+                // 鎖ごと読み込むので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
                 userSection
                 systemSection
                 webSection
@@ -346,44 +344,6 @@ struct PresetsView: View {
     }
 
     // MARK: - 節
-
-    /// 出力先（ヘッドホンなど）ごとの出力補正。いま使っている出力先を先頭に、紐付けてある出力先を並べる。
-    /// 選ぶと紐付き、None で外す（使っていない出力先は行ごと消える）。入切が切でも選べる（鳴らすのは入のときだけ）。
-    /// ユーザープリセットが無いか、出す出力先が 1 つも無ければ節ごと出さない。
-    @ViewBuilder private var correctionSection: some View {
-        let current = oc.device
-        let others = oc.bindings.filter { $0.key != current?.key }
-        if !store.names.isEmpty && (current != nil || !others.isEmpty) {
-            Section {
-                if let d = current { correctionRow(d, inUse: true) }
-                ForEach(others, id: \.key) { b in
-                    correctionRow(ETOutputCorrectionDevice(key: b.key, name: b.name, kind: b.kind), inUse: false)
-                }
-            } header: {
-                Text("Output Correction")
-            }
-        }
-    }
-
-    /// 出力先 1 つの行。標準の Picker を押して別の画面で選ぶ。名前は保存してあるまま（フォルダ/名前）。
-    private func correctionRow(_ d: ETOutputCorrectionDevice, inUse: Bool) -> some View {
-        Picker(selection: Binding(get: { oc.preset(for: d.key) },
-                                  set: { oc.bind(d, preset: $0) })) {
-            Text("None").tag(String?.none)
-            ForEach(store.names, id: \.self) { Text($0).tag(String?.some($0)) }
-        } label: {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(d.name)
-                    // 状態の札（いまこの出力先から鳴っている）。説明ではない。
-                    if inUse { Text("In use").font(.caption).foregroundStyle(.secondary) }
-                }
-            } icon: {
-                Image(systemName: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
-            }
-        }
-        .pickerStyle(.navigationLink)
-    }
 
     private var saveSection: some View {
         Section {
