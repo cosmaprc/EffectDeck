@@ -474,7 +474,14 @@ struct EffectPickerView: View {
     /// 前は右上のツールバーにあったが、「pluginsのシートの右上にボタンがあるのは変」で中身の側へ移した。
     /// 押した後の fileImporter と .alert（From Link・失敗の知らせ）は body の NavigationStack の中身に
     /// 付けてあるので、どこから出しても同じものが開く。
-    private var jsfxImportMenu: some View {
+    /// JSFX を取り込む Menu。Plugins の一覧の頭の行と、空のときの表示の 2 か所で使う。
+    ///
+    /// **ChatGPT に書かせる口は中に入れない。**どちらの場所にもすぐ下に
+    /// Write JSFX with ChatGPT の行があるので、Menu の中にもあると同じものが画面に 2 つ並ぶ。
+    /// 一覧の行（asRow）では、行の幅いっぱいを押せるようにして字を本文の色にする。
+    /// Menu の札は既定では字の上だけが押せて、字も tint で塗られる。隣の Button の行
+    /// （Write JSFX with ChatGPT）と押せる範囲も色も揃わなかった。
+    private func jsfxImportMenu(asRow: Bool) -> some View {
         Menu {
             Button("From Files", systemImage: "folder") {
                 importingJSFX = true
@@ -489,16 +496,20 @@ struct EffectPickerView: View {
             Button("From Clipboard", systemImage: "doc.on.clipboard") {
                 importClipboard()
             }
-            // 中国本土の店では出さない（ETStorefrontGate）。
-            if ETStorefrontGate.shared.allowsChatGPT {
-                Divider()
-                Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
-                    openURL(Self.writeJSFX)
-                }
-            }
         } label: {
-            Label("Import JSFX", systemImage: "square.and.arrow.down")
+            if asRow {
+                Label {
+                    Text("Import JSFX").foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: "square.and.arrow.down").foregroundStyle(Color.accentColor)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            } else {
+                Label("Import JSFX", systemImage: "square.and.arrow.down")
+            }
         }
+        .tint(asRow ? Color.primary : Color.accentColor)
     }
 
     private var pluginList: some View {
@@ -509,7 +520,7 @@ struct EffectPickerView: View {
                 } actions: {
                     if ETJSFXHost.isEnabled {
                         // 空のときも一覧の頭と同じ Menu（From Link・From Clipboard もここから）。
-                        jsfxImportMenu
+                        jsfxImportMenu(asRow: false)
                         if ETStorefrontGate.shared.allowsChatGPT {
                             Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
                                 openURL(Self.writeJSFX)
@@ -525,7 +536,7 @@ struct EffectPickerView: View {
                         List {
                             if ETJSFXHost.isEnabled {
                                 // **取り込む口は一覧の頭の行。**右上のツールバーには置かない（jsfxImportMenu）。
-                                jsfxImportMenu
+                                jsfxImportMenu(asRow: true)
                                 // **書かせる道があることを、一覧の頭で見せる。**
                                 // JSFXは1枚のテキストなので、ChatGPTにJSFX.mdを
                                 // 読ませれば通るものが返ってくる。説明は足さず、札だけ置く。
