@@ -390,6 +390,10 @@ struct PresetsView: View {
             HStack {
                 TextField("Preset name", text: $newName)
                     .textInputAutocapitalization(.words)
+                    // **下の線の始まりを入力欄の頭に合わせる。**List は行の中で最初に見つけた
+                    // 字に線の頭を揃える。この行では右端の Save の字に揃ってしまい、
+                    // 線が Save の下だけの短いものになって、下の ChatGPT の行との境が見えなかった。
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                 Button("Save") {
                     store.save(trimmedName, chain: dsp.chain)
                     newName = ""
