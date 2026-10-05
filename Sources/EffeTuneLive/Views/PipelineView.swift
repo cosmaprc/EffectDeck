@@ -1020,7 +1020,7 @@ struct PipelineView: View {
                     // **鎖の終わりに線を 1 本引く。**同じ形の札が続くだけだと、出力補正も鎖の最後の段に見える。
                     // 線には字を添えない。見出しを付けると Section の名前と同じものに見え、
                     // 「なぜ最後だけ Section が名前で出ているのか」と読まれる（Section は自分の札で名前を出す）。
-                    // 何の札かは札の小さい行（Output Correction · 出力先）が言う。
+                    // 何の札かは札の名前（Output Correction）が言う。
                     // 線は組の上下の線（ETGroupRule）と同じもの。最後の行が組の下線をもう引いているときは
                     // 重ねない（鎖の中の「線は 1 本にする」と同じ）。
                     if visible.last?.block != .bottom {
@@ -2314,15 +2314,16 @@ private struct OutputCorrectionRow: View {
                     .accessibilityLabel("Output Correction")
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(ETUserPresetName.leaf(bound.preset))
+                    // **大きい字は何の札か、小さい行が中身。**エフェクトのカードは名前（RS Reverb）が大きく、
+                    // 種別が小さい。ここも札の名前（Output Correction）を大きく出し、何を掛けているか
+                    // （プリセット名）とどの出力先かを小さい行に「 · 」でつなぐ（Section の札と同じ組み立て）。
+                    // 線の上に見出しは置かない（PipelineView の呼び出し側の頭を参照）。
+                    Text("Output Correction")
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    // エフェクトのカードで種別（Reverb・Analyzer）、Section の札で「Section · 3 effects」が
-                    // 出る行。ここでは何の札かと、どの出力先の補正かを同じ「 · 」の組み立てで出す。
-                    // 線の上に見出しは置かない（PipelineView の呼び出し側の頭を参照）。
                     // 絵は付けない。カードのこの行は字だけなので、絵があると高さと字の頭がずれる。
-                    Text("Output Correction · \(bound.name)")
+                    Text("\(ETUserPresetName.leaf(bound.preset)) · \(bound.name)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
