@@ -870,6 +870,13 @@ struct PipelineView: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
+                    // **IN に落としたものは鎖の頭へ。**IN は鎖の手前の音なので、その直後＝添字 0。
+                    // 口は padding の外側に付ける（カードの間の隙間で取りこぼさないように）。
+                    .contentShape(Rectangle())
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let type = items.first else { return false }
+                        return addDropped(type, at: 0)
+                    }
                     .onGeometryChange(for: CGRect.self) {
                         $0.frame(in: .named(Self.chainSpace))
                     } action: { measured(Self.inputRowID, $0) }
@@ -1013,6 +1020,13 @@ struct PipelineView: View {
                 OutputCorrectionRow(oc: OutputCorrection.shared, running: running, open: { presentSheet(.presets) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 5)
+                    // **出力補正の行（OUT を含む）に落としたものは鎖の末尾へ。**補正の中身には入れない
+                    // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
+                    .contentShape(Rectangle())
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let type = items.first else { return false }
+                        return addDropped(type, at: nil)
+                    }
                     .onGeometryChange(for: CGRect.self) {
                         $0.frame(in: .named(Self.chainSpace))
                     } action: { measured(Self.correctionRowID, $0) }
@@ -1056,7 +1070,7 @@ struct PipelineView: View {
         // 2列の両脇の余白もここへ落ちる。
         // **ただし ScrollView の中身の上で放したものはここへ来ない。**背面は中身の祖先ではなく
         // 後ろに居る兄弟なので、空の鎖（行も末尾の帯も無かった）では何も受けなかった。
-        // 中身の上の落とし所は、行・空の表示・末尾の帯がそれぞれ持つ。
+        // 中身の上の落とし所は、行・空の表示・IN・出力補正・末尾の帯がそれぞれ持つ。
         .background {
             GeometryReader { geo in
                 Color.clear
