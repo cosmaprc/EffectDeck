@@ -896,8 +896,7 @@ struct PipelineView: View {
                 // 背面（下の .background）の口は ScrollView の後ろに居て、中身の上で放したものは
                 // そこまで届かない（実機で、空の鎖にだけ落ちなかった）。余白ごと受けるように、
                 // 口は padding の外側に付け、Color.clear と同じく contentShape で面を持たせる。
-                EmptyChainRow(add: { presentPicker() },
-                              buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
+                EmptyChainRow(add: { presentPicker() })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity)
@@ -1002,6 +1001,10 @@ struct PipelineView: View {
                         // **ピッカーからつまんだものを受ける。**
                         // カードには何も足さない。落ちたときだけ効く。
                         // 落とした段の手前に入れる（上流の並べ替えと同じ向き）。
+                        // **カードの周りの余白（左右の 14・上下の隙間）もこの行の口にする。**
+                        // contentShape が無いと透明な余白は当たりを取らず、カードの脇や
+                        // カードとカードの間に落としたものがどこにも入らなかった（DropProbe）。
+                        .contentShape(Rectangle())
                         .dropDestination(for: String.self) { items, _ in
                             guard let type = items.first else { return false }
                             return addDropped(type, at: row.index)
@@ -1069,6 +1072,16 @@ struct PipelineView: View {
             }
             .coordinateSpace(name: Self.contentSpace)
             .modifier(ETDetailColumn(split: split, brake: brake))
+            // **中身の全面を最後の口にする。**行・空の表示・末尾の帯が受けなかった所（2列の両脇の
+            // 広い余白など）はここへ来て、鎖の末尾へ足す。下の .background の口は ScrollView の
+            // 後ろに居る兄弟で、中身の上で放したものは届かない。だから余白の口は中身の側に置く。
+            // **ここは何度も壊れている。**受けるべき所: カードの上・カードの脇と間・最後の下・
+            // 両脇の余白・空の鎖。Tests/UI/DropProbe.swift が全部を落として確かめる。
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                guard let type = items.first else { return false }
+                return addDropped(type, at: nil)
+            }
         }
         // 触れたら戻す先の覚えを外す。そこから先は人が読む位置を決める。
         .onScrollPhaseChange { _, phase in
@@ -2272,8 +2285,6 @@ private struct BypassBanner: View {
 
 private struct EmptyChainRow: View {
     let add: () -> Void
-    /// ChatGPT に鎖を組ませる依頼を開く。Add Effect の脇の 2 番目のボタン。
-    let buildWithChatGPT: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -2282,102 +2293,11 @@ private struct EmptyChainRow: View {
                 .foregroundStyle(.secondary)
             Text("No effects")
                 .font(.system(size: 16, weight: .semibold))
-            // **主は Add Effect、ChatGPT は脇役。**横に並べて入らない幅（2 列の細い側）では縦に積む。
-            // 返ってきた鎖はクリップボードから鎖として読み込まれる（ClipboardBanner）。
-            // 中国本土の店では 2 番目を出さない（ETStorefrontGate）。
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { addButton; chatGPTButton }
-                VStack(spacing: 8) { addButton; chatGPTButton }
-            }
-            .padding(.top, 2)
+            Button("Add Effect", action: add)
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private var addButton: some View {
-        Button("Add Effect", action: add)
-            .buttonStyle(.borderedProminent)
-    }
-
-    @ViewBuilder
-    private var chatGPTButton: some View {
-        if ETStorefrontGate.shared.allowsChatGPT {
-            Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
-                .buttonStyle(.bordered)
-        }
-    }
-}
-
-/// 出力補正の 1 行。**エフェクトのカードの頭と同じ形にする**（左に電源、名前と小さい行、右端に印）。
-/// 前は札の枠・iOS のスイッチ・開閉の 3 つの作法が 1 行に混ざり、大事な「どの出力先にどの補正か」が
-/// 小さな灰色の字だった。鎖の札の仲間に見えるように、電源・字の大きさ・間隔・切のときの沈み方を
-/// EffectCardView の頭（header）に揃える。
-///
-/// **高さも頭と同じにする。**前は縦の余白を名前のボタンの中にだけ入れていたので、行の高さが
-/// 「34pt の印 + 20」で決まり、「44pt の電源 + 20」の頭より 10pt 低かった。余白は頭と同じく
-/// 行（HStack）の外側に付け、行ぜんぶを押し所にする（頭の onTapGesture と同じ作り）。
-///
-/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。電源以外のどこを押しても出力補正のシートを開く。
-/// 出すのはいまの出力先に紐付けがあるときだけ（PipelineView が決めて bound を渡す）。
-private struct OutputCorrectionRow: View {
-    /// 入切だけを読む。紐付けは bound で受け取る。
-    @ObservedObject var oc: OutputCorrection
-    /// いまの出力先と、紐付けたプリセット（保存してあるまま。`フォルダ/名前`）。
-    let bound: ETOutputCorrectionBinding
-    let open: () -> Void
-
-    var body: some View {
-        Card {
-            // 値はすべて EffectCardView.header の写し（間隔 6・字 16/11・行間 1・Spacer 4・
-            // 余白 左 2 / 右 4 / 上下 10）。片方だけ変えると、並んだ札で電源と名前の位置がずれる。
-            HStack(spacing: 6) {
-                // エフェクトのカードと同じ電源。切ると補正が外れる（出力先ごとではなく層ぜんぶ）。
-                Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
-                    .toggleStyle(.power)
-                    .labelsHidden()
-                    .accessibilityLabel("Output Correction")
-
-                VStack(alignment: .leading, spacing: 1) {
-                    // **大きい字は何の札か、小さい行が中身。**エフェクトのカードは名前（RS Reverb）が大きく、
-                    // 種別が小さい。ここも札の名前（Output Correction）を大きく出し、何を掛けているか
-                    // （プリセット名）とどの出力先かを小さい行に「 · 」でつなぐ（Section の札と同じ組み立て）。
-                    // 線の上に見出しは置かない（PipelineView の呼び出し側の頭を参照）。
-                    Text("Output Correction")
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    // 絵は付けない。カードのこの行は字だけなので、絵があると高さと字の頭がずれる。
-                    Text("\(ETUserPresetName.leaf(bound.preset)) · \(bound.name)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                // 名前と小さい行を 1 つのボタンとして読ませる。押したときの動きは下の onTapGesture と同じ。
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { open() }
-
-                Spacer(minLength: 4)
-
-                // カードの ⋯ と同じ位置・大きさ（34pt）。**灰色にしない。**カードの開閉の印は
-                // 畳んでいる間、灰色の右向きの山形なので、同じ色だと「開くと中身が出る」と読める。
-                // こちらは別の画面へ進む印。
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.tint)
-                    .frame(width: 34, height: 34)
-                    .accessibilityHidden(true)
-            }
-            .padding(.leading, 2)
-            .padding(.trailing, 4)
-            .padding(.vertical, 10)
-            // 電源の外は全部、シートを開く押し所。電源は中のボタンが先に受けるので、ここへは来ない
-            // （カードの頭の電源と開閉が同じ関係で共存している）。
-            .contentShape(Rectangle())
-            .onTapGesture(perform: open)
-        }
-        // 切のときはバイパスしたエフェクトのカードと同じだけ沈める。
-        .opacity(oc.isOn ? 1 : 0.55)
     }
 }
 
