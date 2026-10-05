@@ -552,9 +552,10 @@ final class RemoteMirror: ObservableObject {
         applyingRemote = false
         isRemote = false
         // 編集中に iCloud から降りてきた鎖は、adoptSeededChain が isRemote で素通りしている。
-        // 戻した手元の鎖が空ならここで入れる。入れないと、次の setRemote(false) の persist() が
-        // 空の鎖を pipeline.last と iCloud へ書き、降りてきたばかりの鎖を消す。
-        // 手元に何かあれば（isDefaultChain が偽）、降りてきた鎖が無ければ（loadLast が空）何もしない。
+        // 戻した手元の鎖が既定（Level Meter 1 本）のままならここで入れる。入れないと、次の setRemote(false) の
+        // persist() が既定の鎖を pipeline.last と iCloud へ書き、降りてきたばかりの鎖を消す
+        // （降りてきた時点で pipeline.last が埋まり hasSaved が真なので、shouldPersist では止まらない）。
+        // 手元の鎖が既定でなければ（isDefaultChain が偽）、降りてきた鎖が無ければ（loadLast が空）何もしない。
         EffeTuneDSP.shared.adoptSeededChain()
         // いまの出力先の補正を戻す。isRemote を下ろした後なので、入れ直しの persist() は PC へ送らない。
         OutputCorrection.shared.setRemote(false)

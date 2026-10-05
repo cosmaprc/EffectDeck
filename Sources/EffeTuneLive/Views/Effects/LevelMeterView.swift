@@ -49,13 +49,12 @@ struct LevelMeterView: View {
     @State private var overloadUntil: Date?
 
     /// 目盛りの下端と落ちる速さ。左の一覧の棒（ChainMinimap）も同じ数を使う。
-    /// IN / OUT のメーター（SignalMeter.swift）も同じ数を使う。
     static let floorDB: Double = -96
     static let fallRate: Double = 20
-    static let holdTime: Double = 1.0
+    private static let holdTime: Double = 1.0
     /// OVERLOADを出し続ける長さ。左の一覧の札（ChainMinimap）も同じ。
     static let overloadTime: Double = 5.0
-    static let ticks: [Double] = [-96, -72, -48, -24, -12, 0]
+    private static let ticks: [Double] = [-96, -72, -48, -24, -12, 0]
 
     var body: some View {
         // **見出しの行は持たない。**

@@ -384,18 +384,19 @@ final class DynamicProbe: XCTestCase {
                              "貼り板が空でも何も言わない（押しても無反応）")
     }
 
-    // MARK: - 7. Reset chain
+    // MARK: - 7. Reset Pipeline
 
-    /// 期待: ⋯ から出し、確認を挟み、押すと鎖が空になる。既に空なら押せない。
+    /// 期待: ⋯ から出し、確認を挟み、押すと Level Meter 1 本になる。
+    ///       既に 1 本なら押せない。
     func test10ResetPipeline() {
         let app = launch(["-ETSeed", "VolumePlugin,CompressorPlugin"])
         Thread.sleep(forTimeInterval: 2)
 
         app.buttons["moreMenu"].tap()
         Thread.sleep(forTimeInterval: 1.5)
-        let reset = app.buttons["Reset chain"].firstMatch
+        let reset = app.buttons["Reset Pipeline"].firstMatch
         print("PROBE reset exists=\(reset.exists) enabled=\(reset.exists ? reset.isEnabled : false)")
-        XCTAssertTrue(reset.waitForExistence(timeout: 10), "⋯ に Reset chain が無い")
+        XCTAssertTrue(reset.waitForExistence(timeout: 10), "⋯ に Reset Pipeline が無い")
         XCTAssertTrue(reset.isEnabled, "鎖が 2 本あるのに押せない")
         reset.tap()
         Thread.sleep(forTimeInterval: 2)
@@ -403,23 +404,23 @@ final class DynamicProbe: XCTestCase {
         // 確認が出るか。
         print("PROBE confirm sheets=\(app.sheets.count) alerts=\(app.alerts.count)")
         XCTAssertGreaterThan(app.sheets.count + app.alerts.count, 0, "確認が出ない")
-        XCTAssertTrue(app.staticTexts["Reset chain?"].exists
-                      || app.staticTexts["Removes every effect."].exists,
+        XCTAssertTrue(app.staticTexts["Reset Pipeline?"].exists
+                      || app.staticTexts["Removes every effect and leaves a single Level Meter."].exists,
                       "確認の文面が出ない")
 
-        let confirm = app.sheets.buttons["Reset chain"].firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "確認に Reset chain が無い")
+        let confirm = app.sheets.buttons["Reset Pipeline"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "確認に Reset Pipeline が無い")
         confirm.tap()
         Thread.sleep(forTimeInterval: 3)
 
         XCTAssertFalse(app.switches["Volume"].exists, "戻しても Volume が残る")
-        XCTAssertTrue(app.staticTexts["No Effects"].waitForExistence(timeout: 10),
-                      "鎖が空にならない")
+        XCTAssertTrue(app.switches["Level Meter"].waitForExistence(timeout: 10),
+                      "Level Meter 1 本にならない")
 
         // もう一度開くと押せないこと。
         app.buttons["moreMenu"].tap()
         Thread.sleep(forTimeInterval: 1.5)
-        let reset2 = app.buttons["Reset chain"].firstMatch
+        let reset2 = app.buttons["Reset Pipeline"].firstMatch
         XCTAssertTrue(reset2.waitForExistence(timeout: 10), "⋯ が開かない")
         print("PROBE reset again enabled=\(reset2.isEnabled)")
         XCTAssertFalse(reset2.isEnabled, "既に既定なのに押せてしまう")

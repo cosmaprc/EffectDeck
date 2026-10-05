@@ -142,25 +142,29 @@ final class ChainEditingTests: XCTestCase {
 
     /// 型名はカタログと一字も違えない（違うと外すべき段が鳴る）。
     func testTypeNamesAreInTheCatalog() {
-        for type in [ETChainEditing.bassExtenderType, ETChainEditing.bassManagementType] {
+        for type in [ETChainEditing.defaultType, ETChainEditing.bassExtenderType,
+                     ETChainEditing.bassManagementType] {
             XCTAssertTrue(ETCatalog.contains { $0.type == type }, type)
         }
     }
 
     // MARK: - 既定の鎖
 
-    /// 既定は空。まだ何も残していなければ書かない（iCloud の鎖を空で潰さず、遅れて降りてくる鎖の口も閉じない）。
-    func testEmptyDefaultNotSavedUntilSomethingWas() {
-        XCTAssertTrue(ETChainEditing.isDefaultChain(types: []))
-        XCTAssertFalse(ETChainEditing.shouldPersist(types: [], hasSaved: false))
-        // 一度残したあとに人が空にしたものは書く。
-        XCTAssertTrue(ETChainEditing.shouldPersist(types: [], hasSaved: true))
-        // 空でない鎖はいつでも書く。Level Meter 1 本も、いまは使う人の普通の鎖（残っているものは触らない）。
-        for types in [["LevelMeterPlugin"], ["LevelMeterPlugin", "LevelMeterPlugin"],
-                      ["VolumePlugin"], [ETSection.type]] {
+    /// restore() が置いた Level Meter 1 本は、まだ何も残していなければ書かない。
+    func testDefaultLevelMeterNotSaved() {
+        let meter = [ETChainEditing.defaultType]
+        XCTAssertTrue(ETChainEditing.isDefaultChain(types: meter))
+        XCTAssertFalse(ETChainEditing.shouldPersist(types: meter, hasSaved: false))
+        // 人が既定へ戻したもの（前に何か残している）は書く。
+        XCTAssertTrue(ETChainEditing.shouldPersist(types: meter, hasSaved: true))
+        // 既定でない鎖はいつでも書く。
+        for types in [["VolumePlugin"], meter + meter, meter + ["VolumePlugin"], [ETSection.type]] {
             XCTAssertFalse(ETChainEditing.isDefaultChain(types: types), "\(types)")
             XCTAssertTrue(ETChainEditing.shouldPersist(types: types, hasSaved: false), "\(types)")
         }
+        // 空の鎖は既定ではない（書かないのは rebuildAll が publish を通さないことで守っている）。
+        XCTAssertFalse(ETChainEditing.isDefaultChain(types: []))
+        XCTAssertTrue(ETChainEditing.shouldPersist(types: [], hasSaved: false))
     }
 
     // MARK: - プリセットを足す

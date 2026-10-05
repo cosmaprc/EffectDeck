@@ -158,6 +158,9 @@ final class EffeTuneDSP: ObservableObject {
     static let telemetryRingBytes: UInt32 = 1024 * 1024
     static let telemetryHz: Float = 60
 
+    /// 何も無いときに置く 1 本。型名は ETChainEditing.defaultType だけに書く。
+    private static let defaultType = ETChainEditing.defaultType
+
     private init() {}
 
     // MARK: - 用意
@@ -512,11 +515,11 @@ final class EffeTuneDSP: ObservableObject {
         // iCloud（CloudMirror）が PC の鎖で上書きされ、切ったときに戻す先が消える。
         guard !RemoteMirror.shared.isRemote else { return }
 
-        // **まだ何も残していないうちは既定（空）を残さない**（ETChainEditing.shouldPersist）。
-        // 書くと iCloud 側の鎖が空の鎖で上書きされ、遅れて降りてくる鎖を
+        // **restore() が置いた既定の 1 本は残さない**（ETChainEditing.shouldPersist）。
+        // 書くと iCloud 側の鎖が Level Meter 1 本で上書きされ、遅れて降りてくる鎖を
         // 受ける口も閉じる。入れ直した端末では、この 2 つが同じ起動の数ミリ秒差で起きていた。
         // 人が消して既定に戻した場合は hasSaved が true なので残す。
-        // 何も触らずに終了した場合は次の起動でまた既定（空）が並ぶ。見え方は同じ。
+        // 何も触らずに終了した場合は次の起動でまた既定が並ぶ。見え方は同じ。
         guard ETChainEditing.shouldPersist(types: chain.map(\.spec.type),
                                            hasSaved: PipelineStore.hasSaved) else { return }
 
@@ -584,8 +587,9 @@ final class EffeTuneDSP: ObservableObject {
         PipelineStore.saveExpanded(chain.indices.filter { expanded.contains(chain[$0].id) })
     }
 
-    /// 起動時に呼ぶ。前回の鎖が残っていればそれを並べる。
-    /// 前回の鎖が無ければ何も置かない（既定は空。入っている音は鎖の頭の IN メーターで分かる）。
+    /// 起動時に呼ぶ。前回の鎖が残っていればそれを、無ければ既定を組む。
+    /// 既定に Level Meter を 1 つ置いているのは、音が来ているかどうかが
+    /// 一目で分かるようにするため。下の帯にメーターを置かない代わり。
     ///
     /// 全部 chain に入れ終えてから publish() を 1 回だけ呼ぶ。以前は append が
     /// 1 本ごとに publish していたので、10 本なら et_pipeline_configure が 10 回積まれた。
@@ -642,6 +646,10 @@ final class EffeTuneDSP: ObservableObject {
             }
             // 畳んだまま起動した Bass Management の Linear も設計させる（replaceChain と同じ）。
             ETAssetReattach.loaded(chain)
+        } else if !PipelineStore.hasSaved {
+            if let meter = ETCatalog.first(where: { $0.type == Self.defaultType }) {
+                add(meter)
+            }
         }
     }
 
@@ -650,7 +658,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 埋めた直後だけ。
     ///
     /// **まだ何も組んでいないときだけ入れる。**入れ直した直後の起動では
-    /// restore() が何も並べていない（既定は空）ので、失うものが無い。
+    /// restore() が既定の Level Meter を 1 本置いただけの状態で、失うものが無い。
     /// 人が何か足していれば isDefaultChain が false になり、ここは素通りする。
     /// 遅れて届いた古い鎖で、いま触っている鎖を潰さないため。
     func adoptSeededChain() {
@@ -777,7 +785,7 @@ final class EffeTuneDSP: ObservableObject {
     /// 足したものは全部開いた状態にする（:170-172 expandedPlugins.add）。
     ///
     /// 置き換えではないので、プリセットを 2 つ選べば 2 つとも鎖に並ぶ。
-    /// 鎖を捨てたいときは ⋯ の Reset chain を使う。
+    /// 鎖を捨てたいときは ⋯ の Reset Pipeline を使う。
     ///
     /// index を省くと末尾へ足す（上流の insertionIndex = null と同じ）。
     func addPreset(named name: String, items: [PipelineStore.Loaded], at index: Int? = nil) {
@@ -897,17 +905,18 @@ final class EffeTuneDSP: ObservableObject {
         loadCorrection([])
     }
 
-    /// いまの鎖が既定（空）か。⋯ の Reset chain を押せなくするのと、
-    /// 遅れて降りてきた鎖を入れてよいか（adoptSeededChain）に使う。
-    /// 何が既定かの判断は画面側に持たせず、ここ（ETChainEditing）に置く。
+    /// いま並んでいるのが既定そのもの（Level Meter 1 本）か。
+    /// 画面で「戻す」を押せなくするのに使う。型名を画面側に持たせないため、
+    /// 何が既定かの判断はここに置く。
     var isDefaultChain: Bool {
         ETChainEditing.isDefaultChain(types: chain.map(\.spec.type))
     }
 
-    /// 鎖を捨てて、初めて起動したときと同じ空の鎖へ戻す。
+    /// 鎖を捨てて、初めて起動したときと同じ Level Meter 1 本へ戻す。
     ///
     /// 1 本ずつ消す remove(at:) しか無いと、10 本並んだ鎖を畳むのに 10 回スワイプする。
-    /// 一度でも残していれば（hasSaved）、publish → persist が空の鎖を pipeline.last と iCloud へ書く。
+    /// 空にせず Level Meter を 1 本置くのは restore() の既定と同じ理由で、
+    /// 音が来ているかどうかが分かる 1 本だけは残すため。
     ///
     /// instance の後始末は replaceChain と同じ順にしてある。先に番号を控えて、
     /// 鎖を組み直して publish() を通したあとで retire() へ渡す。publish より先に
@@ -921,7 +930,15 @@ final class EffeTuneDSP: ObservableObject {
         restoring = true
         expanded.removeAll()
         restoring = false
+        if let meter = ETCatalog.first(where: { $0.type == Self.defaultType }) {
+            appendSpec(meter)
+        }
         publish()
+        // 置いた 1 本は開く。replaceChain が全部畳むのは 10 本以上並ぶと
+        // 一覧として読めなくなるからで、1 本しか無いならその理由が無い。
+        // publish() のあとに入れるのは add(_:) と同じで、didSet の persistExpanded に
+        // 確定した鎖の位置を書かせるため。
+        if let id = chain.last?.id { expanded.insert(id) }
         for id in external { removeExternal(instanceID: id) }
         retire(doomed)
     }
@@ -1277,11 +1294,11 @@ final class EffeTuneDSP: ObservableObject {
     /// et_pipeline_configure は ET_OK を返す。画面には N 本並んだまま、
     /// 通っているのは 0〜N-1 本という状態になり、status だけ見ても気づけない。
     ///
-    /// 鎖が空のときは何もしない（publish() を通さない）。通すと persist() が、
-    /// まだ何も残していないうちに "pipeline.last" へ [] を書く最初の 1 回になりうる。
-    /// 書けば PipelineStore.hasSaved が true になり、iCloud から遅れて降りてくる鎖を受ける口
-    /// （CloudMirror.seed の「手元が空の鍵だけ」）が閉じる。persist() 側も
-    /// ETChainEditing.shouldPersist で同じ門を持っているが、ここでも通さない。
+    /// 鎖が空のときは何もしない。**publish() を通すと persist() が走り、
+    /// まだ何も無いうちに "pipeline.last" へ [] が書かれる。** すると直後の
+    /// restore() で PipelineStore.hasSaved が true になり、既定の Level Meter を
+    /// 置く枝（loadLast が [] を返すので第一の枝は外れる）へ二度と入らない。
+    /// 初回起動から鎖が空のまま＝ノード 0 本＝applied 0 になっていた。
     ///
     /// 出力補正の段も同じく作り直す（OutputCorrection.dspPrepared は入っていれば何もしない）。
     private func rebuildAll() {

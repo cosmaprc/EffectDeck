@@ -234,12 +234,10 @@ struct MeterView: View {
     /// 下端（`-96.0 dB`）がいちばん長いので、そこに合わせれば時間で変わらない。
     private var readout: [ETReadoutItem] {
         let width = ETFormat.db(range.lowerBound, decimals: 1).count
-        func padded(_ db: Double) -> String {
-            let text = ETFormat.db(db, decimals: 1)
-            return String(repeating: " ", count: max(0, width - text.count)) + text
-        }
         return channels.map { channel in
-            ETReadoutItem(channel.label, padded(peakValue(channel)))
+            let text = ETFormat.db(peakValue(channel), decimals: 1)
+            return ETReadoutItem(channel.label,
+                                 String(repeating: " ", count: max(0, width - text.count)) + text)
         }
     }
 }

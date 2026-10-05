@@ -5,8 +5,7 @@
 //    - 左のエフェクト一覧は常時は出さない。iPhone の幅では鎖が読めなくなるので + から出す
 //    - 再生の開始/停止は持たない。拡張が繋がったら自分で鳴らし始める。
 //      鎖を切りたいときは頭の ON を切る（素通しになる）
-//    - レベルメーターは下の帯に置かない。鎖の頭に IN、出力補正の行に OUT を固定で出す
-//      （SignalMeter.swift）。既定の鎖は空
+//    - レベルメーターは下の帯に置かない。要る人は Level Meter を鎖に入れる
 //    - Section を畳むと配下の**行ごと**消える。上流はパラメータの表示を畳むだけで
 //      行は残る（js/ui/pipeline/pipeline-item-builder.js:795-836）。
 //      横に並べられない幅なので、ここだけ変えてある
@@ -212,8 +211,6 @@ struct PipelineView: View {
     private static let chainSpace = "chain"
     /// 出力補正の行の矩形を、カードの行と同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこの行のぶんも引くように。
     private static let correctionRowID = UUID()
-    /// 鎖の頭の IN メーターの矩形を、同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこのカードのぶんも引くように。
-    private static let inputRowID = UUID()
     /// 鎖が空のときの表示（EmptyChainRow）の矩形を、同じ箱（geometry）へ入れるときの鍵。
     private static let emptyRowID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
@@ -409,7 +406,7 @@ struct PipelineView: View {
                 Button("Reset chain", role: .destructive) { dsp.resetToDefault() }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Removes every effect.")
+                Text("Removes every effect and leaves a single Level Meter.")
             }
             .confirmationDialog("Replace chain?",
                                 isPresented: Binding(
@@ -632,7 +629,7 @@ struct PipelineView: View {
         }
     }
 
-    /// 鎖の外の行（空の表示・IN・出力補正）が画面から外れた。高さの合計から抜く。
+    /// 鎖の外の行（空の表示・出力補正）が画面から外れた。高さの合計から抜く。
     /// これらは鎖の中身と関係なく出たり消えたりするので、残すと最後の帯（tailHeight）が
     /// 足りなくなる（帯の下に落とし所の無い所ができる）。
     private func unmeasured(_ id: UUID) {
@@ -864,30 +861,6 @@ struct PipelineView: View {
                     .padding(.bottom, 8)
             }
 
-            // 入口のメーター（L / R）。鎖の外に固定で出す。PC の鎖を編集している間は出さない（ここに来る音の話ではないので）。
-            if !isRemote {
-                // 中身は 30pt ほどの細い棒なので、カードの上下の余白も詰める（全体で 46pt ほど）。
-                Card {
-                    ETSignalMeter(point: .input, active: running)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-                    // **IN に落としたものは鎖の頭へ。**IN は鎖の手前の音なので、その直後＝添字 0。
-                    // 口は padding の外側に付ける（カードの間の隙間で取りこぼさないように）。
-                    .contentShape(Rectangle())
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let type = items.first else { return false }
-                        return addDropped(type, at: 0)
-                    }
-                    .onGeometryChange(for: CGRect.self) {
-                        $0.frame(in: .named(Self.chainSpace))
-                    } action: { measured(Self.inputRowID, $0) }
-                    .onDisappear { unmeasured(Self.inputRowID) }
-            }
-
             // 鎖の真上に出す。ここより下のカードが効いていない、という話なので。
             // 鎖が空のときは出さない。EmptyChainRow が同じことを既に言っている。
             if dsp.bypass && !dsp.chain.isEmpty {
@@ -1022,10 +995,10 @@ struct PipelineView: View {
             // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは Presets で選ぶ（押すと開く）。
             // PC の鎖を編集している間は出さない（補正も外してある）。
             if !isRemote {
-                OutputCorrectionRow(oc: OutputCorrection.shared, running: running, open: { presentSheet(.presets) })
+                OutputCorrectionRow(oc: OutputCorrection.shared, open: { presentSheet(.presets) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 5)
-                    // **出力補正の行（OUT を含む）に落としたものは鎖の末尾へ。**補正の中身には入れない
+                    // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
                     // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
                     .contentShape(Rectangle())
                     .dropDestination(for: String.self) { items, _ in
@@ -1038,7 +1011,7 @@ struct PipelineView: View {
                     .onDisappear { unmeasured(Self.correctionRowID) }
             }
 
-            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No Effects」と
+            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No effects」と
             // 出力補正の行の下がここになる。背面の口には届かないので、敷かないと受ける所が無い）。
             // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
             // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
@@ -1075,7 +1048,7 @@ struct PipelineView: View {
         // 2列の両脇の余白もここへ落ちる。
         // **ただし ScrollView の中身の上で放したものはここへ来ない。**背面は中身の祖先ではなく
         // 後ろに居る兄弟なので、空の鎖（行も末尾の帯も無かった）では何も受けなかった。
-        // 中身の上の落とし所は、行・空の表示・IN・出力補正・末尾の帯がそれぞれ持つ。
+        // 中身の上の落とし所は、行・空の表示・出力補正・末尾の帯がそれぞれ持つ。
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -1989,8 +1962,10 @@ private struct PipelineToolbar: ToolbarContent {
                 Button("Settings", systemImage: "gearshape") { present(.settings) }
                 Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
                 Divider()
-                // 既定（初めての起動と同じ）へ戻す。既定は空なので Clear と同じ結果になるが、
-                // 上流の Reset Audio / Reset Zoom に揃えた名前のまま。
+                // 上流に鎖を空にする操作は無く、既定を組む所を
+                // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
+                // 戻す先が空ではなく既定なので、Clear ではなく
+                // 上流の Reset Audio / Reset Zoom と同じ Reset に寄せた。
                 //
                 // 押した時点では何もしない。走らせるのは親の確認を通ってから。
                 Button(role: .destructive) {
@@ -1998,7 +1973,7 @@ private struct PipelineToolbar: ToolbarContent {
                 } label: {
                     Label("Reset chain", systemImage: "trash")
                 }
-                // 鎖が空なら押しても何も変わらない。
+                // 既に Level Meter 1 本なら押しても何も変わらない。
                 .disabled(dsp.isDefaultChain)
             } label: {
                 Label("More", systemImage: "ellipsis")
@@ -2257,24 +2232,25 @@ private struct EmptyChainRow: View {
     let add: () -> Void
 
     var body: some View {
-        // 初めての起動・Reset chain の後はこれが出る（既定の鎖は空）。標準の空の表示に、足す口だけ。
-        ContentUnavailableView {
-            Label("No Effects", systemImage: "slider.horizontal.3")
-        } actions: {
+        VStack(spacing: 10) {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 30))
+                .foregroundStyle(.secondary)
+            Text("No effects")
+                .font(.system(size: 16, weight: .semibold))
             Button("Add Effect", action: add)
                 .buttonStyle(.borderedProminent)
+                .padding(.top, 2)
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
-/// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット、端末へ渡す音のメーター（OUT）。
+/// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット。
 /// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと Presets を開く。
-/// 観測するのは OutputCorrection だけ。30Hz で描き直すのはメーター（ETSignalMeter）だけ。
 /// 開くと紐付けたプリセットの中身を名前だけ並べる（読むだけ）。
 private struct OutputCorrectionRow: View {
     @ObservedObject var oc: OutputCorrection
-    /// 鳴っているか。PipelineView が io.running から写した値。
-    let running: Bool
     let open: () -> Void
 
     /// 中身を開いているか。覚えない。
@@ -2313,10 +2289,7 @@ private struct OutputCorrectionRow: View {
                         .labelsHidden()
                 }
 
-                // 端末へ渡す音（鎖と補正の後）。補正の入切にかかわらず出す。
-                ETSignalMeter(point: .output, active: running)
-
-                // 紐付けたプリセットの中身。メーターの下に置く（開いてもメーターが動かないように）。
+                // 紐付けたプリセットの中身。入切の行の下に開く（開いても入切の位置は動かない）。
                 // 出力先が無い・紐付けが無い・読める段が無いときは出さない。
                 if !oc.contents.isEmpty {
                     DisclosureGroup(isExpanded: $showsContents) {

@@ -37,14 +37,9 @@ private final class RenderState {
     let interleaved: UnsafeMutablePointer<Float>   // capacity * 2
     let planar: UnsafeMutablePointer<Float>        // capacity * channels
     let hi: UnsafeMutablePointer<Float>            // capacity * factor * channels
-    let outPeaks: UnsafeMutablePointer<Float>      // channels。出力へ書いた値のチャンネルごとのピーク
     var resampler: OpaquePointer?
 
-    /// 入口（リンクから受けた音、鎖の前）と出口（鎖と補正を通って端末へ渡す音）のメーター。チャンネルごと。
-    /// 入口はリンクの L / R の 2 本、出口は channels 本（端末へ渡している本数）。
-    /// 音のスレッドだけが書き、メインは inputMeter / outputMeter で読むだけ（tick が meter を読んでいたのと同じ形）。
-    var inMeter = ETChannelPeakMeters(channels: 2)
-    var outMeter: ETChannelPeakMeters
+    var meter: Float = 0
     var applied: UInt32 = 0
     /// 直近の ETPipeline_Process の戻り値（et_status）。ET_OK は 0。
     var pipeStatus: Int32 = 0
@@ -65,16 +60,13 @@ private final class RenderState {
         self.sampleRate = sampleRate
         self.factor = factor
         self.channels = channels
-        outMeter = ETChannelPeakMeters(channels: channels)
 
         interleaved = .allocate(capacity: capacity * 2)
         planar      = .allocate(capacity: capacity * channels)
         hi          = .allocate(capacity: capacity * factor * channels)
-        outPeaks    = .allocate(capacity: channels)
         interleaved.initialize(repeating: 0, count: capacity * 2)
         planar.initialize(repeating: 0, count: capacity * channels)
         hi.initialize(repeating: 0, count: capacity * factor * channels)
-        outPeaks.initialize(repeating: 0, count: channels)
 
         if factor > 1 {
             resampler = ETResampler_Create(UInt32(factor), UInt32(channels), UInt32(capacity))
@@ -86,7 +78,6 @@ private final class RenderState {
         interleaved.deallocate()
         planar.deallocate()
         hi.deallocate()
-        outPeaks.deallocate()
         ETResampler_Destroy(resampler)
     }
 
@@ -131,13 +122,11 @@ final class AudioIO: ObservableObject {
     @Published var listening = false
     @Published var hasPeer = false
     @Published var received: UInt64 = 0
-    /// 入口と出口のメーター（ETChannelPeakMeters。チャンネルごと）。**@Published ではない。**
-    /// 鎖の頭（IN）と出力補正の行（OUT）の小さなメーターが TimelineView の拍ごとに読む（SignalMeter.swift）。
-    /// 30Hz で publish すると観測している側の body を 33ms ごとに作り直すので、ここは読まれるだけにする。
-    /// 止まっている（render が無い）ときは 0 の L / R。読み書きは tick() が render?.load を読むのと同じ形
-    /// （音のスレッドが書き、メインが読む。山とクリップの数が別のブロックのものになることはあるが、出すだけなので構わない）。
-    var inputMeter: ETChannelPeakMeters { render?.inMeter ?? ETChannelPeakMeters(channels: 2) }
-    var outputMeter: ETChannelPeakMeters { render?.outMeter ?? ETChannelPeakMeters(channels: 2) }
+    /// 出力のピーク。**@Published ではない。**
+    /// Sources のどのビューも読んでいない（メーターは Telemetry の枠を読む）のに
+    /// 30Hz で publish していて、観測している側の body を 33ms ごとに作り直していた。
+    /// 読み手が増えるときは、ここではなく Telemetry を見ること。
+    private(set) var level: Float = 0
     @Published var applied: Int = 0
     /// このアプリの音がどこへ出ているか。
     /// 仮想デバイス（名前に ET_NAME_STEM を含む）を指していたら帰還ループ。
@@ -492,14 +481,8 @@ final class AudioIO: ObservableObject {
             //    トーンを足したあとに走査していたが、それだと休んでいる間も
             //    0 埋めとデインターリーブを先に払うことになる。入力は常に L/R の
             //    2ch なので、s の 2n サンプルから同じ値が出る。
-            //    L と R を別に取り、大きいほうをゲートへ渡す（2n サンプル全体の山と同じ値）。
             let s = state.interleaved
-            let inL = ETAudioBufferOps.peak(s, count: n, stride: 2)
-            let inR = ETAudioBufferOps.peak(s + 1, count: n, stride: 2)
-            let inPeak = max(inL, inR)
-            // 入口のメーター（L / R）。ゲートと休みより前に置くので、鎖が休んでいる間も落ちていく。
-            state.inMeter.feed(channel: 0, blockPeak: inL, frames: n, sampleRate: state.sampleRate)
-            state.inMeter.feed(channel: 1, blockPeak: inR, frames: n, sampleRate: state.sampleRate)
+            let inPeak = ETAudioBufferOps.peak(s, count: n * 2)
             // ゲートは毎回通す。silentFor を溜めているのがこれ。
             //
             // **トーンはゲートと論理和にする。**前はプレーナに足したあとで走査して
@@ -536,8 +519,7 @@ final class AudioIO: ObservableObject {
                 for buffer in abl {
                     if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
                 }
-                // 出力は全部ゼロ。メーターも同じ落ち方で下げる。
-                state.outMeter.fall(frames: n, sampleRate: state.sampleRate)
+                state.meter = 0
                 state.applied = 0
                 state.pipeStatus = 0
                 state.elapsed += Double(n) / state.sampleRate
@@ -576,15 +558,11 @@ final class AudioIO: ObservableObject {
 
             // 7. 出力へ書く。インターリーブの口・本数の過不足・容量を超えたフレームは
             //    ETAudioBufferOps.writeOutput が受け持つ（AudioBufferOpsTests）。
-            //    出口のメーターは、書いた値のチャンネルごとのピーク（outPeaks）から。
-            _ = ETAudioBufferOps.writeOutput(
+            state.meter = ETAudioBufferOps.writeOutput(
                 planar: p, frames: n, channels: channels,
-                frameCount: Int(frameCount), bufferCount: abl.count,
-                channelPeaks: state.outPeaks) { k in
+                frameCount: Int(frameCount), bufferCount: abl.count) { k in
                     (abl[k].mData?.assumingMemoryBound(to: Float.self), Int(abl[k].mNumberChannels))
                 }
-            state.outMeter.feed(blockPeaks: state.outPeaks, channels: channels,
-                                frames: n, sampleRate: state.sampleRate)
 
             let spent = state.now() - began
             let budget = Double(n) / state.sampleRate
@@ -634,6 +612,7 @@ final class AudioIO: ObservableObject {
         if !keepListening { ETLinkReceiver.shared.stop() }
         EffeTuneDSP.shared.reset()
         render = nil
+        level = 0
         // start() は毎回ここを通るので、同じ値を書かない（publish が増えるだけ）。
         if running { running = false }
         if status != "Stopped" { status = "Stopped" }
@@ -693,6 +672,9 @@ final class AudioIO: ObservableObject {
         }
 
         refreshRoute()
+
+        // level は publish しないので、そのまま書いてよい。
+        level = render?.meter ?? 0
 
         let nowApplied = Int(render?.applied ?? 0)
         if applied != nowApplied { applied = nowApplied }
