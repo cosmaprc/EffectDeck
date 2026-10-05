@@ -34,6 +34,16 @@ GitHub Actions の release.yml が使う（どれも読むだけか、内部グ�
                                               bundle ID が合い、配布用証明書 DIST_CERT_ID に結ばれているときだけ
                                               通る（読むだけ。uuid を出す）
 
+GitHub Actions の asc-ops.yml が使う（書く。main から手で回すだけ）:
+  python3 asc.py regen-profile <名前> <bundle-id>
+                                              bundle ID に INTER_APP_AUDIO が無ければ足し、同じ名前の
+                                              プロファイルを（状態を問わず）全部消して、IOS_APP_STORE を
+                                              配布用証明書 DIST_CERT_ID で作り直す。id と状態を出す
+  python3 asc.py beta-submit <build-id>       Tools/beta_notes.txt を en-US の What to Test に書き、
+                                              輸出コンプライアンスが未設定なら「該当なし」にし、外部グループ
+                                              "EffectDeck Public Beta" に足して、TestFlight の審査へ出す
+                                              （出してあれば出し直さない）。betaReviewState を出す
+
 KEY_ID と ISSUER は環境変数 ASC_KEY_ID・ASC_ISSUER_ID で上書きできる（既定は下の値）。
 """
 import json
@@ -53,6 +63,10 @@ APP = "6812467517"
 # プロファイルがこの証明書に結ばれていなければ、署名しても配布に使えない。
 DIST_CERT_ID = "4CGZ2DSM55"
 BASE = "https://api.appstoreconnect.apple.com"
+# TestFlight の外部グループ（審査を通してから配る相手）。beta-submit はここにだけ足す。
+PUBLIC_BETA_GROUP = "EffectDeck Public Beta"
+# What to Test の本文（en-US）。beta-submit が読む。
+BETA_NOTES = Path(__file__).resolve().parent / "beta_notes.txt"
 
 
 def token() -> str:
@@ -233,6 +247,122 @@ def fetch_profile(name: str, bundle_id: str, out_dir: str) -> str:
     return uuid
 
 
+def _fail(msg: str):
+    print(f"!! {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def regen_profile(name: str, bundle_id: str) -> dict:
+    """bundle_id の App Store 用プロファイル name を作り直し、新しいプロファイルの data を返す。
+
+    1) bundle ID に INTER_APP_AUDIO の capability が無ければ足す（無いままだとプロファイルに
+       inter-app-audio が入らず、本体の entitlements と合わない）。
+    2) 名前が name と完全に一致するプロファイルを状態を問わず全部消す（ASC は同じ名前を許さない）。
+    3) IOS_APP_STORE を DIST_CERT_ID に結んで作る。
+    """
+    import urllib.parse
+
+    q = urllib.parse.quote(bundle_id, safe="")
+    bids = [b for b in pages(f"/v1/bundleIds?filter[identifier]={q}&limit=200")
+            if (b.get("attributes") or {}).get("identifier") == bundle_id]
+    if len(bids) != 1:
+        _fail(f"bundle ID {bundle_id} が {len(bids)} 個ある（1 個のはず）")
+    bid = bids[0]["id"]
+
+    caps = pages(f"/v1/bundleIds/{bid}/bundleIdCapabilities?limit=200")
+    if any((c.get("attributes") or {}).get("capabilityType") == "INTER_APP_AUDIO" for c in caps):
+        print(f"{bundle_id}: INTER_APP_AUDIO はもうある", file=sys.stderr)
+    else:
+        call("POST", "/v1/bundleIdCapabilities",
+             {"data": {"type": "bundleIdCapabilities",
+                       "attributes": {"capabilityType": "INTER_APP_AUDIO"},
+                       "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bid}}}}})
+        print(f"{bundle_id}: INTER_APP_AUDIO を足した", file=sys.stderr)
+
+    qn = urllib.parse.quote(name, safe="")
+    old = [p for p in pages(f"/v1/profiles?filter[name]={qn}&limit=200")
+           if (p.get("attributes") or {}).get("name") == name]
+    for p in old:
+        call("DELETE", f"/v1/profiles/{p['id']}")
+        print(f"古いプロファイル {p['id']}（{(p.get('attributes') or {}).get('profileState')}）を消した",
+              file=sys.stderr)
+
+    d = call("POST", "/v1/profiles",
+             {"data": {"type": "profiles",
+                       "attributes": {"name": name, "profileType": "IOS_APP_STORE"},
+                       "relationships": {
+                           "bundleId": {"data": {"type": "bundleIds", "id": bid}},
+                           "certificates": {"data": [{"type": "certificates", "id": DIST_CERT_ID}]}}}})
+    return d.get("data") or {}
+
+
+def public_beta_group_id() -> str:
+    """名前が PUBLIC_BETA_GROUP の外部グループの ID。ちょうど 1 つで、内部グループでないこと。"""
+    groups = [g for g in pages(f"/v1/apps/{APP}/betaGroups?limit=200")
+              if (g.get("attributes") or {}).get("name") == PUBLIC_BETA_GROUP]
+    if len(groups) != 1:
+        _fail(f"{PUBLIC_BETA_GROUP} という名前のグループが {len(groups)} 個ある（1 個のはず）")
+    if (groups[0].get("attributes") or {}).get("isInternalGroup"):
+        _fail(f"{PUBLIC_BETA_GROUP} が内部グループになっている（外部グループのはず）")
+    return groups[0]["id"]
+
+
+def beta_submit(build_id: str) -> str:
+    """build_id を外部テストの審査へ出し、betaReviewState を返す。"""
+    try:
+        notes = BETA_NOTES.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        _fail(f"{BETA_NOTES} が無い（What to Test の本文）")
+    if not notes:
+        _fail(f"{BETA_NOTES} が空")
+    if len(notes) > 4000:
+        _fail(f"{BETA_NOTES} が {len(notes)} 字（4000 字まで）")
+
+    # 外部グループを先に確かめる（無い・2 つある・内部になっているなら何も書かずに止まる）。
+    gid = public_beta_group_id()
+
+    # 1) What to Test（en-US）。あれば書き換え、無ければ作る。
+    locs = pages(f"/v1/builds/{build_id}/betaBuildLocalizations?limit=200")
+    en = [l for l in locs if (l.get("attributes") or {}).get("locale") == "en-US"]
+    if en:
+        call("PATCH", f"/v1/betaBuildLocalizations/{en[0]['id']}",
+             {"data": {"type": "betaBuildLocalizations", "id": en[0]["id"],
+                       "attributes": {"whatsNew": notes}}})
+        print("What to Test（en-US）を書き換えた", file=sys.stderr)
+    else:
+        call("POST", "/v1/betaBuildLocalizations",
+             {"data": {"type": "betaBuildLocalizations",
+                       "attributes": {"locale": "en-US", "whatsNew": notes},
+                       "relationships": {"build": {"data": {"type": "builds", "id": build_id}}}}})
+        print("What to Test（en-US）を作った", file=sys.stderr)
+
+    # 2) 輸出コンプライアンス。未設定のときだけ「該当なし」。
+    attrs = (call("GET", f"/v1/builds/{build_id}").get("data") or {}).get("attributes") or {}
+    if attrs.get("usesNonExemptEncryption") is None:
+        call("PATCH", f"/v1/builds/{build_id}",
+             {"data": {"type": "builds", "id": build_id,
+                       "attributes": {"usesNonExemptEncryption": False}}})
+        print("usesNonExemptEncryption = false にした", file=sys.stderr)
+
+    # 3) 外部グループへ。
+    call("POST", f"/v1/betaGroups/{gid}/relationships/builds",
+         {"data": [{"type": "builds", "id": build_id}]})
+    print(f"{PUBLIC_BETA_GROUP} ({gid}) に足した", file=sys.stderr)
+
+    # 4) 審査の提出。ビルドにもうあれば作らない。
+    subs = call("GET", f"/v1/betaAppReviewSubmissions?filter[build]={build_id}&limit=5").get("data") or []
+    if subs:
+        sub = subs[0]
+        print(f"審査の提出はもうある（{sub.get('id')}）", file=sys.stderr)
+    else:
+        sub = call("POST", "/v1/betaAppReviewSubmissions",
+                   {"data": {"type": "betaAppReviewSubmissions",
+                             "relationships": {"build": {"data": {"type": "builds", "id": build_id}}}}}
+                   ).get("data") or {}
+        print(f"審査へ出した（{sub.get('id')}）", file=sys.stderr)
+    return (sub.get("attributes") or {}).get("betaReviewState") or "?"
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -293,6 +423,15 @@ def main() -> int:
 
     if cmd == "profile":
         print(fetch_profile(sys.argv[2], sys.argv[3], sys.argv[4]))
+        return 0
+
+    if cmd == "regen-profile":
+        p = regen_profile(sys.argv[2], sys.argv[3])
+        print(p.get("id"), (p.get("attributes") or {}).get("profileState"))
+        return 0
+
+    if cmd == "beta-submit":
+        print(beta_submit(sys.argv[2]))
         return 0
 
     if cmd == "builds":

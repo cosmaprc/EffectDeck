@@ -1,14 +1,19 @@
 # 配布: 書庫（ad-hoc）→ 書き出し（手動署名）→ 検査 → App Store Connect へ上げる。
 #
-#   tf-YYYY.MM.DD-NN のタグを push    Beta（紫・ET_BETA）を TestFlight へ。タグの日付 = MARKETING_VERSION
+#   tf-YYYY.MM.DD-NN のタグを push    Beta（紫・ET_BETA）を TestFlight へ。タグの日付 = MARKETING_VERSION。
+#                                      タグは origin のどれかのブランチに入ったコミットに打つ（main でなくてよい。
+#                                      TestFlight は全部入りのブランチから出せる）
 #   Actions → Release → Run workflow   flavor=beta|store、dry_run（既定 true）。main からだけ
 #
 # **dry_run は上げない。**書庫・書き出し・出荷物の検査まで通して、altool --validate-app で止める
 # （版が閉じているときは validate も飛ばす）。タグの push は dry_run なしの本番。
-# 店（store）の審査提出・Public Beta への追加は、ここでは一切しない（本人が Tools/asc.py で）。
+# 店（store）の審査提出・Public Beta への追加は、ここでは一切しない（beta は asc-ops.yml の beta-submit、
+# store は本人が Tools/asc.py で）。
 #
 # 流れ:
-#   gate     秘密を使わない。コミットが origin/main の上にあり、その同じコミットの CI（ci.yml）が緑なこと。
+#   gate     秘密を使わない。store はコミットが origin/main の上にあること、beta は origin のどれかの
+#            ブランチの上にあること（どのブランチかをログに出す）。どちらも同じコミットの CI（ci.yml）が緑なこと
+#            （main 以外のブランチは push では CI が回らないので、gh workflow run CI --ref <branch> で回しておく）。
 #            Environment の承認より前に走るので、通らないものは承認の画面にも出ない。
 #   release  Environment "release"（必須レビュアー = 本人）の承認を待ってから、署名・アップロードをする。
 #            秘密（ASC_KEY_ID・ASC_ISSUER_ID・ASC_KEY_P8 と、配布用証明書の DIST_P12_BASE64・
@@ -121,18 +126,34 @@ jobs:
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
           echo "flavor=$flavor config=$config dry_run=$dry_run version=$version sha=$GITHUB_SHA"
-      - name: コミットが origin/main の上にある
+      # store は main だけ。beta（タグ）は origin のどれかのブランチに入っていればよい。
+      - name: コミットが origin のブランチの上にある（store は main）
+        env:
+          FLAVOR: ${{ steps.inputs.outputs.flavor }}
         run: |
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$GITHUB_SHA は origin/main の上にない。main に入ったコミットにタグを打つ"
-            exit 1
+          if [ "$FLAVOR" = store ]; then
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$GITHUB_SHA は origin/main の上にない。store は main に入ったコミットから出す"
+              exit 1
+            fi
+            echo "store: $GITHUB_SHA は origin/main の上にある"
+          else
+            git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+            branches=$(git branch -r --contains "$GITHUB_SHA" | sed 's/^ *//' | grep -v -- '->' || true)
+            if [ -z "$branches" ]; then
+              echo "::error::$GITHUB_SHA は origin のどのブランチにも無い。ブランチを push してからタグを打つ"
+              exit 1
+            fi
+            echo "beta: $GITHUB_SHA を含む origin のブランチ:"
+            echo "$branches"
+            echo "- ブランチ: $(echo $branches)" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: 同じコミットの CI が緑
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # ci.yml は main への push で回る。まだ走っていれば待つ（最大 50 分）。
+          # ci.yml は main への push と手での実行（gh workflow run CI --ref <branch>）で回る。まだ走っていれば待つ（最大 50 分）。
           # push 直後は run がまだ無いことがあるので、空のうちは 5 回まで待つ。
           for i in $(seq 1 50); do
             runs=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
@@ -152,7 +173,7 @@ jobs:
             echo "CI が走っている。60 秒待つ"
             sleep 60
           done
-          echo "::error::$GITHUB_SHA の CI（ci.yml）に成功した回が無い。CI が緑になった main のコミットにタグを打つ"
+          echo "::error::$GITHUB_SHA の CI（ci.yml）に成功した回が無い。CI が緑になったコミットにタグを打つ（main 以外は gh workflow run CI --ref <branch>）"
           exit 1
 
   release:
@@ -463,7 +484,7 @@ jobs:
             if [ "$DRY_RUN" = true ]; then
               echo "- 上げていない。上げるのは tf-* のタグ（beta）か、dry_run を外した手動の回"
             else
-              echo "- 次は本人が手で: 外部テスターへの追加・版に結ぶ・審査へ出す（Tools/asc.py）"
+              echo "- 次: beta は Actions の ASC ops（op=beta-submit）で外部テストの審査へ。store は本人が手で版に結んで審査へ（Tools/asc.py）"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: ログを残す
