@@ -253,7 +253,7 @@ enum ETOutputCorrectionPolicy {
 
 // MARK: - 共有
 
-/// 鎖の下の行を開いたときに並べる 1 行。読むだけ（カードも操作も無い）。
+/// プリセットの中身の 1 行（名前だけ）。出力補正のシートの行の中身の要約（summary）がこれから組む。
 struct ETOutputCorrectionLine: Equatable, Identifiable {
     /// 並びの中の位置（終端を除いた通し番号）。
     let id: Int
@@ -285,6 +285,22 @@ enum ETOutputCorrectionForm {
             }
         }
         return out
+    }
+
+    /// 出力補正のシートの出力先の行に出す 1 行。エフェクトの名前だけを " · " でつなぐ。
+    /// Section の見出しは入れない（名前の並びで中身を見分けるための行で、組の形までは要らない）。
+    static func summary(_ items: [PipelineStore.Loaded]) -> String {
+        lines(items).filter { !$0.isSection }.map(\.name).joined(separator: " · ")
+    }
+
+    /// 選ぶ画面に並べるフォルダ。Presets のシートの User Presets と同じ束ね方・同じ順
+    /// （フォルダに入っていないものが先頭、あとはフォルダの名前順。中の並びは渡された順のまま）。
+    /// 別の順にすると、Presets で見慣れた場所に同じプリセットが無くなる。
+    static func presetFolders(_ names: [String]) -> [(name: String, items: [String])] {
+        ETUserPresetName.folders(names).sorted { a, b in
+            if a.name.isEmpty != b.name.isEmpty { return a.name.isEmpty }
+            return a.name < b.name
+        }
     }
 
     /// main + 補正を、受け手が普通の鎖として開ける1本にする。

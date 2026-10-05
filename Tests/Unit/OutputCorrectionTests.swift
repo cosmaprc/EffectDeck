@@ -603,4 +603,25 @@ final class OutputCorrectionTests: XCTestCase {
             ETOutputCorrectionLine(id: 1, name: vol.spec.name, isSection: false, indented: true),
         ])
     }
+
+    // MARK: - シートの行
+
+    /// エフェクトの名前だけを " · " でつなぐ。Section の見出しと終端は入れない。
+    func testSummaryJoinsEffectNamesOnly() throws {
+        let peq = try effect("FifteenBandPEQPlugin")
+        let vol = try effect()
+        XCTAssertEqual(ETOutputCorrectionForm.summary([section("Room"), peq, rootReset(), vol]),
+                       "\(peq.spec.name) · \(vol.spec.name)")
+        XCTAssertEqual(ETOutputCorrectionForm.summary([]), "")
+        XCTAssertEqual(ETOutputCorrectionForm.summary([section("Room")]), "")
+    }
+
+    /// フォルダに入っていないものが先頭、あとはフォルダの名前順。中は渡された順のまま。
+    func testPresetFoldersLooseFirstThenByName() {
+        let folders = ETOutputCorrectionForm.presetFolders(
+            ["Rock/Heavy", "Flat", "IEM/B", "IEM/A", "Bass"])
+        XCTAssertEqual(folders.map { $0.name }, ["", "IEM", "Rock"])
+        XCTAssertEqual(folders.map { $0.items }, [["Flat", "Bass"], ["IEM/B", "IEM/A"], ["Rock/Heavy"]])
+        XCTAssertTrue(ETOutputCorrectionForm.presetFolders([]).isEmpty)
+    }
 }

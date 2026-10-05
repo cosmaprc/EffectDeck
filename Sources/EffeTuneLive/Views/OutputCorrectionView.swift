@@ -1,10 +1,13 @@
 //  OutputCorrectionView.swift
-//  出力補正（Output Correction）専用のシート。鎖の下の出力補正の行を押すと開く。
+//  出力補正（Output Correction）専用のシート。鎖の下の出力補正の行と、ツールバーの ⋯ から開く。
 //
 //  前は Presets のシートを丸ごと開き、その中の節で選ばせていた。そこではプリセットの行を押すと
 //  鎖ごと読み込まれる（Presets の本来の動き）ので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
-//  **ここには main の鎖へ何かを読み込む操作を置かない。**できるのは入切と、出力先ごとの紐付けだけ。
-//  紐付けを選ぶ場所はここ 1 か所（Presets からは節を外した）。
+//  **ここには main の鎖へ何かを読み込む操作を置かない。**できるのは出力先ごとの紐付けだけ。
+//  入切は鎖の下の行の電源が持つ（ここに同じスイッチを並べると、題と同じ字の行が 1 つ増えるだけになる）。
+//
+//  行は「どの出力先にどの補正か」を読む場所なので、目立つ字はプリセットの名前にし、出力先は 2 行目に置く。
+//  前は Picker の行で、出力先が見出し・プリセットが右端の小さな灰色の字になっていた。
 //
 //  **AudioIO は観測しない**（3.3Hz で publish する）。いまの出力先も紐付けも
 //  OutputCorrection が publish しているものを読む。
@@ -27,45 +30,38 @@ struct OutputCorrectionView: View {
     /// いま使っている出力先。まだ落ち着いた出力先が無い・リモート中は nil。
     private var current: ETOutputCorrectionDevice? { isRemote ? nil : oc.device }
 
-    /// いまの出力先以外で、紐付けてある出力先。
-    private var others: [ETOutputCorrectionBinding] {
+    /// 並べる出力先。いまの出力先を先頭に（紐付けが無くても出す。選ぶのはたいていここ）、
+    /// 続けて紐付けてある他の出力先（紐付けの無い他の出力先は覚えていないので出せない）。
+    private var devices: [ETOutputCorrectionDevice] {
         let key = current?.key
-        return oc.bindings.filter { $0.key != key }
+        let others = oc.bindings.filter { $0.key != key }
+            .map { ETOutputCorrectionDevice(key: $0.key, name: $0.name, kind: $0.kind) }
+        return (current.map { [$0] } ?? []) + others
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    // 鎖の下の行のトグルと同じもの。
-                    Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
-                }
-
-                // 使う出力先が無いときは節ごと出さない（選んでも紐付ける先が無い）。
-                if let d = current {
-                    Section("In use") {
-                        presetPicker(d)
-                        // 紐付けたプリセットの中身（名前だけ・読むだけ）。鎖の下の行を開いたときと同じもの。
-                        // oc.contents はいまの出力先の分だけなので、この節にだけ出す。
-                        ForEach(oc.contents) { line in
-                            Text(line.name)
-                                .font(line.isSection ? Font.subheadline.weight(.semibold) : Font.subheadline)
-                                .foregroundStyle(line.isSection ? .secondary : .primary)
-                                .lineLimit(1)
-                                .padding(.leading, line.indented ? 14 : 0)
-                        }
+                    if devices.isEmpty {
+                        // 出力先がまだ 1 つも落ち着いていない。並べるものが無いことだけを出す。
+                        Text("No output device")
+                            .foregroundStyle(.secondary)
                     }
-                }
-
-                if !others.isEmpty {
-                    Section("Other devices") {
-                        ForEach(others, id: \.key) { b in
-                            let d = ETOutputCorrectionDevice(key: b.key, name: b.name, kind: b.kind)
-                            presetPicker(d)
-                                // 外すと紐付けが消え、行ごと無くなる（None を選んだのと同じ）。
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button("Remove", role: .destructive) { oc.bind(d, preset: nil) }
-                                }
+                    ForEach(devices, id: \.key) { d in
+                        let isCurrent = d.key == current?.key
+                        NavigationLink {
+                            OutputCorrectionChooser(oc: oc, store: store, device: d,
+                                                    removable: !isCurrent)
+                        } label: {
+                            deviceRow(d, isCurrent: isCurrent)
+                        }
+                        // いまの出力先以外は紐付けがあるから並んでいる。外すと行ごと無くなる
+                        // （選ぶ画面の Remove・None と同じ）。いまの出力先は外しても行が残るので、None で選び直す。
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if !isCurrent {
+                                Button("Remove", role: .destructive) { oc.bind(d, preset: nil) }
+                            }
                         }
                     }
                 }
@@ -78,16 +74,113 @@ struct OutputCorrectionView: View {
         }
     }
 
-    /// 出力先 1 つの Picker。標準の Picker を押して別の画面で選ぶ。名前は保存してあるまま（フォルダ/名前）。
-    /// 選ぶのは紐付けだけで、main の鎖には触らない。切のときも選べる（鳴らすのは入のときだけ）。
-    private func presetPicker(_ d: ETOutputCorrectionDevice) -> some View {
-        Picker(selection: Binding(get: { oc.preset(for: d.key) },
-                                  set: { oc.bind(d, preset: $0) })) {
-            Text("None").tag(String?.none)
-            ForEach(store.names, id: \.self) { Text($0).tag(String?.some($0)) }
-        } label: {
-            Label(d.name, systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
+    /// 出力先 1 台の行。1 行目がプリセット（無ければ灰色の None）、2 行目が出力先、
+    /// 紐付けがあれば 3 行目に中身のエフェクトの名前。いまの出力先には右に In use。
+    private func deviceRow(_ d: ETOutputCorrectionDevice, isCurrent: Bool) -> some View {
+        let preset = oc.preset(for: d.key)
+        // 中身は PresetStore の形をその場で読む。oc.bindings は名前だけなので、上書きにも付いていく
+        // （PresetStore は書くたびに publish するので、この画面も読み直される）。
+        let summary = preset.map { ETOutputCorrectionForm.summary(store.load($0)) } ?? ""
+        return HStack(spacing: 12) {
+            Image(systemName: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 30)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let preset {
+                    Text(ETUserPresetName.leaf(preset))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                } else {
+                    Text("None")
+                        .foregroundStyle(.secondary)
+                }
+                Text(d.name)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            // 状態の札。説明ではなく、どの行がいま鳴っている出力先かを示す。
+            if isCurrent {
+                Text("In use")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .pickerStyle(.navigationLink)
+    }
+}
+
+/// 出力先 1 台のプリセットを選ぶ画面。None を先頭に、ユーザープリセットを Presets のシートと同じ
+/// フォルダの束ね方で並べる（前は `フォルダ/名前` の字を 1 本の平らな一覧に並べていて、探しにくかった）。
+/// 選ぶと紐付けて戻る。選ぶのは紐付けだけで、main の鎖には触らない。切のときも選べる（鳴らすのは入のときだけ）。
+private struct OutputCorrectionChooser: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var oc: OutputCorrection
+    @ObservedObject var store: PresetStore
+    let device: ETOutputCorrectionDevice
+    /// いまの出力先でないとき。外すと一覧から行ごと消えるので、None とは別に Remove を置く。
+    let removable: Bool
+
+    var body: some View {
+        let selected = oc.preset(for: device.key)
+        List {
+            Section {
+                choice("None", isSelected: selected == nil) { pick(nil) }
+            }
+            ForEach(ETOutputCorrectionForm.presetFolders(store.names), id: \.name) { folder in
+                Section {
+                    ForEach(folder.items, id: \.self) { full in
+                        choice(ETUserPresetName.leaf(full), isSelected: selected == full) { pick(full) }
+                    }
+                } header: {
+                    // フォルダに入っていないものは見出しを付けない（Presets でも見出しの上に並ぶ）。
+                    if !folder.name.isEmpty { Text(folder.name) }
+                }
+            }
+            if removable && selected != nil {
+                Section {
+                    Button("Remove", role: .destructive) { pick(nil) }
+                }
+            }
+        }
+        .navigationTitle(device.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// 選べる 1 行。選んでいるものに印。
+    private func choice(_ title: String, isSelected: Bool,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// 紐付けて（nil なら外して）戻る。
+    private func pick(_ preset: String?) {
+        oc.bind(device, preset: preset)
+        dismiss()
     }
 }

@@ -31,9 +31,8 @@ final class OutputCorrection: ObservableObject {
     /// 落ち着いた出力先。鎖の下の行に名前を出す。
     @Published private(set) var device: ETOutputCorrectionDevice?
     /// 出力先ごとの紐付け（在るプリセットのものだけ）。鎖の下の行と出力補正のシート（OutputCorrectionView）が読む。
+    /// プリセットの中身はここでは持たない。シートが出力先ごとに PresetStore から読む（全部の出力先の分が要るので）。
     @Published private(set) var bindings: [ETOutputCorrectionBinding] = []
-    /// いまの出力先に紐付けたプリセットの中身（名前だけ）。鎖の下の行を開くと並ぶ。入切に関わらず出す。
-    @Published private(set) var contents: [ETOutputCorrectionLine] = []
 
     /// PC の鎖を編集している間（RemoteMirror が知らせる）。補正は外す。
     private var remote = false
@@ -54,8 +53,6 @@ final class OutputCorrection: ObservableObject {
         isOn = core.isOn
         device = core.currentDevice
         bindings = core.bindings(existing: Set(presets.names))
-        // PipelineStore.parse は Foundation だけで、AudioIO にも EffeTuneDSP にも触らない。
-        refreshContents()
     }
 
     /// その出力先に紐付けたプリセットの名前（保存してあるまま。`フォルダ/名前`）。無ければ nil。
@@ -63,7 +60,7 @@ final class OutputCorrection: ObservableObject {
 
     // MARK: - 起きたこと
 
-    /// 層の入切。鎖の下の行のトグルから。
+    /// 層の入切。鎖の下の行の電源から。
     func setOn(_ on: Bool) {
         guard on != isOn else { return }
         core.setOn(on)
@@ -92,7 +89,7 @@ final class OutputCorrection: ObservableObject {
         refreshBindings()
     }
 
-    /// 出力先にプリセットを紐付ける。nil なら外す。出力補正のシート（OutputCorrectionView）の Picker から。
+    /// 出力先にプリセットを紐付ける。nil なら外す。出力補正のシート（OutputCorrectionView）の選ぶ画面から。
     /// 切のときは書くだけ（鳴らすのは入のときだけ）。
     func bind(_ d: ETOutputCorrectionDevice, preset: String?) {
         core.bind(d, preset: preset)
@@ -126,17 +123,6 @@ final class OutputCorrection: ObservableObject {
     private func refreshBindings() {
         let next = core.bindings(existing: Set(presets.names))
         if next != bindings { bindings = next }
-        refreshContents()
-    }
-
-    /// 中身の行を読み直す。変わったときだけ出し直す。
-    private func refreshContents() {
-        var items: [PipelineStore.Loaded] = []
-        if let d = device, let name = preset(for: d.key), let form = presets.form(named: name) {
-            items = PipelineStore.parse(form, catalog: ETCatalog)
-        }
-        let next = ETOutputCorrectionForm.lines(items)
-        if next != contents { contents = next }
     }
 
     private func reconcile(cause: String, always: Bool = false) {

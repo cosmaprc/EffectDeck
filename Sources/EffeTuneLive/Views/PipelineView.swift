@@ -53,7 +53,7 @@ struct PipelineView: View {
         case picker, settings, routing, presets, ir, tips
         /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
         case remote
-        /// 出力補正の専用シート（鎖の下の出力補正の行から。OutputCorrectionView.swift）。
+        /// 出力補正の専用シート（鎖の下の出力補正の行と、ツールバーの ⋯ から。OutputCorrectionView.swift）。
         /// Presets を開くと、行を押しただけで鎖ごと読み込まれてしまうので分けた。
         case outputCorrection
         var id: String { rawValue }
@@ -113,6 +113,10 @@ struct PipelineView: View {
     /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
     @State private var isRemote = false
     @State private var processingRate: Double = 48000
+    /// いまの出力先と、それに紐付けたプリセット。紐付けが無ければ nil で、鎖の下の出力補正の行を出さない。
+    /// **OutputCorrection を丸ごと観測しない。**この画面は大きいので、行を出すかどうかと
+    /// 行の字に要る値だけを写す（io と同じやり方）。入切は行が自分で観測する。
+    @State private var correctionBound: ETOutputCorrectionBinding?
 
     // MARK: - 並べ方（1列/2列）
     //
@@ -382,6 +386,15 @@ struct PipelineView: View {
             isRemote = remote
         }
         .onReceive(io.$processingRate) { processingRate = $0 }
+        // @Published の publisher は書き換わる前に新しい値を流すので、oc の側は読まず流れてきた値で組む。
+        .onReceive(OutputCorrection.shared.$device.combineLatest(OutputCorrection.shared.$bindings)) { device, bindings in
+            var next: ETOutputCorrectionBinding?
+            if let d = device, let b = bindings.first(where: { $0.key == d.key }) {
+                // 名前と種類はいまの出力先のもの（紐付けに残っているのは最後に見た名前）。
+                next = ETOutputCorrectionBinding(key: d.key, name: d.name, kind: d.kind, preset: b.preset)
+            }
+            if correctionBound != next { correctionBound = next }
+        }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
         // 鎖の並び。左の一覧の「右で一番上のカード」と、足したカードを見せるのに使う。
@@ -999,9 +1012,12 @@ struct PipelineView: View {
 
             // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは専用のシートで選ぶ（押すと開く）。
             // Presets は開かない。あちらは行を押すと鎖ごと読み込むので、補正を選ぶつもりで鎖を置き換えてしまう。
+            // **いまの出力先に紐付けがあるときだけ出す。**無いときに出しても None と入切しか無い行になる。
+            // 紐付けはツールバーの ⋯ の Output Correction… から始める。
             // PC の鎖を編集している間は出さない（補正も外してある）。
-            if !isRemote {
-                OutputCorrectionRow(oc: OutputCorrection.shared, open: { presentSheet(.outputCorrection) })
+            if !isRemote, let bound = correctionBound {
+                OutputCorrectionRow(oc: OutputCorrection.shared, bound: bound,
+                                    open: { presentSheet(.outputCorrection) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 5)
                     // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
@@ -1967,6 +1983,9 @@ private struct PipelineToolbar: ToolbarContent {
             Menu {
                 Button("Settings", systemImage: "gearshape") { present(.settings) }
                 Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
+                // 紐付けが無い間は鎖の下に出力補正の行が出ないので、最初の紐付けはここから。
+                // 行が出ている間も同じシートを開ける（他の出力先の紐付けを見直す口）。
+                Button("Output Correction…", systemImage: "headphones") { present(.outputCorrection) }
                 Divider()
                 // 上流に鎖を空にする操作は無く、既定を組む所を
                 // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
@@ -2252,73 +2271,70 @@ private struct EmptyChainRow: View {
     }
 }
 
-/// 出力補正の 1 行。入切と、いまの出力先・それに紐付けたプリセット。
-/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。押すと出力補正のシートを開く。
-/// 開くと紐付けたプリセットの中身を名前だけ並べる（読むだけ）。
+/// 出力補正の 1 行。**エフェクトのカードの頭と同じ形にする**（左に電源、名前と小さい行、右端に印）。
+/// 前は札の枠・iOS のスイッチ・開閉の 3 つの作法が 1 行に混ざり、大事な「どの出力先にどの補正か」が
+/// 小さな灰色の字だった。鎖の札の仲間に見えるように、電源・字の大きさ・間隔・切のときの沈み方を
+/// EffectCardView の頭（header）に揃える。
+///
+/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。電源以外のどこを押しても出力補正のシートを開く。
+/// 出すのはいまの出力先に紐付けがあるときだけ（PipelineView が決めて bound を渡す）。
 private struct OutputCorrectionRow: View {
+    /// 入切だけを読む。紐付けは bound で受け取る。
     @ObservedObject var oc: OutputCorrection
+    /// いまの出力先と、紐付けたプリセット（保存してあるまま。`フォルダ/名前`）。
+    let bound: ETOutputCorrectionBinding
     let open: () -> Void
-
-    /// 中身を開いているか。覚えない。
-    @State private var showsContents = false
-
-    /// 中身のうちエフェクトの数（Section の見出しは数えない）。
-    private var effectCount: Int { oc.contents.filter { !$0.isSection }.count }
 
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    Button(action: open) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Output Correction")
-                                .font(.system(size: 15, weight: .semibold))
+            // 間隔と余白はエフェクトの頭と同じ（EffectCardView.header）。
+            HStack(spacing: 6) {
+                // エフェクトのカードと同じ電源。切ると補正が外れる（出力先ごとではなく層ぜんぶ）。
+                Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
+                    .toggleStyle(.power)
+                    .labelsHidden()
+                    .accessibilityLabel("Output Correction")
+
+                // 電源の外は全部、シートを開く 1 つのボタン。縦の余白もボタンの中に入れて、
+                // 行の上下の端を押しても開くようにする（カードの頭は行ぜんぶが押し所なので揃える）。
+                Button(action: open) {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(ETUserPresetName.leaf(bound.preset))
+                                .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(.primary)
-                            if let d = oc.device {
-                                Label("\(d.name) · \(oc.preset(for: d.key) ?? "None")",
-                                      systemImage: ETOutputDevice.Kind(rawValue: d.kind)?.symbol ?? "speaker")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            } else {
-                                Text("No output device")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            // エフェクトのカードで種別が出る行。ここではどの出力先の補正かを出す。
+                            Label(bound.name,
+                                  systemImage: ETOutputDevice.Kind(rawValue: bound.kind)?.symbol ?? "speaker")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
 
-                    Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
-                        .labelsHidden()
-                }
+                        Spacer(minLength: 4)
 
-                // 紐付けたプリセットの中身。入切の行の下に開く（開いても入切の位置は動かない）。
-                // 出力先が無い・紐付けが無い・読める段が無いときは出さない。
-                if !oc.contents.isEmpty {
-                    DisclosureGroup(isExpanded: $showsContents) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(oc.contents) { line in
-                                Text(line.name)
-                                    .font(.system(size: 13, weight: line.isSection ? .semibold : .regular))
-                                    .foregroundStyle(line.isSection ? .secondary : .primary)
-                                    .lineLimit(1)
-                                    .padding(.leading, line.indented ? 14 : 0)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                        .padding(.top, 6)
-                    } label: {
-                        Text("^[\(effectCount) effect](inflect: true)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                        // カードの ⋯ と同じ位置・大きさ・色。**灰色にしない。**カードの開閉の印は
+                        // 畳んでいる間、灰色の右向きの山形なので、同じ色だと「開くと中身が出る」と読める。
+                        // こちらは別の画面へ進む印。
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.tint)
+                            .frame(width: 34, height: 34)
+                            .accessibilityHidden(true)
                     }
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Output Correction, \(ETUserPresetName.leaf(bound.preset)), \(bound.name)")
             }
-            .padding(14)
+            .padding(.leading, 2)
+            .padding(.trailing, 4)
         }
+        // 切のときはバイパスしたエフェクトのカードと同じだけ沈める。
+        .opacity(oc.isOn ? 1 : 0.55)
     }
 }
 
