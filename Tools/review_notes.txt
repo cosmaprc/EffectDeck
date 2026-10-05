@@ -26,8 +26,8 @@ are only added to the Plugins list. They are not added to the chain and do not
 run until the user adds them. A chain link (https://effectdeck.nemut.ai/?p=...)
 carries no script source; it can only use scripts already imported on the
 device.
-Write JSFX with ChatGPT (Plugins) and Build with ChatGPT... (Effects, or an
-empty chain) only open a chatgpt.com link (the ChatGPT app if installed,
+Write JSFX with ChatGPT (Plugins) and Build with ChatGPT... (Effects) only
+open a chatgpt.com link (the ChatGPT app if installed,
 otherwise the browser) that carries a short request. The app sends nothing else
 to ChatGPT.
 The user imports a returned script with From Files or From Clipboard. A returned

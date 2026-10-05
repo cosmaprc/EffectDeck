@@ -857,8 +857,7 @@ struct PipelineView: View {
                 // 背面（下の .background）の口は ScrollView の後ろに居て、中身の上で放したものは
                 // そこまで届かない（実機で、空の鎖にだけ落ちなかった）。余白ごと受けるように、
                 // 口は padding の外側に付け、Color.clear と同じく contentShape で面を持たせる。
-                EmptyChainRow(add: { presentPicker() },
-                              buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
+                EmptyChainRow(add: { presentPicker() })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity)
@@ -963,6 +962,10 @@ struct PipelineView: View {
                         // **ピッカーからつまんだものを受ける。**
                         // カードには何も足さない。落ちたときだけ効く。
                         // 落とした段の手前に入れる（上流の並べ替えと同じ向き）。
+                        // **カードの周りの余白（左右の 14・上下の隙間）もこの行の口にする。**
+                        // contentShape が無いと透明な余白は当たりを取らず、カードの脇や
+                        // カードとカードの間に落としたものがどこにも入らなかった（DropProbe）。
+                        .contentShape(Rectangle())
                         .dropDestination(for: String.self) { items, _ in
                             guard let type = items.first else { return false }
                             return addDropped(type, at: row.index)
@@ -994,6 +997,16 @@ struct PipelineView: View {
             }
             .coordinateSpace(name: Self.contentSpace)
             .modifier(ETDetailColumn(split: split, brake: brake))
+            // **中身の全面を最後の口にする。**行・空の表示・末尾の帯が受けなかった所（2列の両脇の
+            // 広い余白など）はここへ来て、鎖の末尾へ足す。下の .background の口は ScrollView の
+            // 後ろに居る兄弟で、中身の上で放したものは届かない。だから余白の口は中身の側に置く。
+            // **ここは何度も壊れている。**受けるべき所: カードの上・カードの脇と間・最後の下・
+            // 両脇の余白・空の鎖。Tests/UI/DropProbe.swift が全部を落として確かめる。
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                guard let type = items.first else { return false }
+                return addDropped(type, at: nil)
+            }
         }
         // 触れたら戻す先の覚えを外す。そこから先は人が読む位置を決める。
         .onScrollPhaseChange { _, phase in
@@ -2144,8 +2157,6 @@ private struct BypassBanner: View {
 
 private struct EmptyChainRow: View {
     let add: () -> Void
-    /// ChatGPT に鎖を組ませる依頼を開く。Add Effect の脇の 2 番目のボタン。
-    let buildWithChatGPT: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -2154,29 +2165,11 @@ private struct EmptyChainRow: View {
                 .foregroundStyle(.secondary)
             Text("No effects")
                 .font(.system(size: 16, weight: .semibold))
-            // **主は Add Effect、ChatGPT は脇役。**横に並べて入らない幅（2 列の細い側）では縦に積む。
-            // 返ってきた鎖はクリップボードから鎖として読み込まれる（ClipboardBanner）。
-            // 中国本土の店では 2 番目を出さない（ETStorefrontGate）。
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { addButton; chatGPTButton }
-                VStack(spacing: 8) { addButton; chatGPTButton }
-            }
-            .padding(.top, 2)
+            Button("Add Effect", action: add)
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private var addButton: some View {
-        Button("Add Effect", action: add)
-            .buttonStyle(.borderedProminent)
-    }
-
-    @ViewBuilder
-    private var chatGPTButton: some View {
-        if ETStorefrontGate.shared.allowsChatGPT {
-            Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
-                .buttonStyle(.bordered)
-        }
     }
 }
 
