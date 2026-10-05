@@ -170,11 +170,14 @@ private struct OutputCorrectionChooser: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .fontWeight(.semibold)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
             .contentShape(Rectangle())
         }
+        // **List の中の Button は字を tint で塗る**（中の Text に .primary を付けても負ける）。
+        // 全部が青いとリンクの並びに見えるので、tint を字の色にして、印だけアクセントの色を名指しする。
+        .tint(.primary)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
