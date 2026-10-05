@@ -935,6 +935,12 @@ struct PipelineView: View {
                         .onGeometryChange(for: CGRect.self) {
                             $0.frame(in: .named(Self.chainSpace))
                         } action: { measured(row.node.id, $0) }
+                        // **消えた行は高さの合計から外す。**残すと、カードを消したり Reset chain した後も
+                        // 消えた行の高さが合計に入ったままになり、末尾の帯（tailHeight = 器 − 行の合計）が
+                        // 最小の 96pt まで縮む。帯の下は背面の口にも届かないので、末尾と空の鎖の余白に
+                        // 落としても入らなかった（9/20 に帯を画面の底まで伸ばして直した所が、これで死んでいた）。
+                        // VStack（Lazy でない）なので、消えるのは鎖から外れたか畳んで隠れたときだけ。
+                        .onDisappear { unmeasured(row.node.id) }
                         // 中身の中での上端。送っても変わらず、上の行の高さが変わったときだけ来る。
                         // 使うのは2列の右だけ。
                         .onGeometryChange(for: CGFloat.self) {
