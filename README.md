@@ -133,7 +133,7 @@ It describes only the differences, not the language. For JSFX itself, read
 REAPER's *JS: Programming Reference* and [JoepVanlier/ysfx](https://github.com/JoepVanlier/ysfx),
 which is the interpreter embedded here.
 
-**Build with ChatGPT…** (the ⋯ menu above the chain, or the empty chain) opens ChatGPT the same way, for a chain of the
+**Build with ChatGPT…** (the top of the Effects list in Available Effects, or the empty chain) opens ChatGPT the same way, for a chain of the
 built-in effects instead of a script. [`CHAIN.md`](CHAIN.md) is its contract; the effect
 names and keys it points to are generated for each EffeTune DSP version under
 [`chain/`](chain/). Bring the chain back with **Import from clipboard** in

@@ -14,6 +14,8 @@ import UIKit
 struct PresetsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var dsp: EffeTuneDSP
+    /// PC の鎖を編集している間（PipelineView が渡す）。Output Correction の画面へそのまま渡す。
+    var isRemote: Bool = false
     @StateObject private var store = PresetStore.shared
 
     @State private var newName = ""
@@ -251,8 +253,7 @@ struct PresetsView: View {
         NavigationStack {
             List {
                 saveSection
-                // 出力補正の紐付けはここに置かない（OutputCorrectionView.swift）。この画面は行を押すと
-                // 鎖ごと読み込むので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
+                outputCorrectionSection
                 userSection
                 systemSection
                 webSection
@@ -343,6 +344,23 @@ struct PresetsView: View {
     }
 
     // MARK: - 節
+
+    /// 出力補正への入口。**押して別の画面へ進むだけで、ここでは何も読み込まない。**
+    /// 前はこの画面の節で直に選ばせていて、プリセットの行を押すと鎖ごと読み込まれる
+    /// （この画面の本来の動き）ので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
+    /// 選ぶ所は OutputCorrectionList（OutputCorrectionView.swift）で、main の鎖には触らない。
+    /// 補正の中身はユーザープリセットなので、口はプリセットのシートに置く（⋯ のメニューではなく）。
+    /// 紐付けが無いと鎖の下の出力補正の行が出ないので、最初の紐付けはここから始める。
+    /// Save のすぐ下に、自分だけの節で置く（プリセットの一覧に混ぜると、押すと読み込む行に見える）。
+    private var outputCorrectionSection: some View {
+        Section {
+            NavigationLink {
+                OutputCorrectionList(isRemote: isRemote)
+            } label: {
+                Label("Output Correction", systemImage: "headphones")
+            }
+        }
+    }
 
     private var saveSection: some View {
         Section {
@@ -700,7 +718,7 @@ struct PresetsView: View {
             }
             // 鎖を ChatGPT に組ませる口（Build with ChatGPT…）はプリセットの口ではない。結果は
             // プリセットとして保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner）ので、
-            // 鎖の口（ツールバーの ⋯ と、空の鎖の表示）に置いてある。
+            // エフェクト一覧（Available Effects）の Effects の面の頭と、空の鎖の表示に置いてある。
             // ここは共有するための節で、デスクトップの EffeTune も共有リンクを開くので "Share" と呼ぶ。
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、

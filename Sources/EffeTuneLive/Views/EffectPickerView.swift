@@ -304,34 +304,9 @@ struct EffectPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                if pane == .plugins && ETJSFXHost.isEnabled {
-                    ToolbarItem(placement: .primaryAction) {
-                        Menu {
-                            Button("From Files", systemImage: "folder") {
-                                importingJSFX = true
-                            }
-                            // **リンクからも入れられる。**GitHub の画面の URL を
-                            // そのまま貼れる（ETRemoteFile が raw へ読み替える）。
-                            Button("From Link", systemImage: "link") {
-                                linkText = UIPasteboard.general.string ?? ""
-                                alert = .link
-                            }
-                            // ChatGPTが書いたものをコピーして戻ってきたとき。
-                            Button("From Clipboard", systemImage: "doc.on.clipboard") {
-                                importClipboard()
-                            }
-                            // 中国本土の店では出さない（ETStorefrontGate）。
-                            if ETStorefrontGate.shared.allowsChatGPT {
-                                Divider()
-                                Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
-                                    openURL(Self.writeJSFX)
-                                }
-                            }
-                        } label: {
-                            Label("Import JSFX", systemImage: "square.and.arrow.down")
-                        }
-                    }
-                }
+                // **右上には何も置かない。**Import JSFX の Menu は前はここ（Plugins の面のときだけ）に
+                // 出していたが、「pluginsのシートの右上にボタンがあるのは変」。面ごとに右上が出たり
+                // 消えたりもする。Plugins の面の一覧の頭の行へ移した（jsfxImportMenu）。
             }
             .fileImporter(isPresented: $importingJSFX,
                           allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
@@ -443,6 +418,16 @@ struct EffectPickerView: View {
     private var allSections: some View {
         ScrollViewReader { proxy in
             List {
+                // **鎖を ChatGPT に組ませる口は、エフェクトを選ぶシートの中身に置く。**返ってくるのは
+                // 内蔵のエフェクトの鎖なので、エフェクトを探しに来た所の頭が持ち主。⋯ のメニューや
+                // ツールバー（右上）には置かない（「…のメニューに置くのは変」）。Presets の面には置かない
+                // （返った鎖はプリセットとして保存されず、クリップボードから鎖として読み込まれる。ClipboardBanner）。
+                // 説明は足さず、札だけ置く。中国本土の店では出さない（ETStorefrontGate）。
+                if ETStorefrontGate.shared.allowsChatGPT {
+                    Button("Build with ChatGPT…", systemImage: "sparkles") {
+                        openURL(Self.buildChain)
+                    }
+                }
                 if !newEffects.isEmpty {
                     Section {
                         ForEach(Array(newEffects.enumerated()), id: \.element.id) { offset, effect in
@@ -485,6 +470,37 @@ struct EffectPickerView: View {
         }
     }
 
+    /// JSFX を取り込む Menu。Plugins の面の一覧の頭の行（と、空の面の表示）に置く。
+    /// 前は右上のツールバーにあったが、「pluginsのシートの右上にボタンがあるのは変」で中身の側へ移した。
+    /// 押した後の fileImporter と .alert（From Link・失敗の知らせ）は body の NavigationStack の中身に
+    /// 付けてあるので、どこから出しても同じものが開く。
+    private var jsfxImportMenu: some View {
+        Menu {
+            Button("From Files", systemImage: "folder") {
+                importingJSFX = true
+            }
+            // **リンクからも入れられる。**GitHub の画面の URL を
+            // そのまま貼れる（ETRemoteFile が raw へ読み替える）。
+            Button("From Link", systemImage: "link") {
+                linkText = UIPasteboard.general.string ?? ""
+                alert = .link
+            }
+            // ChatGPTが書いたものをコピーして戻ってきたとき。
+            Button("From Clipboard", systemImage: "doc.on.clipboard") {
+                importClipboard()
+            }
+            // 中国本土の店では出さない（ETStorefrontGate）。
+            if ETStorefrontGate.shared.allowsChatGPT {
+                Divider()
+                Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
+                    openURL(Self.writeJSFX)
+                }
+            }
+        } label: {
+            Label("Import JSFX", systemImage: "square.and.arrow.down")
+        }
+    }
+
     private var pluginList: some View {
         Group {
             if au.entries.isEmpty && jsfx.entries.isEmpty {
@@ -492,9 +508,8 @@ struct EffectPickerView: View {
                     Label("No Plugins", systemImage: "waveform")
                 } actions: {
                     if ETJSFXHost.isEnabled {
-                        Button("Import JSFX", systemImage: "square.and.arrow.down") {
-                            importingJSFX = true
-                        }
+                        // 空のときも一覧の頭と同じ Menu（From Link・From Clipboard もここから）。
+                        jsfxImportMenu
                         if ETStorefrontGate.shared.allowsChatGPT {
                             Button("Write JSFX with ChatGPT", systemImage: "sparkles") {
                                 openURL(Self.writeJSFX)
@@ -509,9 +524,8 @@ struct EffectPickerView: View {
                         Divider()
                         List {
                             if ETJSFXHost.isEnabled {
-                                Button("Import JSFX", systemImage: "square.and.arrow.down") {
-                                    importingJSFX = true
-                                }
+                                // **取り込む口は一覧の頭の行。**右上のツールバーには置かない（jsfxImportMenu）。
+                                jsfxImportMenu
                                 // **書かせる道があることを、一覧の頭で見せる。**
                                 // JSFXは1枚のテキストなので、ChatGPTにJSFX.mdを
                                 // 読ませれば通るものが返ってくる。説明は足さず、札だけ置く。
@@ -1086,8 +1100,8 @@ struct EffectPickerView: View {
 
     /// 同じ形で、内蔵のエフェクトの鎖を組ませる依頼（CHAIN.md）。返ってきた鎖はプリセットとして
     /// 保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner・Presets → Import from clipboard）。
-    /// なので依頼を開くボタンはプリセットの面ではなく、鎖の口に置く（PipelineToolbarの⋯のBuild with ChatGPT…と、
-    /// 空の鎖の表示）。
+    /// なので依頼を開くボタンはプリセットの面ではなく、このシートのEffectsの面の頭（allSections）と
+    /// 空の鎖の表示（PipelineViewのEmptyChainRow）に置く。⋯のメニューには置かない。
     static let buildChain: URL = chatGPT(
         "Build an effect chain for \(requestVersion). " +
         "First read https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md " +

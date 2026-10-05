@@ -1,8 +1,15 @@
 //  OutputCorrectionView.swift
-//  出力補正（Output Correction）専用のシート。鎖の下の出力補正の行と、ツールバーの ⋯ から開く。
+//  出力補正（Output Correction）の画面。中身は 1 つ（OutputCorrectionList）で、出し方が 2 つある。
+//    - 鎖の下の出力補正の行から: 専用のシート（OutputCorrectionView。NavigationStack と Done を足す）
+//    - Presets のシートの Output Correction の行から: Presets の NavigationStack の中へ押して進む
+//      （OutputCorrectionList をそのまま。NavigationStack を入れ子にせず、Done も付けない。戻るのは < で）
+//  紐付けがまだ無いと鎖の下の行が出ないので、最初の紐付けは Presets から始める。
+//  前はツールバーの ⋯ にも口を置いていたが、「…のメニューに置くのは変」で外した。
+//  補正の中身はユーザープリセットなので、プリセットを扱うシートの中に口があるのが自然。
 //
-//  前は Presets のシートを丸ごと開き、その中の節で選ばせていた。そこではプリセットの行を押すと
+//  前は Presets のシートの中の節で直に選ばせていた。そこではプリセットの行を押すと
 //  鎖ごと読み込まれる（Presets の本来の動き）ので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
+//  いまは Presets から入っても別の画面へ進むだけで、押した時点では何も読み込まない。
 //  **ここには main の鎖へ何かを読み込む操作を置かない。**できるのは出力先ごとの紐付けだけ。
 //  入切は鎖の下の行の電源が持つ（ここに同じスイッチを並べると、題と同じ字の行が 1 つ増えるだけになる）。
 //
@@ -14,12 +21,34 @@
 
 import SwiftUI
 
+/// 専用のシートとして出す形（鎖の下の出力補正の行から）。中身に NavigationStack と Done を足すだけ。
 struct OutputCorrectionView: View {
     @Environment(\.dismiss) private var dismiss
+
+    /// PC の鎖を編集している間（PipelineView が渡す）。OutputCorrectionList へそのまま渡す。
+    let isRemote: Bool
+
+    init(isRemote: Bool = false) {
+        self.isRemote = isRemote
+    }
+
+    var body: some View {
+        NavigationStack {
+            OutputCorrectionList(isRemote: isRemote)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+        }
+    }
+}
+
+/// 出力補正の中身。**NavigationStack を持たない。**Presets のシートからはその NavigationStack の中へ
+/// 押して進む形で出すので、ここで包むと入れ子になる。題はここで付ける（どちらの出し方でも同じ）。
+struct OutputCorrectionList: View {
     @ObservedObject private var oc = OutputCorrection.shared
     @ObservedObject private var store = PresetStore.shared
 
-    /// PC の鎖を編集している間（PipelineView が渡す）。補正は外してあるので、
+    /// PC の鎖を編集している間（PipelineView・PresetsView が渡す）。補正は外してあるので、
     /// いまの出力先を「使っている」とは出さず、紐付けてあれば他の出力先と同じ並びに置く。
     let isRemote: Bool
 
@@ -40,38 +69,34 @@ struct OutputCorrectionView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    if devices.isEmpty {
-                        // 出力先がまだ 1 つも落ち着いていない。並べるものが無いことだけを出す。
-                        Text("No output device")
-                            .foregroundStyle(.secondary)
+        List {
+            Section {
+                if devices.isEmpty {
+                    // 出力先がまだ 1 つも落ち着いていない。並べるものが無いことだけを出す。
+                    Text("No output device")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(devices, id: \.key) { d in
+                    let isCurrent = d.key == current?.key
+                    // 選ぶ画面はさらに押して進む。どちらの出し方でも、外側の NavigationStack に積まれる。
+                    NavigationLink {
+                        OutputCorrectionChooser(oc: oc, store: store, device: d,
+                                                removable: !isCurrent)
+                    } label: {
+                        deviceRow(d, isCurrent: isCurrent)
                     }
-                    ForEach(devices, id: \.key) { d in
-                        let isCurrent = d.key == current?.key
-                        NavigationLink {
-                            OutputCorrectionChooser(oc: oc, store: store, device: d,
-                                                    removable: !isCurrent)
-                        } label: {
-                            deviceRow(d, isCurrent: isCurrent)
-                        }
-                        // いまの出力先以外は紐付けがあるから並んでいる。外すと行ごと無くなる
-                        // （選ぶ画面の Remove・None と同じ）。いまの出力先は外しても行が残るので、None で選び直す。
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            if !isCurrent {
-                                Button("Remove", role: .destructive) { oc.bind(d, preset: nil) }
-                            }
+                    // いまの出力先以外は紐付けがあるから並んでいる。外すと行ごと無くなる
+                    // （選ぶ画面の Remove・None と同じ）。いまの出力先は外しても行が残るので、None で選び直す。
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if !isCurrent {
+                            Button("Remove", role: .destructive) { oc.bind(d, preset: nil) }
                         }
                     }
                 }
             }
-            .navigationTitle("Output Correction")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-            }
         }
+        .navigationTitle("Output Correction")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// 出力先 1 台の行。1 行目がプリセット（無ければ灰色の None）、2 行目が出力先、
@@ -124,6 +149,7 @@ struct OutputCorrectionView: View {
 /// 出力先 1 台のプリセットを選ぶ画面。None を先頭に、ユーザープリセットを Presets のシートと同じ
 /// フォルダの束ね方で並べる（前は `フォルダ/名前` の字を 1 本の平らな一覧に並べていて、探しにくかった）。
 /// 選ぶと紐付けて戻る。選ぶのは紐付けだけで、main の鎖には触らない。切のときも選べる（鳴らすのは入のときだけ）。
+/// 戻るのは dismiss で、押して進んだ画面なので 1 段だけ戻る（Presets から入ったときも Presets のシートは閉じない）。
 private struct OutputCorrectionChooser: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var oc: OutputCorrection

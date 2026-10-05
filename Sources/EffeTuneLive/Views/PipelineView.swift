@@ -53,8 +53,9 @@ struct PipelineView: View {
         case picker, settings, routing, presets, ir, tips
         /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
         case remote
-        /// 出力補正の専用シート（鎖の下の出力補正の行と、ツールバーの ⋯ から。OutputCorrectionView.swift）。
-        /// Presets を開くと、行を押しただけで鎖ごと読み込まれてしまうので分けた。
+        /// 出力補正の専用シート（鎖の下の出力補正の行から。OutputCorrectionView.swift）。
+        /// Presets のシートを開かせると、行を押しただけで鎖ごと読み込まれてしまうので分けた。
+        /// 紐付けがまだ無いときの入口は Presets の Output Correction の行（同じ中身を押して進む形で出す）。
         case outputCorrection
         var id: String { rawValue }
     }
@@ -126,7 +127,7 @@ struct PipelineView: View {
     // 窓を狭めると、iPhoneで最後に置いた開閉のまま出る。
 
     @Environment(\.horizontalSizeClass) private var hSize
-    /// 鎖を ChatGPT に組ませる依頼を開く（ツールバーの ⋯ と空の鎖の表示。EffectPickerView.buildChain）。
+    /// 鎖を ChatGPT に組ませる依頼を開く（空の鎖の表示。EffectPickerView.buildChain）。
     @Environment(\.openURL) private var openURL
     /// 窓の幅が2列に足りるか。**640で立て、620を切るまで落とさない。**
     /// 1本の線にすると、Stage Managerで窓の端を引いているあいだ行き来する。
@@ -265,7 +266,7 @@ struct PipelineView: View {
             case .routing:
                 RoutingView(dsp: dsp)
             case .presets:
-                PresetsView(dsp: dsp)
+                PresetsView(dsp: dsp, isRemote: isRemote)
             case .ir:
                 IRLibraryView()
             case .remote:
@@ -514,8 +515,7 @@ struct PipelineView: View {
                         pickerAnchored: $pickerAnchored, pickerInSheet: $pickerInSheet,
                         pickerPane: $pickerPane, freshJSFX: $freshJSFX,
                         pickerOnScreen: $pickerOnScreen,
-                        pluginError: $pluginError, afterSheet: $afterSheet,
-                        buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
+                        pluginError: $pluginError, afterSheet: $afterSheet)
     }
 
     /// 根の.sheetに渡すもの。**2列ではピッカーを普通はここへ出さない。**+に付けたpopoverが出す。
@@ -1017,7 +1017,7 @@ struct PipelineView: View {
             // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは専用のシートで選ぶ（押すと開く）。
             // Presets は開かない。あちらは行を押すと鎖ごと読み込むので、補正を選ぶつもりで鎖を置き換えてしまう。
             // **いまの出力先に紐付けがあるときだけ出す。**無いときに出しても None と入切しか無い行になる。
-            // 紐付けはツールバーの ⋯ の Output Correction… から始める。
+            // 紐付けは Presets の Output Correction の行から始める（⋯ には置かない。⋯ は鎖全体の操作の口）。
             // PC の鎖を編集している間は出さない（補正も外してある）。
             if !isRemote, let bound = correctionBound {
                 VStack(spacing: 0) {
@@ -1864,8 +1864,6 @@ private struct PipelineToolbar: ToolbarContent {
     @Binding var pickerOnScreen: Bool
     @Binding var pluginError: String?
     @Binding var afterSheet: (() -> Void)?
-    /// ⋯ の Build with ChatGPT…。ToolbarContent は View でなく openURL を持てないので、親が開き方を渡す。
-    let buildWithChatGPT: () -> Void
 
     /// popoverを出しているか。中身はsheetの.pickerで、根の.sheetはそれを見ない（presentedSheet）。
     /// 親がシートで出したときは偽のまま。
@@ -2002,15 +2000,9 @@ private struct PipelineToolbar: ToolbarContent {
             Menu {
                 Button("Settings", systemImage: "gearshape") { present(.settings) }
                 Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
-                // 紐付けが無い間は鎖の下に出力補正の行が出ないので、最初の紐付けはここから。
-                // 行が出ている間も同じシートを開ける（他の出力先の紐付けを見直す口）。
-                Button("Output Correction…", systemImage: "headphones") { present(.outputCorrection) }
-                // **鎖を組ませる口は、プリセットではなく鎖の口に置く。**返ってきた鎖はプリセットとして
-                // 保存されず、クリップボードから鎖として読み込まれる（ClipboardBanner）。説明は足さず、札だけ置く。
-                // 中国本土の店では出さない（ETStorefrontGate）。
-                if ETStorefrontGate.shared.allowsChatGPT {
-                    Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
-                }
+                // **出力補正と Build with ChatGPT… はここに置かない。**持ち主のシートに置く
+                // （「…のメニューに置くのは変」）。出力補正は Presets のシートの Output Correction の行、
+                // 鎖を組ませる依頼はエフェクト一覧の Effects の面の頭（と空の鎖の表示）。
                 Divider()
                 // 上流に鎖を空にする操作は無く、既定を組む所を
                 // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。

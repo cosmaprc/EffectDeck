@@ -165,7 +165,7 @@ await test("CHAIN.md: linked next to JSFX.md on the home page and in llms.txt", 
   assert.match(para, /Build with ChatGPT…/);
   assert.match(para, /Import from clipboard/);
   assert.ok(LLMS_TXT.includes(`- CHAIN.md: ${CHAIN_MD}`));
-  assert.match(LLMS_TXT, /Build with ChatGPT… \(in the More menu, or on an empty chain\)/);
+  assert.match(LLMS_TXT, /Build with ChatGPT… \(at the top of the effect list, or on an empty chain\)/);
   assert.match(LLMS_TXT, /Import from clipboard/);
 });
 
