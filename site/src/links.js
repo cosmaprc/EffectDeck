@@ -17,7 +17,7 @@ export const RELEASES = "https://github.com/satomasahiro2005/EffectDeck/releases
 export const LICENSE = "https://github.com/satomasahiro2005/EffectDeck/blob/main/LICENSE";
 export const ISSUES = "https://github.com/satomasahiro2005/EffectDeck/issues";
 export const JSFX_MD = "https://github.com/satomasahiro2005/EffectDeck/blob/main/JSFX.md";
-// アプリのBuild a chain with ChatGPTが読ませるもの（EffectPickerView.buildChain）。
+// アプリのBuild with ChatGPT…が読ませるもの（EffectPickerView.buildChain）。
 export const CHAIN_MD = "https://github.com/satomasahiro2005/EffectDeck/blob/main/CHAIN.md";
 // Discordサーバー（EffectDeck Base）の入口。招待リンクを替えても外のリンクを直さずに済むよう、
 // 人に見せるのは DISCORD だけで、招待リンクへは fxdb の 302 で飛ばす（worker.js の頭）。

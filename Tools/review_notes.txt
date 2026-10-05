@@ -26,9 +26,10 @@ are only added to the Plugins list. They are not added to the chain and do not
 run until the user adds them. A chain link (https://effectdeck.nemut.ai/?p=...)
 carries no script source; it can only use scripts already imported on the
 device.
-Import JSFX > Write JSFX with ChatGPT and Presets > Build a chain with ChatGPT
-only open a chatgpt.com link (the ChatGPT app if installed, otherwise the
-browser) that carries a short request. The app sends nothing else to ChatGPT.
+Available Effects > Plugins > Write JSFX with ChatGPT and Available Effects >
+Effects > Build with ChatGPT... (also shown on an empty chain) only open a
+chatgpt.com link (the ChatGPT app if installed, otherwise the browser) that
+carries a short request. The app sends nothing else to ChatGPT.
 The user imports a returned script with From Files or From Clipboard. A returned
 chain goes in with Presets > Import from clipboard, which reads the clipboard
 only when tapped and builds a chain from the app's built-in effects and scripts
@@ -59,8 +60,8 @@ the binary and user-supplied scripts do not change the app's features) and 4.7
 (plug-ins).
 
 How to test
-1. Tap Add Effect (the + button), switch to Plugins, and tap Import JSFX in the
-   top-right corner of the toolbar.
+1. Tap Add Effect (the + button), switch to Plugins, and tap Import JSFX at the
+   top of the list.
 2. Either:
    a. Choose From Link and enter
       https://github.com/satomasahiro2005/EffectDeck/blob/main/Tests/Fixtures/JSFX/gain.jsfx

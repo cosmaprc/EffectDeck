@@ -3,8 +3,10 @@
 //
 //  **中国本土（CHN）では ChatGPT の入口を出さない。**2026.09.28 の審査で
 //  Guideline 5（中国の生成 AI の規制。ChatGPT は向こうの許可を持っていない）で落ちた。
-//  隠すのは Write JSFX with ChatGPT（EffectPickerView の 3 か所）と
-//  Build a chain with ChatGPT（PresetsView）。香港（HKG）・台湾（TWN）は対象外。
+//  隠すのは Write JSFX with ChatGPT（EffectPickerView の Plugins の面の一覧の頭と、空の面の表示の 2 か所）と
+//  Build with ChatGPT…（EffectPickerView の Effects の面の一覧の頭と、PipelineView の空の鎖の表示。
+//  プリセットの口でも ⋯ のメニューでもない）。
+//  香港（HKG）・台湾（TWN）は対象外。
 //
 //  国は StoreKit の Storefront（ISO 3166-1 alpha-3）で見る。端末の地域設定では見ない
 //  （規制はどの店から配ったかに掛かる）。まだ分からないうち（nil）は出す。

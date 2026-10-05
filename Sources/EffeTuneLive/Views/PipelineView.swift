@@ -115,6 +115,8 @@ struct PipelineView: View {
     // 窓を狭めると、iPhoneで最後に置いた開閉のまま出る。
 
     @Environment(\.horizontalSizeClass) private var hSize
+    /// 鎖を ChatGPT に組ませる依頼を開く（空の鎖の表示。EffectPickerView.buildChain）。
+    @Environment(\.openURL) private var openURL
     /// 窓の幅が2列に足りるか。**640で立て、620を切るまで落とさない。**
     /// 1本の線にすると、Stage Managerで窓の端を引いているあいだ行き来する。
     /// 書くのは跨いだときだけ（updateWideEnough）。
@@ -205,6 +207,9 @@ struct PipelineView: View {
 
     /// 鎖の中での座標。行の位置も指の位置もこれで測る。
     private static let chainSpace = "chain"
+    /// 鎖が空のときの表示（EmptyChainRow）の矩形を、行と同じ箱（geometry）へ入れるときの鍵。
+    /// 末尾の帯（tailHeight）が空の表示のぶんも引くように。
+    private static let emptyRowID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
     private static let contentSpace = "chainContent"
     /// 開いたときに行が左へ寄る量。
@@ -611,6 +616,15 @@ struct PipelineView: View {
         }
     }
 
+    /// 鎖の外の行（空の表示）が画面から外れた。高さの合計から抜く。
+    /// 空の表示は鎖が埋まると消えるので、残すと最後の帯（tailHeight）が
+    /// 足りなくなる（帯の下に落とし所の無い所ができる）。
+    private func unmeasured(_ id: UUID) {
+        geometry.forget(id)
+        let height = geometry.contentHeight
+        if rowsHeight != height { rowsHeight = height }
+    }
+
     /// 行の中身の中での上端が変わった（送っただけでは来ない）。**2列のときだけ。**
     /// 読んでいるカードなら、動いたぶん送り直す（ETReadingKeeper）。
     ///
@@ -839,9 +853,26 @@ struct PipelineView: View {
             }
 
             if dsp.chain.isEmpty {
-                EmptyChainRow { presentPicker() }
+                // **空の鎖にも落とし所を置く。**行（ForEach）が無いので、行に付いた口も無い。
+                // 背面（下の .background）の口は ScrollView の後ろに居て、中身の上で放したものは
+                // そこまで届かない（実機で、空の鎖にだけ落ちなかった）。余白ごと受けるように、
+                // 口は padding の外側に付け、Color.clear と同じく contentShape で面を持たせる。
+                EmptyChainRow(add: { presentPicker() },
+                              buildWithChatGPT: { openURL(EffectPickerView.buildChain) })
                     .padding(.horizontal, 14)
                     .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let type = items.first else { return false }
+                        return addDropped(type, at: nil)
+                    }
+                    // 末尾の帯が空の表示のぶんも引くように測る。鎖が埋まって消えたら外す
+                    // （残すと高さの合計が多いままになり、帯が足りなくなる）。
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: .named(Self.chainSpace))
+                    } action: { measured(Self.emptyRowID, $0) }
+                    .onDisappear { unmeasured(Self.emptyRowID) }
             } else {
                 ForEach(visible) { row in
                     // 見えているかを左の一覧へ知らせ、2列では見えていない図を止める。
@@ -942,24 +973,24 @@ struct PipelineView: View {
                     // 左の一覧から飛ぶ先。
                     .id(row.node.id)
                 }
-
-
-                // **最後の行より下の余白も受ける。**
-                // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
-                // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
-                // つもりで落としているので、末尾へ足す。
-                //
-                // **contentShape を必ず付ける。**Color.clear は描くものが無いので、
-                // 枠を持っていても当たりを取らない。帯が在っても落ちなかったのはこれで、
-                // 高さの問題ではなかった。
-                Color.clear
-                    .frame(height: tailHeight)
-                    .contentShape(Rectangle())
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let type = items.first else { return false }
-                        return addDropped(type, at: nil)
-                    }
             }
+
+            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No effects」の
+            // 下がここになる。背面の口には届かないので、敷かないと受ける所が無い）。
+            // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
+            // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
+            // つもりで落としているので、末尾へ足す。
+            //
+            // **contentShape を必ず付ける。**Color.clear は描くものが無いので、
+            // 枠を持っていても当たりを取らない。帯が在っても落ちなかったのはこれで、
+            // 高さの問題ではなかった。
+            Color.clear
+                .frame(height: tailHeight)
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    guard let type = items.first else { return false }
+                    return addDropped(type, at: nil)
+                }
             }
             .coordinateSpace(name: Self.contentSpace)
             .modifier(ETDetailColumn(split: split, brake: brake))
@@ -979,6 +1010,9 @@ struct PipelineView: View {
         // GeometryReader で包むと外側の寸法の決まり方が変わって余白が崩れた。
         // 背面なら、行に落ちたものは行が先に受け、余った所だけここへ来る。
         // 2列の両脇の余白もここへ落ちる。
+        // **ただし ScrollView の中身の上で放したものはここへ来ない。**背面は中身の祖先ではなく
+        // 後ろに居る兄弟なので、空の鎖（行も末尾の帯も無かった）では何も受けなかった。
+        // 中身の上の落とし所は、行・空の表示・末尾の帯がそれぞれ持つ。
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -2110,6 +2144,8 @@ private struct BypassBanner: View {
 
 private struct EmptyChainRow: View {
     let add: () -> Void
+    /// ChatGPT に鎖を組ませる依頼を開く。Add Effect の脇の 2 番目のボタン。
+    let buildWithChatGPT: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -2118,11 +2154,29 @@ private struct EmptyChainRow: View {
                 .foregroundStyle(.secondary)
             Text("No effects")
                 .font(.system(size: 16, weight: .semibold))
-            Button("Add Effect", action: add)
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 2)
+            // **主は Add Effect、ChatGPT は脇役。**横に並べて入らない幅（2 列の細い側）では縦に積む。
+            // 返ってきた鎖はクリップボードから鎖として読み込まれる（ClipboardBanner）。
+            // 中国本土の店では 2 番目を出さない（ETStorefrontGate）。
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { addButton; chatGPTButton }
+                VStack(spacing: 8) { addButton; chatGPTButton }
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var addButton: some View {
+        Button("Add Effect", action: add)
+            .buttonStyle(.borderedProminent)
+    }
+
+    @ViewBuilder
+    private var chatGPTButton: some View {
+        if ETStorefrontGate.shared.allowsChatGPT {
+            Button("Build with ChatGPT…", systemImage: "sparkles", action: buildWithChatGPT)
+                .buttonStyle(.bordered)
+        }
     }
 }
 
