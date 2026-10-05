@@ -147,7 +147,7 @@ jobs:
             fi
             echo "beta: $GITHUB_SHA を含む origin のブランチ:"
             echo "$branches"
-            echo "- ブランチ: $(echo $branches)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- ブランチ: $(tr '\n' ' ' <<<"$branches")" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: 同じコミットの CI が緑
         env:
