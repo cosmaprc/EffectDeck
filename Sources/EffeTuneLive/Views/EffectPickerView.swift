@@ -108,6 +108,14 @@ struct EffectPickerView: View {
     private static let opened = PresentationDetent.fraction(0.75)
     @State private var detent: PresentationDetent = Self.opened
 
+    /// 押し込んでいる画面。**持つのは System Presets の画面だけで、面が替わったら空に戻す。**
+    /// NavigationLink(destination:) で押し込むと、取り込んだ JSFX が届いて面が Plugins に
+    /// 替わったとき（PipelineView.openPicker は出ているシートの面だけを替える）、行が消えても
+    /// 押し込んだ先が前に残り、Plugins の面と塗った行が見えないままになる。行き先を値で持ち、
+    /// onChange(of: pane) で戻す。
+    @State private var path: [PresetRoute] = []
+    enum PresetRoute: Hashable { case system }
+
     /// 帯を押したときの飛び先。
     /// 同じ名前を連打しても飛べるよう、回数も一緒に持つ。
     /// 同じ値を入れ直しても onChange は鳴らないため。
@@ -249,7 +257,7 @@ struct EffectPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 // **縮めている間も中身は消さない。**
                 //
@@ -297,7 +305,11 @@ struct EffectPickerView: View {
             .onChange(of: remote.isRemote) { _, isRemote in
                 if isRemote && pane == .plugins { pane = .effects }
             }
+            // 押し込んだ先は List の中でなく、ここ（根の画面）に置く。List の行は遅れて作られる。
+            .navigationDestination(for: PresetRoute.self) { _ in systemPresetList }
             .onChange(of: pane) { _, selected in
+                // 面が替わったら押し込んだ画面から根へ戻す（path の注記）。
+                path = []
                 current = firstCategory(for: selected)
                 jump = Jump()
                 jumping = false
@@ -852,7 +864,7 @@ struct EffectPickerView: View {
                     userSections
                     // **同梱のものへは標準の NavigationLink で進む。**一覧の一番下に置き、
                     // 自分のものを探す邪魔をしない。押し込んだ先でも行は同じ presetRow。
-                    NavigationLink("System Presets") { systemPresetList }
+                    NavigationLink("System Presets", value: PresetRoute.system)
                 }
                 .listStyle(.plain)
             }
