@@ -269,7 +269,7 @@ def regen_profile(name: str, bundle_id: str) -> dict:
         _fail(f"bundle ID {bundle_id} が {len(bids)} 個ある（1 個のはず）")
     bid = bids[0]["id"]
 
-    caps = pages(f"/v1/bundleIds/{bid}/bundleIdCapabilities?limit=200")
+    caps = pages(f"/v1/bundleIds/{bid}/bundleIdCapabilities")
     if any((c.get("attributes") or {}).get("capabilityType") == "INTER_APP_AUDIO" for c in caps):
         print(f"{bundle_id}: INTER_APP_AUDIO はもうある", file=sys.stderr)
     else:
@@ -322,7 +322,7 @@ def beta_submit(build_id: str) -> str:
     gid = public_beta_group_id()
 
     # 1) What to Test（en-US）。あれば書き換え、無ければ作る。
-    locs = pages(f"/v1/builds/{build_id}/betaBuildLocalizations?limit=200")
+    locs = pages(f"/v1/builds/{build_id}/betaBuildLocalizations?limit=50")
     en = [l for l in locs if (l.get("attributes") or {}).get("locale") == "en-US"]
     if en:
         call("PATCH", f"/v1/betaBuildLocalizations/{en[0]['id']}",
