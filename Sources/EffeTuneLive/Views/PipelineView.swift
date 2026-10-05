@@ -853,7 +853,7 @@ struct PipelineView: View {
                     .padding(.bottom, 8)
             }
 
-            // 入口のメーター。鎖の外に固定で 1 本。PC の鎖を編集している間は出さない（ここに来る音の話ではないので）。
+            // 入口のメーター（L / R）。鎖の外に固定で出す。PC の鎖を編集している間は出さない（ここに来る音の話ではないので）。
             if !isRemote {
                 Card { ETSignalMeter(point: .input, active: running).padding(14) }
                     .padding(.horizontal, 14)

@@ -73,8 +73,8 @@ struct MeterView: View {
     var showsReadout: Bool
     /// 読み値の行の右端に出す札。
     var badge: String?
-    /// 段の名前の幅。"OUT" は 3 字あるので広げる（既定は L/R の 16）。
-    var labelWidth: CGFloat
+    /// 読み値を段ごとに出さず、この名前で 1 つにまとめる（IN / OUT のメーター）。値はいちばん大きい段。
+    var readoutLabel: String?
 
     /// 保持しているピーク。段ごと。
     @State private var held: [Int: Hold] = [:]
@@ -95,7 +95,7 @@ struct MeterView: View {
          caption: String? = nil,
          showsReadout: Bool = true,
          badge: String? = nil,
-         labelWidth: CGFloat = 16) {
+         readoutLabel: String? = nil) {
         self.channels = channels
         self.range = range
         self.ticks = ticks
@@ -106,7 +106,7 @@ struct MeterView: View {
         self.caption = caption
         self.showsReadout = showsReadout
         self.badge = badge
-        self.labelWidth = labelWidth
+        self.readoutLabel = readoutLabel
     }
 
     private var height: CGFloat {
@@ -119,7 +119,7 @@ struct MeterView: View {
             x: ETAxis.decibels(range, step: 0).with(ticks: tickMarks),
             y: .blank(),
             height: height,
-            insets: ETGraphInsets(leading: labelWidth, trailing: 8, top: 4, bottom: 14),
+            insets: ETGraphInsets(leading: 16, trailing: 8, top: 4, bottom: 14),
             readout: showsReadout ? readout : [],
             caption: caption,
             badge: badge,
@@ -238,10 +238,16 @@ struct MeterView: View {
     /// 下端（`-96.0 dB`）がいちばん長いので、そこに合わせれば時間で変わらない。
     private var readout: [ETReadoutItem] {
         let width = ETFormat.db(range.lowerBound, decimals: 1).count
+        func padded(_ db: Double) -> String {
+            let text = ETFormat.db(db, decimals: 1)
+            return String(repeating: " ", count: max(0, width - text.count)) + text
+        }
+        if let readoutLabel {
+            guard let loudest = channels.map({ peakValue($0) }).max() else { return [] }
+            return [ETReadoutItem(readoutLabel, padded(loudest))]
+        }
         return channels.map { channel in
-            let text = ETFormat.db(peakValue(channel), decimals: 1)
-            return ETReadoutItem(channel.label,
-                                 String(repeating: " ", count: max(0, width - text.count)) + text)
+            ETReadoutItem(channel.label, padded(peakValue(channel)))
         }
     }
 }

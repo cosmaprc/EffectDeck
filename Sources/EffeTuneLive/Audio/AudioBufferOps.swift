@@ -26,6 +26,18 @@ enum ETAudioBufferOps {
         return peak
     }
 
+    /// `stride` 個おきに `count` 個を見たときの最大の絶対値。インターリーブの 1 チャンネルぶん
+    /// （L なら先頭から、R なら 1 つずらして stride 2）。NaN は拾わない（上と同じ）。
+    static func peak(_ samples: UnsafePointer<Float>, count: Int, stride: Int) -> Float {
+        guard count > 0, stride > 0 else { return 0 }
+        var peak: Float = 0
+        for i in 0..<count {
+            let a = abs(samples[i * stride])
+            if a > peak { peak = a }
+        }
+        return peak
+    }
+
     // MARK: - 入口
 
     /// リンクのインターリーブ（L,R,L,R…）を、`channels` 行のプレーナへ広げる。
@@ -54,6 +66,8 @@ enum ETAudioBufferOps {
     ///   - channels: プレーナの行数。
     ///   - frameCount: 出力が求めたフレーム数。frames を超えた分は 0 で埋める。
     ///   - bufferCount: バッファの数。
+    ///   - channelPeaks: 渡せば、チャンネルごとに書いた値のピークを入れる（`channels` 個。
+    ///     口が足りず書かなかった行は 0）。OUT のメーターがこれを読む。
     ///   - buffer: k 番目のバッファの (先頭, 1 バッファに入っている本数)。
     ///     本数が 2 以上ならインターリーブ（frame * lanes + lane）。0 は 1 として扱う。
     /// - Returns: 書いた値のピーク（NaN は拾わない）。
@@ -63,7 +77,9 @@ enum ETAudioBufferOps {
     /// **先頭が nil のバッファは飛ばし、チャンネルも消費しない。**
     static func writeOutput(planar: UnsafePointer<Float>, frames: Int, channels: Int,
                             frameCount: Int, bufferCount: Int,
+                            channelPeaks: UnsafeMutablePointer<Float>? = nil,
                             buffer: (Int) -> (data: UnsafeMutablePointer<Float>?, lanes: Int)) -> Float {
+        if let channelPeaks, channels > 0 { channelPeaks.update(repeating: 0, count: channels) }
         guard frameCount > 0, bufferCount > 0 else { return 0 }
         var peak: Float = 0
         var sourceChannel = 0
@@ -76,7 +92,11 @@ enum ETAudioBufferOps {
                     let value: Float
                     if i < frames, sourceChannel + lane < channels {
                         value = planar[(sourceChannel + lane) * frames + i]
-                        peak = max(peak, abs(value))
+                        let a = abs(value)
+                        peak = max(peak, a)
+                        if let channelPeaks, a > channelPeaks[sourceChannel + lane] {
+                            channelPeaks[sourceChannel + lane] = a
+                        }
                     } else {
                         value = 0
                     }
@@ -191,5 +211,99 @@ struct ETPeakHold: Equatable {
         guard db.isFinite, db > floorDB, db >= value(at: now) else { return }
         peakDB = db
         capturedAt = now
+    }
+}
+
+/// IN / OUT のメーターをチャンネルごとに持つ（ETPeakMeter を本数ぶん）。IN は L / R の 2 本、
+/// OUT は端末へ渡している本数（AudioIO の RenderState.channels。ふつうは 2、多チャンネルの IF なら最大 16）。
+///
+/// **音のスレッドが書くので配列を使わない。**上限の 16 本（ETAudioSessionRules.maxChannels、DSP の上限）
+/// ぶんを値の中に固定で並べ、確保も参照の数え上げもしない。メインは丸ごと写して読む
+/// （ETPeakMeter を読んでいたのと同じ形。本と本が別のブロックのものになることはあるが、出すだけなので構わない）。
+struct ETChannelPeakMeters: Equatable {
+    /// 持てる本数の上限。並べ場（Storage）の数と同じにしておく（AudioBufferOpsTests）。
+    static let maxChannels = 16
+
+    private typealias Storage = (ETPeakMeter, ETPeakMeter, ETPeakMeter, ETPeakMeter,
+                                 ETPeakMeter, ETPeakMeter, ETPeakMeter, ETPeakMeter,
+                                 ETPeakMeter, ETPeakMeter, ETPeakMeter, ETPeakMeter,
+                                 ETPeakMeter, ETPeakMeter, ETPeakMeter, ETPeakMeter)
+
+    /// 並べ場に入る本数。maxChannels と食い違っていないかをテストで見る。
+    static var storageCapacity: Int {
+        MemoryLayout<Storage>.size / MemoryLayout<ETPeakMeter>.stride
+    }
+
+    /// 出している本数（0〜maxChannels）。
+    let count: Int
+    private var storage: Storage
+
+    init(channels: Int) {
+        count = min(max(channels, 0), Self.maxChannels)
+        let m = ETPeakMeter()
+        storage = (m, m, m, m, m, m, m, m, m, m, m, m, m, m, m, m)
+    }
+
+    /// `channel` 本目。範囲の外は 0 のまま（ETPeakMeter()）。
+    subscript(channel: Int) -> ETPeakMeter {
+        guard channel >= 0, channel < count else { return ETPeakMeter() }
+        // 同じ型だけのタプルは要素の型で並んでいる。ずらして読むだけ。
+        return withUnsafeBytes(of: storage) { raw in
+            raw.load(fromByteOffset: channel * MemoryLayout<ETPeakMeter>.stride, as: ETPeakMeter.self)
+        }
+    }
+
+    /// `channel` 本目に 1 ブロックの山を入れる（ETPeakMeter.feed）。範囲の外は捨てる。
+    mutating func feed(channel: Int, blockPeak: Float, frames: Int, sampleRate: Double) {
+        guard channel >= 0, channel < count else { return }
+        withUnsafeMutableBytes(of: &storage) { raw in
+            let meters = raw.baseAddress!.assumingMemoryBound(to: ETPeakMeter.self)
+            meters[channel].feed(blockPeak: blockPeak, frames: frames, sampleRate: sampleRate)
+        }
+    }
+
+    /// 先頭から `channels` 本ぶんの山を入れる（writeOutput の channelPeaks をそのまま渡す）。
+    /// 本数が合わなければ短いほうまで。
+    mutating func feed(blockPeaks: UnsafePointer<Float>, channels: Int, frames: Int, sampleRate: Double) {
+        let n = min(max(channels, 0), count)
+        guard n > 0 else { return }
+        withUnsafeMutableBytes(of: &storage) { raw in
+            let meters = raw.baseAddress!.assumingMemoryBound(to: ETPeakMeter.self)
+            for ch in 0..<n {
+                meters[ch].feed(blockPeak: blockPeaks[ch], frames: frames, sampleRate: sampleRate)
+            }
+        }
+    }
+
+    /// 全部の本に無音のブロックを入れる（出力が全部 0 のとき。同じ落ち方で下がる）。
+    mutating func fall(frames: Int, sampleRate: Double) {
+        guard count > 0 else { return }
+        let n = count
+        withUnsafeMutableBytes(of: &storage) { raw in
+            let meters = raw.baseAddress!.assumingMemoryBound(to: ETPeakMeter.self)
+            for ch in 0..<n {
+                meters[ch].feed(blockPeak: 0, frames: frames, sampleRate: sampleRate)
+            }
+        }
+    }
+
+    // MARK: 読む（メインだけ。配列を作る）
+
+    /// 本ごとの山（線形）。
+    var peaks: [Float] { (0..<count).map { self[$0].peak } }
+    /// 本ごとのクリップの数。
+    var clipCounts: [UInt32] { (0..<count).map { self[$0].clips } }
+
+    /// 前の拍から新しくクリップした本。数が変わって、しかも 0 でないもの
+    /// （止めて作り直すと数は 0 から始まるので、0 への戻りでは赤にしない）。本数が変わったぶんは前を 0 とみなす。
+    static func newlyClipped(from old: [UInt32], to new: [UInt32]) -> [Int] {
+        new.indices.filter { ch in
+            let before = old.indices.contains(ch) ? old[ch] : 0
+            return new[ch] != before && new[ch] != 0
+        }
+    }
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.count == b.count && (0..<a.count).allSatisfy { a[$0] == b[$0] }
     }
 }

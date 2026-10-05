@@ -20,7 +20,8 @@ final class AudioBufferOpsTests: XCTestCase {
             present = lanes.map { _ in true }
         }
         /// writeOutput に渡す。配列の先頭を返す（テストの間だけ有効）。
-        func write(planar: [Float], frames: Int, channels: Int, frameCount: Int) -> Float {
+        func write(planar: [Float], frames: Int, channels: Int, frameCount: Int,
+                   channelPeaks: UnsafeMutablePointer<Float>? = nil) -> Float {
             var pointers: [UnsafeMutablePointer<Float>] = []
             for k in storage.indices {
                 let p = UnsafeMutablePointer<Float>.allocate(capacity: storage[k].count)
@@ -35,10 +36,22 @@ final class AudioBufferOpsTests: XCTestCase {
             }
             return planar.withUnsafeBufferPointer { pl in
                 ETAudioBufferOps.writeOutput(planar: pl.baseAddress!, frames: frames, channels: channels,
-                                             frameCount: frameCount, bufferCount: storage.count) { k in
+                                             frameCount: frameCount, bufferCount: storage.count,
+                                             channelPeaks: channelPeaks) { k in
                     (self.present[k] ? pointers[k] : nil, self.lanes[k])
                 }
             }
+        }
+
+        /// チャンネルごとのピークも受け取る。受け皿は前の値（-9）で汚しておき、全部書き直されるかを見る。
+        func writePeaks(planar: [Float], frames: Int, channels: Int,
+                        frameCount: Int) -> (peak: Float, channels: [Float]) {
+            var peaks = [Float](repeating: -9, count: channels)
+            let peak = peaks.withUnsafeMutableBufferPointer { cp in
+                write(planar: planar, frames: frames, channels: channels, frameCount: frameCount,
+                      channelPeaks: cp.baseAddress!)
+            }
+            return (peak, peaks)
         }
     }
 
@@ -73,6 +86,21 @@ final class AudioBufferOpsTests: XCTestCase {
         var s = [Float](repeating: 0, count: 8)
         s[7] = -0.5
         XCTAssertEqual(s.withUnsafeBufferPointer { ETAudioBufferOps.peak($0.baseAddress!, count: 8) }, 0.5)
+    }
+
+    /// インターリーブの 1 チャンネルぶん（stride 2）。L は先頭から、R は 1 つずらして。
+    func testStridedPeakReadsOneChannel() {
+        let s: [Float] = [0.1, -0.9, -0.5, 0.2, .nan, 0.3]
+        s.withUnsafeBufferPointer { b in
+            let l = ETAudioBufferOps.peak(b.baseAddress!, count: 3, stride: 2)
+            let r = ETAudioBufferOps.peak(b.baseAddress! + 1, count: 3, stride: 2)
+            XCTAssertEqual(l, 0.5)
+            XCTAssertEqual(r, 0.9)
+            // L と R の大きいほうは、全体の山と同じ（ゲートに渡す値は変わらない）。
+            XCTAssertEqual(max(l, r), ETAudioBufferOps.peak(b.baseAddress!, count: 6))
+            XCTAssertEqual(ETAudioBufferOps.peak(b.baseAddress!, count: 0, stride: 2), 0)
+            XCTAssertEqual(ETAudioBufferOps.peak(b.baseAddress!, count: 3, stride: 0), 0)
+        }
     }
 
     // MARK: - spreadStereo
@@ -204,6 +232,49 @@ final class AudioBufferOpsTests: XCTestCase {
         XCTAssertEqual(out.storage[0], [-9, -9])
         let none = FakeOutput(lanes: [], frames: 2)
         XCTAssertEqual(none.write(planar: [1, 2], frames: 2, channels: 1, frameCount: 2), 0)
+    }
+
+    /// チャンネルごとのピーク（OUT のメーター）。本ごとに別に取り、全体のピークは今までどおり。
+    func testWriteOutputChannelPeaks() {
+        let out = FakeOutput(lanes: [1, 1], frames: 3)
+        var pl = planar(channels: 2, frames: 3)
+        pl[1] = -150   // L の負の値は絶対値で数える
+        let r = out.writePeaks(planar: pl, frames: 3, channels: 2, frameCount: 3)
+        XCTAssertEqual(r.channels, [150, 103])
+        XCTAssertEqual(r.peak, 150)
+    }
+
+    /// インターリーブの口と混在の口でも、本ごとに正しい行のピークになる。
+    func testWriteOutputChannelPeaksMixedLanes() {
+        let out = FakeOutput(lanes: [2, 1, 1], frames: 2)
+        let r = out.writePeaks(planar: planar(channels: 4, frames: 2), frames: 2, channels: 4, frameCount: 2)
+        XCTAssertEqual(r.channels, [2, 102, 202, 302])
+    }
+
+    /// 口が足りず書かなかった行は 0（前の値を残さない）。
+    func testWriteOutputChannelPeaksUnwrittenRowsAreZero() {
+        let out = FakeOutput(lanes: [1, 1], frames: 2)
+        let r = out.writePeaks(planar: planar(channels: 4, frames: 2), frames: 2, channels: 4, frameCount: 2)
+        XCTAssertEqual(r.channels, [2, 102, 0, 0])
+        XCTAssertEqual(r.peak, 102)
+    }
+
+    /// 先頭が nil の口は飛ばしてチャンネルを消費しないので、L は次の口へ行き、R は書かれない。
+    func testWriteOutputChannelPeaksSkipNilBuffer() {
+        let out = FakeOutput(lanes: [1, 1], frames: 2)
+        out.present[0] = false
+        let r = out.writePeaks(planar: planar(channels: 2, frames: 2), frames: 2, channels: 2, frameCount: 2)
+        XCTAssertEqual(r.channels, [2, 0])
+    }
+
+    /// 出力が 0 フレームでも受け皿は 0 にする。NaN は拾わない。
+    func testWriteOutputChannelPeaksDegenerate() {
+        let empty = FakeOutput(lanes: [1, 1], frames: 1)
+        XCTAssertEqual(empty.writePeaks(planar: planar(channels: 2, frames: 1), frames: 1, channels: 2,
+                                        frameCount: 0).channels, [0, 0])
+        let out = FakeOutput(lanes: [1, 1], frames: 2)
+        let r = out.writePeaks(planar: [.nan, 0.5, 0.25, .nan], frames: 2, channels: 2, frameCount: 2)
+        XCTAssertEqual(r.channels, [0.5, 0.25])
     }
 
     // MARK: - Audio Unit との受け渡し
@@ -397,5 +468,104 @@ final class AudioBufferOpsTests: XCTestCase {
         XCTAssertEqual(h.value(at: t0), -96)
         h.feed(6, at: t0)
         XCTAssertEqual(h.value(at: t0), 6)
+    }
+
+    // MARK: - ETChannelPeakMeters
+
+    /// 並べ場の数が上限と食い違っていない（食い違うと範囲の外を読み書きする）。上限は DSP と同じ 16。
+    func testChannelMetersStorageMatchesMaximum() {
+        XCTAssertEqual(ETChannelPeakMeters.storageCapacity, ETChannelPeakMeters.maxChannels)
+        XCTAssertEqual(ETChannelPeakMeters.maxChannels, ETAudioSessionRules.maxChannels)
+    }
+
+    /// 本数は 0〜16 に収める。作った直後は全部 0。
+    func testChannelMetersCountIsClamped() {
+        XCTAssertEqual(ETChannelPeakMeters(channels: 2).count, 2)
+        XCTAssertEqual(ETChannelPeakMeters(channels: 40).count, 16)
+        XCTAssertEqual(ETChannelPeakMeters(channels: -1).count, 0)
+        XCTAssertEqual(ETChannelPeakMeters(channels: 6).peaks, [Float](repeating: 0, count: 6))
+        XCTAssertEqual(ETChannelPeakMeters(channels: 6).clipCounts, [UInt32](repeating: 0, count: 6))
+    }
+
+    /// L と R は別々に上がり、別々に数える。
+    func testChannelMetersAreIndependent() {
+        var m = ETChannelPeakMeters(channels: 2)
+        m.feed(channel: 0, blockPeak: 0.5, frames: 480, sampleRate: 48000)
+        m.feed(channel: 1, blockPeak: 1.0, frames: 480, sampleRate: 48000)
+        XCTAssertEqual(m.peaks, [0.5, 1.0])
+        XCTAssertEqual(m.clipCounts, [0, 1])
+        XCTAssertEqual(m[1].clips, 1)
+        // 範囲の外は 0 のまま、入れても捨てる。
+        XCTAssertEqual(m[2], ETPeakMeter())
+        XCTAssertEqual(m[-1], ETPeakMeter())
+        m.feed(channel: 2, blockPeak: 1.0, frames: 480, sampleRate: 48000)
+        m.feed(channel: -1, blockPeak: 1.0, frames: 480, sampleRate: 48000)
+        XCTAssertEqual(m.peaks, [0.5, 1.0])
+        XCTAssertEqual(m.clipCounts, [0, 1])
+    }
+
+    /// 16 本の端まで、それぞれの位置に入る（並べ場のずらし方を確かめる）。
+    func testChannelMetersAllSixteenSlots() {
+        var m = ETChannelPeakMeters(channels: 16)
+        for ch in 0..<16 {
+            m.feed(channel: ch, blockPeak: Float(ch + 1) / 32, frames: 480, sampleRate: 48000)
+        }
+        XCTAssertEqual(m.peaks, (0..<16).map { Float($0 + 1) / 32 })
+        m.feed(channel: 15, blockPeak: 2, frames: 480, sampleRate: 48000)
+        XCTAssertEqual(m.clipCounts, [UInt32](repeating: 0, count: 15) + [1])
+    }
+
+    /// まとめて入れる形（writeOutput の受け皿から）。本数が合わなければ短いほうまで。
+    func testChannelMetersFeedFromBuffer() {
+        var m = ETChannelPeakMeters(channels: 3)
+        let peaks: [Float] = [0.25, 1.0, 0.5, 0.75]
+        peaks.withUnsafeBufferPointer {
+            m.feed(blockPeaks: $0.baseAddress!, channels: 4, frames: 480, sampleRate: 48000)
+        }
+        XCTAssertEqual(m.peaks, [0.25, 1.0, 0.5])
+        XCTAssertEqual(m.clipCounts, [0, 1, 0])
+        var short = ETChannelPeakMeters(channels: 3)
+        peaks.withUnsafeBufferPointer {
+            short.feed(blockPeaks: $0.baseAddress!, channels: 1, frames: 480, sampleRate: 48000)
+        }
+        XCTAssertEqual(short.peaks, [0.25, 0, 0])
+    }
+
+    /// 出力が全部 0 のブロック: どの本も 20 dB/秒で落ちる。
+    func testChannelMetersFallTogether() {
+        var m = ETChannelPeakMeters(channels: 2)
+        m.feed(channel: 0, blockPeak: 1.0, frames: 480, sampleRate: 48000)
+        m.feed(channel: 1, blockPeak: 0.5, frames: 480, sampleRate: 48000)
+        m.fall(frames: 4800, sampleRate: 48000)
+        let factor = Float(pow(10, -2.0 / 20))
+        XCTAssertEqual(m.peaks[0], factor, accuracy: 1e-4)
+        XCTAssertEqual(m.peaks[1], 0.5 * factor, accuracy: 1e-4)
+        XCTAssertEqual(m.clipCounts, [1, 0])
+        var empty = ETChannelPeakMeters(channels: 0)
+        empty.fall(frames: 480, sampleRate: 48000)
+        XCTAssertEqual(empty.peaks, [])
+    }
+
+    /// 等しさは本数と各本の値で決まる。
+    func testChannelMetersEquality() {
+        var a = ETChannelPeakMeters(channels: 2)
+        var b = ETChannelPeakMeters(channels: 2)
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, ETChannelPeakMeters(channels: 3))
+        a.feed(channel: 1, blockPeak: 0.5, frames: 480, sampleRate: 48000)
+        XCTAssertNotEqual(a, b)
+        b.feed(channel: 1, blockPeak: 0.5, frames: 480, sampleRate: 48000)
+        XCTAssertEqual(a, b)
+    }
+
+    /// 赤にする本: 数が変わって 0 でないもの。0 への戻り（止めて作り直した）や本数が増えたぶんの 0 では点けない。
+    func testNewlyClippedChannels() {
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [0, 0], to: [0, 1]), [1])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [2, 1], to: [3, 1]), [0])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [2, 1], to: [2, 1]), [])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [5, 3], to: [0, 0, 0, 0, 0, 0]), [])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [5, 3], to: [0, 1, 0, 0, 0, 2]), [1, 5])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [], to: [0, 0]), [])
+        XCTAssertEqual(ETChannelPeakMeters.newlyClipped(from: [4, 4], to: []), [])
     }
 }
