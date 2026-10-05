@@ -866,7 +866,12 @@ struct PipelineView: View {
 
             // 入口のメーター（L / R）。鎖の外に固定で出す。PC の鎖を編集している間は出さない（ここに来る音の話ではないので）。
             if !isRemote {
-                Card { ETSignalMeter(point: .input, active: running).padding(14) }
+                // 中身は 30pt ほどの細い棒なので、カードの上下の余白も詰める（全体で 46pt ほど）。
+                Card {
+                    ETSignalMeter(point: .input, active: running)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
