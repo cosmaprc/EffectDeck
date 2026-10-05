@@ -41,6 +41,15 @@
 	     公式ページになる。/.well-known/apple-app-site-association は site/ の Worker が返す。
 	     fxd.nemut.ai は人が打つための短い別名で、AASA を含めて全部 effectdeck へ 301 する。
 	     AASA を持たないのでここには入れない。 -->
+	<!-- **他社の AUv3 を見つけるのに要る**（Issue #10）。
+	     これが無いと AVAudioUnitComponentManager も AudioComponentFindNext も Apple の部品しか返さない。
+	     実機の数え上げで確かめた（au refresh … other=0 makers=appl:84。Apple 以外が 0 本）。
+	     Inter-App Audio 自体は iOS 13 で非推奨だが、この鍵は今も「Audio Unit extensions へのアクセスを与える」
+	     （Apple の entitlement の説明）。JUCE も iOS の AU ホストには必ず付けている。
+	     App ID に Inter-App Audio の capability が要る。App Store 用のプロファイル（EffeTuneLive-AppStore）は
+	     capability を足したあとに作り直す。 -->
+	<key>inter-app-audio</key>
+	<true/>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:effectdeck.nemut.ai</string>
