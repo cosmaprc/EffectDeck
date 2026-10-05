@@ -6,7 +6,7 @@ Third-party AUv3 plug-ins now appear under Plugins. Please add one, open its int
 
 EffeTune Remote Control (the Remote Control button in the toolbar) needs an EffeTune desktop build with the LAN remote API. No released version of EffeTune has it yet, so most testers will not be able to try it. It is included so it can be tested as soon as EffeTune ships it.
 
-Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level deeper, at the end of Presets. Build with ChatGPT… is at the top of the Effects list, and Import JSFX is at the top of Plugins.
+Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level deeper, at the end of Presets. Import JSFX is at the top of Plugins.
 
 Effects can now be dropped onto the margins, between cards, below the last card and onto an empty chain. Please check that a drop lands where you expect.
 
