@@ -1016,21 +1016,34 @@ struct PipelineView: View {
             // 紐付けはツールバーの ⋯ の Output Correction… から始める。
             // PC の鎖を編集している間は出さない（補正も外してある）。
             if !isRemote, let bound = correctionBound {
-                OutputCorrectionRow(oc: OutputCorrection.shared, bound: bound,
-                                    open: { presentSheet(.outputCorrection) })
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 5)
-                    // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
-                    // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
-                    .contentShape(Rectangle())
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let type = items.first else { return false }
-                        return addDropped(type, at: nil)
+                VStack(spacing: 0) {
+                    // **鎖の終わりに線を 1 本引く。**同じ形の札が続くだけだと、出力補正も鎖の最後の段に見える。
+                    // 線には字を添えない。見出しを付けると Section の名前と同じものに見え、
+                    // 「なぜ最後だけ Section が名前で出ているのか」と読まれる（Section は自分の札で名前を出す）。
+                    // 何の札かは札の小さい行（Output Correction · 出力先）が言う。
+                    // 線は組の上下の線（ETGroupRule）と同じもの。最後の行が組の下線をもう引いているときは
+                    // 重ねない（鎖の中の「線は 1 本にする」と同じ）。
+                    if visible.last?.block != .bottom {
+                        ETGroupRule()
                     }
-                    .onGeometryChange(for: CGRect.self) {
-                        $0.frame(in: .named(Self.chainSpace))
-                    } action: { measured(Self.correctionRowID, $0) }
-                    .onDisappear { unmeasured(Self.correctionRowID) }
+                    OutputCorrectionRow(oc: OutputCorrection.shared, bound: bound,
+                                        open: { presentSheet(.outputCorrection) })
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 5)
+                }
+                // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
+                // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
+                // 線の所も同じ口で受ける（線と札の間で落とすと何も起きない、を作らない）。
+                // 測る矩形も線ごと。末尾の帯（tailHeight）が線のぶんも引くように。
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    guard let type = items.first else { return false }
+                    return addDropped(type, at: nil)
+                }
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(Self.chainSpace))
+                } action: { measured(Self.correctionRowID, $0) }
+                .onDisappear { unmeasured(Self.correctionRowID) }
             }
 
             // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No effects」と
@@ -2276,6 +2289,10 @@ private struct EmptyChainRow: View {
 /// 小さな灰色の字だった。鎖の札の仲間に見えるように、電源・字の大きさ・間隔・切のときの沈み方を
 /// EffectCardView の頭（header）に揃える。
 ///
+/// **高さも頭と同じにする。**前は縦の余白を名前のボタンの中にだけ入れていたので、行の高さが
+/// 「34pt の印 + 20」で決まり、「44pt の電源 + 20」の頭より 10pt 低かった。余白は頭と同じく
+/// 行（HStack）の外側に付け、行ぜんぶを押し所にする（頭の onTapGesture と同じ作り）。
+///
 /// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。電源以外のどこを押しても出力補正のシートを開く。
 /// 出すのはいまの出力先に紐付けがあるときだけ（PipelineView が決めて bound を渡す）。
 private struct OutputCorrectionRow: View {
@@ -2287,7 +2304,8 @@ private struct OutputCorrectionRow: View {
 
     var body: some View {
         Card {
-            // 間隔と余白はエフェクトの頭と同じ（EffectCardView.header）。
+            // 値はすべて EffectCardView.header の写し（間隔 6・字 16/11・行間 1・Spacer 4・
+            // 余白 左 2 / 右 4 / 上下 10）。片方だけ変えると、並んだ札で電源と名前の位置がずれる。
             HStack(spacing: 6) {
                 // エフェクトのカードと同じ電源。切ると補正が外れる（出力先ごとではなく層ぜんぶ）。
                 Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
@@ -2295,43 +2313,43 @@ private struct OutputCorrectionRow: View {
                     .labelsHidden()
                     .accessibilityLabel("Output Correction")
 
-                // 電源の外は全部、シートを開く 1 つのボタン。縦の余白もボタンの中に入れて、
-                // 行の上下の端を押しても開くようにする（カードの頭は行ぜんぶが押し所なので揃える）。
-                Button(action: open) {
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(ETUserPresetName.leaf(bound.preset))
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            // エフェクトのカードで種別が出る行。ここではどの出力先の補正かを出す。
-                            Label(bound.name,
-                                  systemImage: ETOutputDevice.Kind(rawValue: bound.kind)?.symbol ?? "speaker")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        Spacer(minLength: 4)
-
-                        // カードの ⋯ と同じ位置・大きさ・色。**灰色にしない。**カードの開閉の印は
-                        // 畳んでいる間、灰色の右向きの山形なので、同じ色だと「開くと中身が出る」と読める。
-                        // こちらは別の画面へ進む印。
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.tint)
-                            .frame(width: 34, height: 34)
-                            .accessibilityHidden(true)
-                    }
-                    .padding(.vertical, 10)
-                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(ETUserPresetName.leaf(bound.preset))
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    // エフェクトのカードで種別（Reverb・Analyzer）、Section の札で「Section · 3 effects」が
+                    // 出る行。ここでは何の札かと、どの出力先の補正かを同じ「 · 」の組み立てで出す。
+                    // 線の上に見出しは置かない（PipelineView の呼び出し側の頭を参照）。
+                    // 絵は付けない。カードのこの行は字だけなので、絵があると高さと字の頭がずれる。
+                    Text("Output Correction · \(bound.name)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Output Correction, \(ETUserPresetName.leaf(bound.preset)), \(bound.name)")
+                // 名前と小さい行を 1 つのボタンとして読ませる。押したときの動きは下の onTapGesture と同じ。
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { open() }
+
+                Spacer(minLength: 4)
+
+                // カードの ⋯ と同じ位置・大きさ（34pt）。**灰色にしない。**カードの開閉の印は
+                // 畳んでいる間、灰色の右向きの山形なので、同じ色だと「開くと中身が出る」と読める。
+                // こちらは別の画面へ進む印。
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 34, height: 34)
+                    .accessibilityHidden(true)
             }
             .padding(.leading, 2)
             .padding(.trailing, 4)
+            .padding(.vertical, 10)
+            // 電源の外は全部、シートを開く押し所。電源は中のボタンが先に受けるので、ここへは来ない
+            // （カードの頭の電源と開閉が同じ関係で共存している）。
+            .contentShape(Rectangle())
+            .onTapGesture(perform: open)
         }
         // 切のときはバイパスしたエフェクトのカードと同じだけ沈める。
         .opacity(oc.isOn ? 1 : 0.55)
