@@ -588,6 +588,10 @@ struct EffectPickerView: View {
                 }
             }
         }
+        // **面を開くたびに数え直す。**AU の一覧は起動直後に作ったもので、
+        // その後に入れた AU は登録変更の通知が届かないと載らない（Issue #10）。
+        // ここで聞き直せば、少なくとも探しに来た時点の登録は一覧に出る。
+        .onAppear { au.refresh(reason: "plugins") }
     }
 
     private var audioUnitVendors: [String] {
