@@ -13,7 +13,6 @@ import UIKit
 
 struct PresetsView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
     @ObservedObject var dsp: EffeTuneDSP
     @StateObject private var store = PresetStore.shared
 
@@ -690,16 +689,10 @@ struct PresetsView: View {
                                        ? "square.and.arrow.up" : "arrow.up.forward.square")
                 }
             }
-            // **組ませる口と戻す口を並べる。**ChatGPTにCHAIN.mdを読ませて鎖を組ませ、
-            // 返ってきたものはすぐ下のImport from clipboardで入れる。説明は足さず、札だけ置く。
-            // 中国本土の店では出さない（ETStorefrontGate）。
-            if ETStorefrontGate.shared.allowsChatGPT {
-                Button {
-                    openURL(EffectPickerView.buildChain)
-                } label: {
-                    Label("Build a chain with ChatGPT", systemImage: "sparkles")
-                }
-            }
+            // 鎖を ChatGPT に組ませる口（Build with ChatGPT…）はプリセットの口ではない。結果は
+            // プリセットとして保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner）ので、
+            // エフェクト一覧の Effects の面の頭と、空の鎖の表示に置いてある。
+            // ここは共有するための節で、デスクトップの EffeTune も共有リンクを開くので "Share" と呼ぶ。
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、
                 // 押しても確認も知らせも出ないまま何も起きなかった。
@@ -710,7 +703,7 @@ struct PresetsView: View {
                 Label("Import from clipboard", systemImage: "doc.on.clipboard")
             }
         } header: {
-            Text("EffeTune on the web")
+            Text("Share")
         }
     }
 }
