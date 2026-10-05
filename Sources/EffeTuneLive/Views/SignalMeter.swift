@@ -4,7 +4,7 @@
 //  見た目は Level Meter のカードと同じ MeterView（-96〜0 dB、落下 20 dB/秒、ピーク保持 1 秒）。
 //  棒はチャンネルごと。IN はリンクの L / R、OUT は端末へ渡している本数（ふつうは L / R、
 //  多チャンネルの IF なら 1〜N。段の名前は Level Meter と同じ LevelMeterView.label）。
-//  上の読み値は "IN" / "OUT" の 1 つだけで、いちばん大きいチャンネルの値。
+//  上の読み値はチャンネルごと（L / R の dB を並べる）。どちらのメーターかは行の右端の札（IN / OUT）で言う。
 //  どれかのチャンネルが 0 dBFS に届いたら LevelMeterView.overloadTime のあいだ赤（届いた段には印も）。
 //
 //  ピークの保持は MeterView に任せない（holdsPeak: false）。MeterView の保持は段の値が
@@ -43,7 +43,7 @@ struct ETSignalMeter: View {
                       holdsPeak: false,
                       rowHeight: levels.count > 2 ? 9 : 13,
                       showsReadout: true,
-                      readoutLabel: point == .input ? "IN" : "OUT")
+                      badge: point == .input ? "IN" : "OUT")
                 .tint(channels.contains(where: { $0.clipped }) ? Color.red : nil)
                 // クリップの数が増えた段を赤にする。止まっている間の 0 への戻りでは点けない。
                 .onChange(of: meters.clipCounts) { old, new in

@@ -73,8 +73,6 @@ struct MeterView: View {
     var showsReadout: Bool
     /// 読み値の行の右端に出す札。
     var badge: String?
-    /// 読み値を段ごとに出さず、この名前で 1 つにまとめる（IN / OUT のメーター）。値はいちばん大きい段。
-    var readoutLabel: String?
 
     /// 保持しているピーク。段ごと。
     @State private var held: [Int: Hold] = [:]
@@ -94,8 +92,7 @@ struct MeterView: View {
          rowHeight: CGFloat = 16,
          caption: String? = nil,
          showsReadout: Bool = true,
-         badge: String? = nil,
-         readoutLabel: String? = nil) {
+         badge: String? = nil) {
         self.channels = channels
         self.range = range
         self.ticks = ticks
@@ -106,7 +103,6 @@ struct MeterView: View {
         self.caption = caption
         self.showsReadout = showsReadout
         self.badge = badge
-        self.readoutLabel = readoutLabel
     }
 
     private var height: CGFloat {
@@ -241,10 +237,6 @@ struct MeterView: View {
         func padded(_ db: Double) -> String {
             let text = ETFormat.db(db, decimals: 1)
             return String(repeating: " ", count: max(0, width - text.count)) + text
-        }
-        if let readoutLabel {
-            guard let loudest = channels.map({ peakValue($0) }).max() else { return [] }
-            return [ETReadoutItem(readoutLabel, padded(loudest))]
         }
         return channels.map { channel in
             ETReadoutItem(channel.label, padded(peakValue(channel)))
