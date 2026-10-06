@@ -92,7 +92,10 @@ function discordCard() {
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="EffectDeck Base, the official Discord server">
 <meta name="twitter:card" content="summary_large_image">
-<meta http-equiv="refresh" content="0; url=${invite}">
+<meta name="twitter:title" content="${title}">
+<meta name="twitter:description" content="${esc(description)}">
+<meta name="twitter:image" content="https://${DECK_HOST}/og-discord.png?v=2">
+<meta name="twitter:image:alt" content="EffectDeck Base, the official Discord server">
 </head><body><a href="${invite}">Join EffectDeck Base on Discord</a></body></html>`;
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600", "x-robots-tag": "noindex" },
@@ -121,7 +124,13 @@ export default {
 
     // **fxdb は Discord の招待リンクへ 302。**招待リンクは替わりうるので 301 にしない。
     // リンクのプレビューを作るクローラーにだけ、転送せず自前のOGPを返す（招待リンクのOGPは Discord の汎用のもの）。
+    // X は robots.txt を読んでからカードを作るので、ここだけはクローラーにもテキストで返す。
     if (url.hostname === DISCORD_HOST) {
+      if (url.pathname === "/robots.txt") {
+        return new Response("User-agent: *\nAllow: /\n", {
+          headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" },
+        });
+      }
       if (PREVIEW_BOT.test(request.headers.get("user-agent") || "")) return discordCard();
       return new Response(null, {
         status: 302,

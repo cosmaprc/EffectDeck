@@ -78,7 +78,15 @@ try {
       assert.equal(res.status, 200, ua);
       assert.match(body, /<meta property="og:title" content="EffectDeck Base">/, ua);
       assert.match(body, /og:image" content="https:\/\/effectdeck\.nemut\.ai\/og-discord\.png"/, ua);
-      assert.match(body, /url=https:\/\/discord\.gg\/Y3DYJJmmDE/, ua);
+      assert.match(body, /twitter:image" content="https:\/\/effectdeck\.nemut\.ai\/og-discord\.png\?v=2"/, ua);
+      assert.match(body, /href="https:\/\/discord\.gg\/Y3DYJJmmDE"/, ua);
+      assert.doesNotMatch(body, /http-equiv="refresh"/, ua);
+    }
+    for (const ua of ["Twitterbot/1.0", "Mozilla/5.0"]) {
+      const res = await mf.dispatchFetch("https://fxdb.nemut.ai/robots.txt", { headers: { "user-agent": ua }, redirect: "manual" });
+      assert.equal(res.status, 200, ua);
+      assert.match(res.headers.get("content-type"), /^text\/plain/, ua);
+      assert.equal(await res.text(), "User-agent: *\nAllow: /\n", ua);
     }
     const img = await get("effectdeck.nemut.ai", "/og-discord.png");
     assert.equal(img.status, 200);
