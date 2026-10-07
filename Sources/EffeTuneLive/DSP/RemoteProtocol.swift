@@ -851,7 +851,7 @@ struct ETRemoteHeartbeat: Equatable {
     }
 }
 
-/// 最後につないだ PC の EffeTune の名前と版。つながっていないあいだの PC の行に出す。
+/// 最後につないだ PC の EffeTune の名前と版。切断中の Connect のボタンにホスト名を出す。
 struct ETRemoteLastHost: Codable, Equatable {
     var name: String
     var label: String

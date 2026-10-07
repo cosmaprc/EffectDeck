@@ -38,18 +38,24 @@ struct RemoteToolbarButton: View {
         self.open = open
     }
 
+    /// **控えの「つなぎたい」は起動をまたいで残る。**それで塗ると、PC の EffeTune が居なくても
+    /// 起動した瞬間から青く、つながっているように見えた。塗るのは hello の返事を受けてから（ETRemoteIndicator）。
+    private var indicator: ETRemoteIndicator {
+        ETRemoteIndicator(wantsConnection: prefs.remoteWantsConnection, status: mirror.status)
+    }
+
     var body: some View {
         styled(Button("Remote Control", systemImage: "dot.radiowaves.left.and.right", action: open))
-            // つなぎたいのにつながっていない（つないでいる途中・つなぎ直しを待っている）あいだ脈を打つ。
-            .symbolEffect(.pulse, isActive: prefs.remoteWantsConnection && mirror.status != .connected)
+            // つなぎたいのにつながっていない（つないでいる途中・つなぎ直しを待っている・応答が無い）あいだ脈を打つ。
+            .symbolEffect(.pulse, isActive: indicator == .connecting)
             .accessibilityValue(mirror.statusText)
     }
 
-    /// つなぎたいあいだは青く塗る。PC 側（EffeTune の見出しのアイコン）も入のとき青で塗るので合わせる。
+    /// つながっているあいだは青く塗る。PC 側（EffeTune の見出しのアイコン）も入のとき青で塗るので合わせる。
     /// ガラスのツールバーでは foregroundStyle の色が乗らないことがあるので、塗りのある形にする。
     @ViewBuilder
     private func styled<Label: View>(_ button: Button<Label>) -> some View {
-        if prefs.remoteWantsConnection {
+        if indicator == .live {
             button.buttonStyle(.borderedProminent).tint(.blue)
         } else {
             button
@@ -149,6 +155,8 @@ struct RemoteContent: View {
 ///
 ///   unpaired  Scan QR Code だけ
 ///   active    PC（Status・Address・EffeTune の版・食い違い）／ Options（Mirror Analyzers）／ Disconnect
+///             形は控え（つなぎたい）で決まる。つなぎ直しを止める Disconnect は、つながる前にも要るので。
+///             Status と版はいまのつなぎ（status・host）で、つながるまでは Connecting か Error と版なし
 ///   idle      PC（Address・前に見た EffeTune の版）／ Connect・Scan QR Code ／ Forget
 ///
 /// List の中に置く前提。読み取りは scan で親が出す。
@@ -179,15 +187,11 @@ struct RemoteRows: View {
                         .foregroundStyle(.secondary)
                 }
                 addressRow
+                // PC の版はつながっているあいだだけ（host は hello の返事から）。つなぎ直しを待つあいだに
+                // 前に見た版（lastHost）を並べると、Connecting でもつながっているように読める（切断中と同じ理由）。
                 if let host = mirror.host {
                     LabeledContent(host.name) {
                         Text(host.label)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if let last = mirror.lastHost {
-                    // つなぎ直しを待っているあいだは前に見た版を出しておく。
-                    LabeledContent(last.name) {
-                        Text(last.label)
                             .foregroundStyle(.secondary)
                     }
                 }
