@@ -306,7 +306,8 @@ struct PipelineView: View {
             //
             // 撮るシートを指定されていればそれを出す。
             // ピッカーはpresentPickerを通す。2列ではまだ+が無いので、popoverにすると落ちる。
-            if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name) {
+            if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name),
+               which != .remote || ETFeatures.remoteControl {
                 if which == .picker { presentPicker() } else { sheet = which }
             }
             // 動きを撮るために、しばらくしてから自分で開く。
@@ -1990,7 +1991,8 @@ private struct PipelineToolbar: ToolbarContent {
             // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
             // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは
             // 設定画面の Remote の面から開く。
-            if pickerAsPopover {
+            // 店の版では出さない（ETFeatures.remoteControl）。
+            if pickerAsPopover && ETFeatures.remoteControl {
                 RemoteToolbarButton { present(.remote) }
             }
             Button("Presets", systemImage: "square.stack") { present(.presets) }

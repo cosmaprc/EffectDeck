@@ -252,7 +252,10 @@ final class RemoteMirror: ObservableObject {
     /// Disconnect していなければ（つなぎたいが残っていて控えもあれば）、控えた PC へつなぐ。
     func start() {
         // 編集中に落ちた。pipeline.last は手元の鎖のままだが、書き切る前だった分も含めて退避から戻す。
+        // **閉じた版（ETFeatures.remoteControl）でも戻す。**ベータで編集中に落ちて店の版へ上げた人の手元の鎖。
         pendingRestore = UserDefaults.standard.data(forKey: Self.stashKey) != nil
+        // 閉じた版では控えに触らず、つながない（上流が API を出して開けたら、控えからそのままつなぎ直せる）。
+        guard ETFeatures.remoteControl else { return }
         transition { $0.launch() }
         apply()
     }
@@ -327,7 +330,8 @@ final class RemoteMirror: ObservableObject {
     /// 接続を落として、つなぎたいなら張り直す。つなぎたくなければ Disconnected。
     private func apply() {
         disconnect()
-        guard intent.wantsConnection else {
+        // 閉じた版では入口が無いので来ないが、来てもつながない。
+        guard ETFeatures.remoteControl, intent.wantsConnection else {
             status = .disconnected
             return
         }
