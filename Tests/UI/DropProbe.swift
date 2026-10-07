@@ -14,6 +14,8 @@
 //    tail      画面の下の方の、最後のカードより下の空き
 //    card      2 枚目のカードの頭（対照。ここで落ちるならドラッグそのものが効いていない）
 //    empty*    鎖が空（-ETSeed none）の No effects の上・脇・下
+//    mini*     2 列の左の一覧（2 列だけ）。miniTail は最後の行（Output Correction）より下の空き、
+//              miniCorrection は Output Correction の行の名前の上。どちらも鎖の末尾へ足す
 //
 //  足せたかは、つまんだもの（Volume）の電源（switch、ラベルはエフェクト名）の数で見る。
 //  2 列では左の一覧にも 1 つ出るので、増えたかどうかだけを見る。
@@ -143,7 +145,22 @@ final class DropProbe: XCTestCase {
         var point = CGPoint.zero
         var info = ""
 
-        if empty {
+        if name.hasPrefix("mini") {
+            // 左の一覧の出力補正の行の電源。右の列にも同じ名前の電源があるので、左（x < 260）だけ。
+            let oc = app.switches.matching(NSPredicate(format: "label == %@", "Output Correction"))
+                .allElementsBoundByIndex.filter { $0.exists && $0.frame.minX < 260 }
+            guard let sw = oc.first else {
+                XCTFail("左の一覧に Output Correction の行が無い", file: file, line: line)
+                return
+            }
+            let f = sw.frame
+            switch name {
+            case "miniTail": point = CGPoint(x: f.maxX + 60, y: window.maxY - 80)
+            case "miniCorrection": point = CGPoint(x: f.maxX + 60, y: f.midY)
+            default: XCTFail("知らない点 \(name)"); return
+            }
+            info = "miniCorrection=\(f)"
+        } else if empty {
             let label = app.staticTexts["No effects"]
             XCTAssertTrue(label.exists, "No effects が出ない", file: file, line: line)
             let f = label.frame
@@ -204,6 +221,8 @@ final class DropProbe: XCTestCase {
     func testWide8EmptyText()  { probe(wide: true, "emptyText") }
     func testWide9EmptySide()  { probe(wide: true, "emptySide") }
     func testWideAEmptyBelow() { probe(wide: true, "emptyBelow") }
+    func testWideBMiniTail()   { probe(wide: true, "miniTail") }
+    func testWideCMiniCorrection() { probe(wide: true, "miniCorrection") }
 
     // MARK: - 1 列（iPhone の幅。撮影の既定の 393pt）
 
