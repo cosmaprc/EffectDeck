@@ -59,36 +59,40 @@ struct OutputCorrectionList: View {
     /// いま使っている出力先。まだ落ち着いた出力先が無い・リモート中は nil。
     private var current: ETOutputCorrectionDevice? { isRemote ? nil : oc.device }
 
+    /// 内蔵スピーカー。**いつも並べる。**どの端末にもあり、イヤホンを挿した状態で初めて開いても
+    /// 「スピーカーはつながないと設定できないのか」と読まれないように。名前は紐付けに残った名前があればそれ。
+    private static let speakerKey = "speaker"
+
     /// 並べる出力先。いまの出力先を先頭に（紐付けが無くても出す。選ぶのはたいていここ）、
-    /// 続けて紐付けてある他の出力先（紐付けの無い他の出力先は覚えていないので出せない）。
+    /// 次に内蔵スピーカー（いまの出力先でなければ）、続けて紐付けてある他の出力先
+    /// （紐付けの無い他の出力先は覚えていないので出せない）。
     private var devices: [ETOutputCorrectionDevice] {
         let key = current?.key
-        let others = oc.bindings.filter { $0.key != key }
-            .map { ETOutputCorrectionDevice(key: $0.key, name: $0.name, kind: $0.kind) }
-        return (current.map { [$0] } ?? []) + others
+        let bound = oc.bindings.map { ETOutputCorrectionDevice(key: $0.key, name: $0.name, kind: $0.kind) }
+        let speaker = bound.first { $0.key == Self.speakerKey }
+            ?? ETOutputCorrectionDevice(key: Self.speakerKey, name: "Speaker", kind: "speaker")
+        let others = bound.filter { $0.key != key && $0.key != Self.speakerKey }
+        return (current.map { [$0] } ?? []) + (key == Self.speakerKey ? [] : [speaker]) + others
     }
 
     var body: some View {
         List {
             Section {
-                if devices.isEmpty {
-                    // 出力先がまだ 1 つも落ち着いていない。並べるものが無いことだけを出す。
-                    Text("No output device")
-                        .foregroundStyle(.secondary)
-                }
                 ForEach(devices, id: \.key) { d in
                     let isCurrent = d.key == current?.key
+                    // 外しても行が残るもの（いまの出力先・内蔵スピーカー）は Remove を出さない。None で選び直す。
+                    let stays = isCurrent || d.key == Self.speakerKey
                     // 選ぶ画面はさらに押して進む。どちらの出し方でも、外側の NavigationStack に積まれる。
                     NavigationLink {
                         OutputCorrectionChooser(oc: oc, store: store, device: d,
-                                                removable: !isCurrent)
+                                                removable: !stays)
                     } label: {
                         deviceRow(d, isCurrent: isCurrent)
                     }
                     // いまの出力先以外は紐付けがあるから並んでいる。外すと行ごと無くなる
                     // （選ぶ画面の Remove・None と同じ）。いまの出力先は外しても行が残るので、None で選び直す。
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if !isCurrent {
+                        if !stays {
                             Button("Remove", role: .destructive) { oc.bind(d, preset: nil) }
                         }
                     }
