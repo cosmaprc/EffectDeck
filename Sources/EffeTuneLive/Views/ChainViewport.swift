@@ -214,9 +214,20 @@ struct ETLiveRow<Content: View>: View {
     let viewport: ETChainViewport
     @ViewBuilder var content: Content
 
+    var body: some View {
+        content.modifier(ETLiveRowModifier(id: id, split: split, viewport: viewport))
+    }
+}
+
+/// ETLiveRow の中身。鎖の外の行（出力補正）は他の修飾が長く続くので、包まずにこちらを付ける。
+struct ETLiveRowModifier: ViewModifier {
+    let id: UUID
+    let split: Bool
+    let viewport: ETChainViewport
+
     @State private var live = true
 
-    var body: some View {
+    func body(content: Content) -> some View {
         content
             .environment(\.etGraphLive, !split || live)
             // 1%でも見えたら画面に入っているとみなす。**入る・出るときだけ呼ばれる。**

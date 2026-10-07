@@ -12,6 +12,7 @@
 //      IR の塊の切り方と継ぎ方、PC の変更を値だけで当てられるか
 //    - telemetry: PC の枠のヘッダの読み方・壊れた項目を落とす・tapId の付け替え・番号の対応表の裏返し
 //      PEQ の重ね表示: role の読み方、段ごとの行き先（5Band・15Band・FIR・探りの無い PEQ）、名前違いを落とす
+//    - Connected は hello の返事を受けてからだけ（控えの「つなぎたい」では塗らない）。黙った PC を見回りで切る
 
 import XCTest
 
@@ -850,5 +851,79 @@ final class RemoteProtocolTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ETRemoteLastHost.self, from: old)
         XCTAssertNil(decoded.hostName)
         XCTAssertEqual(decoded.label, "2.11.0")
+    }
+
+    // MARK: - つながっているか（控えとは別）
+
+    func testOnlyAnAnsweredHelloCountsAsConnected() {
+        XCTAssertTrue(ETRemoteStatus.connected.isLive)
+        for status in [ETRemoteStatus.disconnected, .connecting, .error("Can't connect")] {
+            XCTAssertFalse(status.isLive, status.label)
+        }
+    }
+
+    func testIndicatorIsBlueOnlyWhileLiveNotWhileMerelyWanted() {
+        // 前の起動でつないだまま閉じた: 控えは「つなぎたい」でも、起動した直後はつながっていない。
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: true, status: .disconnected), .connecting)
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: true, status: .connecting), .connecting)
+        // 開けなかった・応答が途絶えた。つなぎ直しを待つあいだも塗らない。
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: true, status: .error("Can't connect")), .connecting)
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: true, status: .connected), .live)
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: false, status: .disconnected), .off)
+        // 4401 で止まった: つなぎたくない側へ倒れているので脈も打たない。
+        XCTAssertEqual(ETRemoteIndicator(wantsConnection: false, status: .error("Wrong token")), .off)
+    }
+
+    func testHeartbeatDeclaresTheHostGoneAfterTheDeadlineOfSilence() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+        var hb = ETRemoteHeartbeat(now: t0)
+        var now = t0
+        // 何も聞こえないまま interval ごとに見回る。deadline を越えた回で切れたとみなす。
+        while true {
+            now += ETRemoteHeartbeat.interval
+            let action = hb.tick(at: now)
+            if now.timeIntervalSince(t0) <= ETRemoteHeartbeat.deadline {
+                XCTAssertEqual(action, .ping, "deadline までは ping を送るだけ")
+            } else {
+                XCTAssertEqual(action, .dead)
+                break
+            }
+        }
+    }
+
+    func testHeartbeatStaysAliveWhileTheHostAnswers() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+        var hb = ETRemoteHeartbeat(now: t0)
+        var now = t0
+        for _ in 0..<50 {
+            now += ETRemoteHeartbeat.interval
+            XCTAssertEqual(hb.tick(at: now), .ping)
+            hb.heard(at: now + 0.05)   // pong
+        }
+    }
+
+    func testHeartbeatDoesNotCountTimeSpentSuspended() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+        var hb = ETRemoteHeartbeat(now: t0)
+        // 背景で止められて、見回りが 10 分ぶん飛んだ。戻った回は切らずに聞き直す。
+        let back = t0 + 600
+        XCTAssertEqual(hb.tick(at: back), .ping)
+        XCTAssertEqual(hb.lastHeard, back)
+        // そこから黙ったままなら、いつもどおり deadline で切れる。
+        var now = back
+        var last: ETRemoteHeartbeat.Action = .ping
+        while now.timeIntervalSince(back) <= ETRemoteHeartbeat.deadline {
+            now += ETRemoteHeartbeat.interval
+            last = hb.tick(at: now)
+        }
+        XCTAssertEqual(last, .dead)
+    }
+
+    func testHeartbeatIgnoresAnOlderHeard() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+        var hb = ETRemoteHeartbeat(now: t0)
+        hb.heard(at: t0 + 10)
+        hb.heard(at: t0 + 3)   // 遅れて届いた古い pong
+        XCTAssertEqual(hb.lastHeard, t0 + 10)
     }
 }

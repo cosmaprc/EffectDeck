@@ -14,6 +14,8 @@ import UIKit
 struct PresetsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var dsp: EffeTuneDSP
+    /// PC の鎖を編集している間（PipelineView が渡す）。Output Correction の画面へそのまま渡す。
+    var isRemote: Bool = false
     @StateObject private var store = PresetStore.shared
 
     @State private var newName = ""
@@ -251,6 +253,7 @@ struct PresetsView: View {
         NavigationStack {
             List {
                 saveSection
+                outputCorrectionSection
                 userSection
                 systemSection
                 webSection
@@ -341,6 +344,23 @@ struct PresetsView: View {
     }
 
     // MARK: - 節
+
+    /// 出力補正への入口。**押して別の画面へ進むだけで、ここでは何も読み込まない。**
+    /// 前はこの画面の節で直に選ばせていて、プリセットの行を押すと鎖ごと読み込まれる
+    /// （この画面の本来の動き）ので、補正を選ぶつもりで使う人の鎖を置き換えてしまった。
+    /// 選ぶ所は OutputCorrectionList（OutputCorrectionView.swift）で、main の鎖には触らない。
+    /// 補正の中身はユーザープリセットなので、口はプリセットのシートに置く（⋯ のメニューではなく）。
+    /// 紐付けが無いと鎖の下の出力補正の行が出ないので、最初の紐付けはここから始める。
+    /// Save のすぐ下に、自分だけの節で置く（プリセットの一覧に混ぜると、押すと読み込む行に見える）。
+    private var outputCorrectionSection: some View {
+        Section {
+            NavigationLink {
+                OutputCorrectionList(isRemote: isRemote)
+            } label: {
+                Label("Output Correction", systemImage: "headphones")
+            }
+        }
+    }
 
     private var saveSection: some View {
         Section {
@@ -659,7 +679,10 @@ struct PresetsView: View {
     }
 
     private var webSection: some View {
-        let externalCount = dsp.chain.lazy.filter(\.isExternal).count
+        // 出力補正が入っていれば（入切が切・リモート中は空）、鎖だけか補正込みかを選ばせる。
+        let corrected = !dsp.correction.isEmpty
+        let mainExternal = dsp.chain.lazy.filter(\.isExternal).count
+        let externalCount = mainExternal + (corrected ? dsp.correction.lazy.filter(\.isExternal).count : 0)
         return Section {
             HStack {
                 Text("Compatibility")
@@ -672,26 +695,30 @@ struct PresetsView: View {
                 }
                 .foregroundStyle(externalCount == 0 ? Color.green : Color.orange)
             }
-            // **外から来たものが在るときは、落とさない口を先に出す。**
-            // 上流のリンクは AU と JSFX を落とすので、そちらしか無いと
-            // 「共有したのに向こうで鎖が違う」になる。
-            if externalCount > 0, let deck = ETShareLink.deckURL(for: dsp.chain) {
-                ShareLink(item: deck) {
-                    Label("Share this chain", systemImage: "square.and.arrow.up")
+            if corrected {
+                correctedShareRows(mainExternal: mainExternal, allExternal: externalCount)
+            } else {
+                // **外から来たものが在るときは、落とさない口を先に出す。**
+                // 上流のリンクは AU と JSFX を落とすので、そちらしか無いと
+                // 「共有したのに向こうで鎖が違う」になる。
+                if externalCount > 0, let deck = ETShareLink.deckURL(for: dsp.chain) {
+                    ShareLink(item: deck) {
+                        Label("Share this chain", systemImage: "square.and.arrow.up")
+                    }
                 }
-            }
-            if let url = ETShareLink.url(for: dsp.chain) {
-                ShareLink(item: url) {
-                    Label(externalCount == 0
-                          ? "Share this chain"
-                          : "Export to EffeTune without \(externalCount) external effect\(externalCount == 1 ? "" : "s")",
-                          systemImage: externalCount == 0
-                                       ? "square.and.arrow.up" : "arrow.up.forward.square")
+                if let url = ETShareLink.url(for: dsp.chain) {
+                    ShareLink(item: url) {
+                        Label(externalCount == 0
+                              ? "Share this chain"
+                              : "Export to EffeTune without \(externalCount) external effect\(externalCount == 1 ? "" : "s")",
+                              systemImage: externalCount == 0
+                                           ? "square.and.arrow.up" : "arrow.up.forward.square")
+                    }
                 }
             }
             // 鎖を ChatGPT に組ませる口（Build with ChatGPT…）はプリセットの口ではない。結果は
             // プリセットとして保存されず、クリップボード経由で鎖として読み込まれる（ClipboardBanner）ので、
-            // エフェクト一覧の Effects の面の頭と、空の鎖の表示に置いてある。
+            // エフェクト一覧（Available Effects）の Effects の面の頭と、空の鎖の表示に置いてある。
             // ここは共有するための節で、デスクトップの EffeTune も共有リンクを開くので "Share" と呼ぶ。
             Button {
                 // **@State を立てるだけで終わっていた。** それを読む View が無く、
@@ -705,5 +732,44 @@ struct PresetsView: View {
         } header: {
             Text("Share")
         }
+    }
+
+    /// 出力補正が入っているときの共有の行。行の形は補正が無いときと同じで、それぞれを
+    /// 「鎖だけ」と「鎖＋出力補正」の 2 つから選ぶ Menu にする。
+    /// 補正込みは main・終端・補正を 1 本の普通の鎖に平らげたもの（ETOutputCorrectionForm.flatten）で、
+    /// 受け手には出力先の身元は付かない。
+    @ViewBuilder
+    private func correctedShareRows(mainExternal: Int, allExternal: Int) -> some View {
+        let flat = ETOutputCorrectionForm.flatten(main: dsp.chain.map { PipelineStore.Loaded($0) },
+                                                  correction: dsp.correction.map { PipelineStore.Loaded($0) })
+        if allExternal > 0 {
+            Menu {
+                if let deck = ETShareLink.deckURL(for: dsp.chain) {
+                    ShareLink("Chain", item: deck)
+                }
+                if let deck = ETShareLink.deckURL(for: flat) {
+                    ShareLink("Chain + Output Correction", item: deck)
+                }
+            } label: {
+                Label("Share this chain", systemImage: "square.and.arrow.up")
+            }
+        }
+        Menu {
+            if let url = ETShareLink.url(for: dsp.chain) {
+                ShareLink(Self.exportTitle("Chain", dropping: mainExternal), item: url)
+            }
+            if let url = ETShareLink.url(for: flat) {
+                ShareLink(Self.exportTitle("Chain + Output Correction", dropping: allExternal), item: url)
+            }
+        } label: {
+            Label(allExternal == 0 ? "Share this chain" : "Export to EffeTune",
+                  systemImage: allExternal == 0 ? "square.and.arrow.up" : "arrow.up.forward.square")
+        }
+    }
+
+    /// EffeTune へ出す項目の名前。落とす外の段があれば数を添える。
+    private static func exportTitle(_ base: String, dropping count: Int) -> String {
+        guard count > 0 else { return base }
+        return "\(base) (without \(count) external effect\(count == 1 ? "" : "s"))"
     }
 }

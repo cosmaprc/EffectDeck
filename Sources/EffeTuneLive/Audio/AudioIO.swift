@@ -20,6 +20,7 @@
 //    音のスレッドの並べ替えと書き出し             AudioBufferOps.swift
 //    無音で休む                                   PowerPolicy.swift
 //    仮想デバイスからの引き剥がし                 RouteEscape.swift
+//    出力先の鍵と、出力補正を切り替える時機       OutputDevice.swift
 //  ここに残すのは AVAudioSession と AVAudioEngine に触る部分だけ。
 
 import AVFoundation
@@ -145,6 +146,11 @@ final class AudioIO: ObservableObject {
     @Published var pipelineLatency: Int = 0
     /// 無音で休んでいるか。
     @Published var resting = false
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12）。
+    /// 立っている間は No audio yet の帯が再起動を案内する。出し入れは ETProtocolMigration。
+    @Published private(set) var restartNeeded = ETProtocolMigration.isPending(storage: UserDefaults.standard)
+    /// 音が続いたかを見る。hasPeer だけで消さない理由は ETSustainedAudio の注記。
+    private var sustainedAudio = ETSustainedAudio()
 
     private var ticks = 0
 
@@ -161,6 +167,15 @@ final class AudioIO: ObservableObject {
     /// NotificationCenter の購読。singleton なので外す機会は無いが、持っておく。
     private var observers: [NSObjectProtocol] = []
 
+    /// 落ち着いた出力先（ヘッドホンなど）。名前が変わったかを見るためだけに持つ。
+    /// 画面が見るのは OutputCorrection.device（AudioIO は 3.3Hz で publish するので観測させない）。
+    private(set) var outputDevice: ETOutputDevice?
+    /// 出力先が変わったと決める判断。中身は ETDeviceSwitch（OutputDeviceTests）。
+    private var deviceSwitch = ETDeviceSwitch(settled: nil)
+    /// 待ちが明けたときに経路を読み直す 1 回きりの Task。tick が回っていなくても切り替える。
+    private var deviceRecheck: Task<Void, Never>?
+    private var deviceRecheckAt: TimeInterval?
+
     private init() {
         // 帰還ループの判定は Swift の写し（AudioSessionRules.swift）で見ている。
         // ドライバが名乗る字（ETNames.h）と食い違うと、戻っていても気づけない。
@@ -174,6 +189,10 @@ final class AudioIO: ObservableObject {
             self?.render?.gate.thresholdLinear =
                 PowerGate.linearThreshold(decibels: Preferences.shared.silenceThresholdDb)
         }
+        // 前回落ち着いた出力先から始める。同じ出力先での起動を切り替えと取らないため。
+        // OutputCorrection.shared はここで作らない（入れ物を直に読む）。
+        deviceSwitch = ETDeviceSwitch(
+            settled: ETOutputCorrectionStoreCore(storage: UserDefaults.standard).currentDevice?.key)
         observeSession()
 
         // DSP のエンジンは音と関係なく用意しておく。
@@ -646,7 +665,7 @@ final class AudioIO: ObservableObject {
             let external = (0..<ET_EXTERNAL_MAX_PROCESSORS).map {
                 "\($0):\(ETPipeline_ExternalProcessCount(UInt32($0)))/\(ETPipeline_ExternalLastStatus(UInt32($0)))"
             }.joined(separator: ",")
-            let line = "tick out=\(route) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue) ports=\(ports) ovr=\(overriding) applied=\(applied) active=\(ETPipeline_ActiveNodes()) chain=\(EffeTuneDSP.shared.chain.count) peer=\(hasPeer) recv=\(received) load=\(load) cfgStatus=\(ETPipeline_LastStatus()) proc=\(render?.pipeStatus ?? 0) ext=\(external) lat=\(ETPipeline_Latency()) rlat=\(resamplerLatency)"
+            let line = "tick out=\(route) rsp=\(session.routeSharingPolicy.rawValue) np=\(NowPlaying.mode.rawValue) ports=\(ports) ovr=\(overriding) applied=\(applied) active=\(ETPipeline_ActiveNodes()) chain=\(EffeTuneDSP.shared.chain.count) oc=\(EffeTuneDSP.shared.correction.count) peer=\(hasPeer) recv=\(received) load=\(load) cfgStatus=\(ETPipeline_LastStatus()) proc=\(render?.pipeStatus ?? 0) ext=\(external) lat=\(ETPipeline_Latency()) rlat=\(resamplerLatency)"
             log.notice("\(line, privacy: .public)")
             // **無線だとログが取れない。**
             // log stream --device はこの Xcode で無くなり、devicectl にも
@@ -703,6 +722,15 @@ final class AudioIO: ObservableObject {
 
         let nowReceived = ETLinkReceiver.shared.receivedFrames
         if received != nowReceived { received = nowReceived }
+
+        // 撮影用の音（ETMockSource）では消さない。見るのは拡張から来た音だけ。
+        if restartNeeded,
+           sustainedAudio.observe(peer: ETLinkReceiver.shared.hasPeer, received: nowReceived,
+                                  now: ProcessInfo.processInfo.systemUptime) {
+            log.notice("protocol migration: audio sustained, clearing restart notice")
+            ETProtocolMigration.clear(storage: UserDefaults.standard)
+            restartNeeded = false
+        }
 
         let nowBuffered = ETLinkReceiver.shared.bufferedFrames
         if bufferedFrames != nowBuffered { bufferedFrames = nowBuffered }
@@ -942,5 +970,78 @@ final class AudioIO: ObservableObject {
         let nowLoopback = outs.contains { ETAudioSessionRules.isOwnDevice(portName: $0.portName) }
         if loopback != nowLoopback { loopback = nowLoopback }
 
+        followOutputDevice(cur)
+    }
+
+    // MARK: - 出力先ごとの出力補正
+
+    /// 経路の 1 回の読みから、出力先が変わったかを見る。判断は ETDeviceSwitch。
+    ///
+    /// 走っていない・DSP が用意できていない・引き剥がしで本体のスピーカーへ寄せている間は
+    /// 情報にしない（寄せている間の Speaker は本物の出力先ではない）。
+    /// PC の鎖を編集している間（RemoteMirror.isRemote）も見送る。切ったあとに出力先が違えばそこで切り替える。
+    private func followOutputDevice(_ route: AVAudioSessionRouteDescription) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let device = ETOutputDevice.pick(route.outputs.map {
+            ETOutputDevice(kind: Self.outputKind($0.portType), uid: $0.uid, name: $0.portName)
+        })
+        let step = deviceSwitch.observe(device,
+                                        active: running && !overriding && EffeTuneDSP.shared.ready
+                                            && !RemoteMirror.shared.isRemote,
+                                        now: now,
+                                        lastStart: lifecycle.lastStartAttempt,
+                                        lastEscape: escape.lastApply)
+        // 落ち着いている出力先の名前が変わったら（設定で付け直したなど）画面へ出し直す。
+        if let device, device.key == deviceSwitch.settled, outputDevice != device {
+            outputDevice = device
+            OutputCorrection.shared.deviceSeen(device)
+        }
+        switch step {
+        case .idle:
+            cancelDeviceRecheck()
+        case .wait(let until):
+            scheduleDeviceRecheck(at: until, now: now)
+        case .switched(let d):
+            cancelDeviceRecheck()
+            // 紐付けたプリセットを読み直すか外す。main には触らない。記録の 1 行も向こうで出す（uid は出さない）。
+            OutputCorrection.shared.deviceSettled(d)
+        }
+    }
+
+    /// 待ちが明けたら経路だけ読み直す。引き剥がしも入力の固定もしない。
+    private func scheduleDeviceRecheck(at until: TimeInterval, now: TimeInterval) {
+        if deviceRecheckAt == until { return }
+        deviceRecheck?.cancel()
+        deviceRecheckAt = until
+        deviceRecheck = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, until - now) + 0.05))
+            guard !Task.isCancelled, let self else { return }
+            self.deviceRecheck = nil
+            self.deviceRecheckAt = nil
+            self.followOutputDevice(AVAudioSession.sharedInstance().currentRoute)
+        }
+    }
+
+    private func cancelDeviceRecheck() {
+        deviceRecheck?.cancel()
+        deviceRecheck = nil
+        deviceRecheckAt = nil
+    }
+
+    /// 口の型を出力先の種類に直す。AVFoundation に触るのはここだけ（判断は OutputDevice.swift）。
+    /// 自分の仮想デバイスは .airPlay を名乗るので .other に落ち、補正を持てない。
+    private static func outputKind(_ t: AVAudioSession.Port) -> ETOutputDevice.Kind {
+        switch t {
+        case .builtInSpeaker: return .speaker
+        case .headphones: return .wired
+        case .lineOut: return .lineOut
+        case .bluetoothA2DP: return .bluetooth
+        case .bluetoothLE: return .bluetoothLE
+        case .bluetoothHFP: return .hfp
+        case .usbAudio: return .usb
+        case .carAudio: return .car
+        case .HDMI: return .hdmi
+        default: return .other
+        }
     }
 }

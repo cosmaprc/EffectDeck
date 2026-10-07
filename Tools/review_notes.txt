@@ -27,9 +27,8 @@ run until the user adds them. A chain link (https://effectdeck.nemut.ai/?p=...)
 carries no script source; it can only use scripts already imported on the
 device.
 Write JSFX with ChatGPT (Plugins) and Build with ChatGPT... (Effects) only
-open a chatgpt.com link (the ChatGPT app if installed,
-otherwise the browser) that carries a short request. The app sends nothing else
-to ChatGPT.
+open a chatgpt.com link (the ChatGPT app if installed, otherwise the
+browser) that carries a short request. The app sends nothing else to ChatGPT.
 The user imports a returned script with From Files or From Clipboard. A returned
 chain goes in with Presets > Import from clipboard, which reads the clipboard
 only when tapped and builds a chain from the app's built-in effects and scripts

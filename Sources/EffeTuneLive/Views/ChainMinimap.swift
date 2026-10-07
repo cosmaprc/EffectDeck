@@ -10,6 +10,9 @@
 //    - ピッカーからつまんだものは行の間へ落とせる（onInsert）
 //    - 頭の電源はカードの電源と同じもの。別の入切を持たない
 //    - Level Meterの行だけ、クリップしたときに行の右端へOVERLOADの札を出す（カードと同じ決め方）
+//    - 一番下に出力補正の行（右の鎖の下の行と同じもの）。鎖の項目ではないので掴めない。
+//      落としたものは鎖の末尾へ（右の出力補正の行と同じ）
+//    - その下の空きは末尾の帯（ETMinimapTail）が埋め、落としたものは鎖の末尾へ（右の末尾の帯と同じ）
 //
 //  行の並びは右と同じrowsから作る（PipelineView.minimapItems）。
 //  onMoveの数え方がそのままmove(_:to:)の数え方になる。
@@ -43,12 +46,16 @@ struct ChainMinimap: View {
     let items: [ETMinimapItem]
     let dsp: EffeTuneDSP
     let viewport: ETChainViewport
+    /// 右の出力補正の行の身元。nilなら出さない（PCの鎖を編集している間。右も出していない）。
+    let correction: UUID?
     /// 画面の行番号で動かす。ListのonMoveと同じ数え方。
     let move: (IndexSet, Int) -> Void
     /// ピッカーから運ばれた文字列と、差し込む鎖の位置（nilなら末尾）。
     let insert: (String, Int?) -> Void
 
     @State private var tracker = ETMinimapTracker()
+    /// 末尾の帯の高さ。一覧が画面を埋めていないときは残りを埋める（ETMinimapTail）。
+    @State private var tail: CGFloat = ETMinimapRow.height
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -68,9 +75,25 @@ struct ChainMinimap: View {
                         Task { @MainActor in insert(payload, at) }
                     }
                 }
+                // **ForEachの外に置く。**onMove・onInsertの数え方に入れない（動かせず、ここへは落とせない）。
+                if let correction {
+                    ETMinimapCorrectionRow(id: correction, viewport: viewport, insert: insert)
+                        .id(ETMinimapID(id: correction))
+                }
+                ETMinimapTail(height: tail, insert: insert)
             }
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, ETMinimapRow.height)
+            // 帯の高さ = 見えている高さ − 帯より上の合計（中身 − いまの帯）。
+            // **位置でなく高さで出す。**送っても変わらないので、帯が変わる→また送れる、の堂々巡りにならない
+            // （PipelineView.tailHeightと同じ理由）。切り捨てて、短い一覧が送れるようにしない。
+            .onScrollGeometryChange(for: ETMinimapSpace.self) {
+                ETMinimapSpace(content: $0.contentSize.height,
+                               visible: $0.containerSize.height - $0.contentInsets.top - $0.contentInsets.bottom)
+            } action: { _, space in
+                let want = max(ETMinimapRow.height, (space.visible - (space.content - tail)).rounded(.down))
+                if abs(want - tail) >= 1 { tail = want }
+            }
             .onScrollPhaseChange { _, phase in tracker.phase = phase }
             .background {
                 ETMinimapFollow(viewport: viewport, tracker: tracker, proxy: proxy)
@@ -177,6 +200,85 @@ private struct ETMinimapRow: View {
         // 地の色は行いっぱいに敷かれて、続く行と繋がって1本の帯になる。
         .listRowInsets(EdgeInsets())
         .listRowBackground(viewport.onScreen.contains(item.id)
+                           ? Color.accentColor.opacity(0.14) : nil)
+    }
+}
+
+/// 左の一覧の中身と見えている高さ。末尾の帯の高さを出すのに使う。
+private struct ETMinimapSpace: Equatable {
+    let content: CGFloat
+    let visible: CGFloat
+}
+
+/// 最後の行より下の空き。落としたものは鎖の末尾へ（右の末尾の帯と同じ）。
+///
+/// **一覧の中の行として敷く。**Listの背面は中身の上で放したものを受けず、onInsertは行の間でしか
+/// 起きないので、敷かないと最後の行より下は何も受けない（掴んだものが戻っていく）。
+/// ForEachの外なので、onMove・onInsertの数え方には入らない。行の間の口はそのまま。
+/// **contentShapeを必ず付ける。**Color.clearは枠を持っていても当たりを取らない。
+private struct ETMinimapTail: View {
+    let height: CGFloat
+    let insert: (String, Int?) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(height: height)
+            .contentShape(.rect)
+            .dropDestination(for: String.self) { items, _ in
+                guard let type = items.first else { return false }
+                insert(type, nil)
+                return true
+            }
+            .accessibilityHidden(true)
+            .moveDisabled(true)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+}
+
+/// 出力補正の行。エフェクトの行と同じ形（電源と名前）。電源は右の行の電源と同じもの。
+/// 押すと右の出力補正の行へ飛ぶ（エフェクトの行と同じ。シートは右の行から開く）。
+/// 落としたものは鎖の末尾へ（右の出力補正の行と同じ。補正の中身には入れない）。
+private struct ETMinimapCorrectionRow: View {
+    let id: UUID
+    let viewport: ETChainViewport
+    let insert: (String, Int?) -> Void
+
+    @ObservedObject private var oc = OutputCorrection.shared
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
+                .toggleStyle(.power)
+                .labelsHidden()
+                .accessibilityLabel("Output Correction")
+
+            Button {
+                viewport.request(id)
+            } label: {
+                Text("Output Correction")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+            }
+        }
+        // 値はETMinimapRowの写し（字下げなしの行）。
+        .padding(.leading, 6)
+        .padding(.trailing, 14)
+        .frame(height: ETMinimapRow.height)
+        .opacity(oc.isOn ? 1 : 0.55)
+        .contentShape(.rect)
+        .dropDestination(for: String.self) { items, _ in
+            guard let type = items.first else { return false }
+            insert(type, nil)
+            return true
+        }
+        .moveDisabled(true)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(viewport.onScreen.contains(id)
                            ? Color.accentColor.opacity(0.14) : nil)
     }
 }

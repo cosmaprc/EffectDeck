@@ -53,6 +53,10 @@ struct PipelineView: View {
         case picker, settings, routing, presets, ir, tips
         /// PC の EffeTune を操る画面（PoC。ツールバーのアイコンのシート。設定画面からは押して進む。RemoteScannerView.swift）。
         case remote
+        /// 出力補正の専用シート（鎖の下の出力補正の行から。OutputCorrectionView.swift）。
+        /// Presets のシートを開かせると、行を押しただけで鎖ごと読み込まれてしまうので分けた。
+        /// 紐付けがまだ無いときの入口は Presets の Output Correction の行（同じ中身を押して進む形で出す）。
+        case outputCorrection
         var id: String { rawValue }
     }
 
@@ -107,9 +111,16 @@ struct PipelineView: View {
     /// ここへ届くのは本当に変わったときだけ。初期値は onAppear で合わせる。
     @State private var running = false
     @State private var hasPeer = false
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12）。帯の字を替える。
+    @State private var restartNeeded = false
     /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
     @State private var isRemote = false
     @State private var processingRate: Double = 48000
+    /// 鎖の下の出力補正の行の小さい行。「プリセット名 · 出力先」。紐付けが無ければ「None · 出力先」、
+    /// 出力先がまだ落ち着いていなければ「None」（シートの行と同じ None）。
+    /// **OutputCorrection を丸ごと観測しない。**この画面は大きいので、行の字に要る値だけを写す
+    /// （io と同じやり方）。入切は行が自分で観測する。
+    @State private var correctionDetail = "None"
 
     // MARK: - 並べ方（1列/2列）
     //
@@ -211,8 +222,9 @@ struct PipelineView: View {
 
     /// 鎖の中での座標。行の位置も指の位置もこれで測る。
     private static let chainSpace = "chain"
-    /// 鎖が空のときの表示（EmptyChainRow）の矩形を、行と同じ箱（geometry）へ入れるときの鍵。
-    /// 末尾の帯（tailHeight）が空の表示のぶんも引くように。
+    /// 出力補正の行の矩形を、カードの行と同じ箱（geometry）へ入れるときの鍵。末尾の帯（tailHeight）がこの行のぶんも引くように。
+    private static let correctionRowID = UUID()
+    /// 鎖が空のときの表示（EmptyChainRow）の矩形を、同じ箱（geometry）へ入れるときの鍵。
     private static let emptyRowID = UUID()
     /// 鎖の中身の座標。**送っても動かない。**2列で読んでいる位置を保つのに使う（contentMoved）。
     private static let contentSpace = "chainContent"
@@ -257,11 +269,13 @@ struct PipelineView: View {
             case .routing:
                 RoutingView(dsp: dsp)
             case .presets:
-                PresetsView(dsp: dsp)
+                PresetsView(dsp: dsp, isRemote: isRemote)
             case .ir:
                 IRLibraryView()
             case .remote:
                 RemotePanelView()
+            case .outputCorrection:
+                OutputCorrectionView(isRemote: isRemote)
             // ConnectBanner の Help から。Settings 側は自分の NavigationStack で押す。
             case .tips:
                 NavigationStack {
@@ -292,7 +306,8 @@ struct PipelineView: View {
             //
             // 撮るシートを指定されていればそれを出す。
             // ピッカーはpresentPickerを通す。2列ではまだ+が無いので、popoverにすると落ちる。
-            if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name) {
+            if let name = ETScreenshotSeed.sheet, let which = Sheet(rawValue: name),
+               which != .remote || ETFeatures.remoteControl {
                 if which == .picker { presentPicker() } else { sheet = which }
             }
             // 動きを撮るために、しばらくしてから自分で開く。
@@ -309,6 +324,7 @@ struct PipelineView: View {
             // 写した値の初期合わせ。購読の初回配信に頼らない。
             running = io.running
             hasPeer = io.hasPeer || RemoteMirror.shared.isRemote
+            restartNeeded = io.restartNeeded
             isRemote = RemoteMirror.shared.isRemote
             processingRate = io.processingRate
         }
@@ -378,6 +394,15 @@ struct PipelineView: View {
             isRemote = remote
         }
         .onReceive(io.$processingRate) { processingRate = $0 }
+        .onReceive(io.$restartNeeded) { restartNeeded = $0 }
+        // @Published の publisher は書き換わる前に新しい値を流すので、oc の側は読まず流れてきた値で組む。
+        .onReceive(OutputCorrection.shared.$device.combineLatest(OutputCorrection.shared.$bindings)) { device, bindings in
+            // 出力先の名前はいまの出力先のもの（紐付けに残っているのは最後に見た名前）。
+            let preset = device.flatMap { d in bindings.first(where: { $0.key == d.key })?.preset }
+                .map(ETUserPresetName.leaf) ?? "None"
+            let next = device.map { "\(preset) · \($0.name)" } ?? preset
+            if correctionDetail != next { correctionDetail = next }
+        }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
         // 鎖の並び。左の一覧の「右で一番上のカード」と、足したカードを見せるのに使う。
@@ -450,6 +475,7 @@ struct PipelineView: View {
     private func split(_ visible: [Row]) -> some View {
         NavigationSplitView(columnVisibility: $columns) {
             ChainMinimap(items: minimapItems(visible), dsp: dsp, viewport: viewport,
+                         correction: isRemote ? nil : Self.correctionRowID,
                          move: { move($0, to: $1) },
                          insert: { _ = addDropped($0, at: $1) })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
@@ -630,8 +656,8 @@ struct PipelineView: View {
         }
     }
 
-    /// 鎖の外の行（空の表示）が画面から外れた。高さの合計から抜く。
-    /// 空の表示は鎖が埋まると消えるので、残すと最後の帯（tailHeight）が
+    /// 鎖の外の行（空の表示・出力補正）が画面から外れた。高さの合計から抜く。
+    /// これらは鎖の中身と関係なく出たり消えたりするので、残すと最後の帯（tailHeight）が
     /// 足りなくなる（帯の下に落とし所の無い所ができる）。
     private func unmeasured(_ id: UUID) {
         geometry.forget(id)
@@ -856,7 +882,7 @@ struct PipelineView: View {
                     .padding(.top, 4)
                     .padding(.bottom, 8)
             } else if !hasPeer {
-                ConnectBanner(openTips: { presentSheet(.tips) })
+                ConnectBanner(restartNeeded: restartNeeded, openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
@@ -1003,8 +1029,46 @@ struct PipelineView: View {
                 }
             }
 
-            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No effects」の
-            // 下がここになる。背面の口には届かないので、敷かないと受ける所が無い）。
+            // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは専用のシートで選ぶ（押すと開く）。
+            // Presets は開かない。あちらは行を押すと鎖ごと読み込むので、補正を選ぶつもりで鎖を置き換えてしまう。
+            // **紐付けが無くても出す（None）。**出さないと、補正があることも、どこから選ぶかも分からない。
+            // PC の鎖を編集している間は出さない（補正も外してある）。
+            if !isRemote {
+                VStack(spacing: 0) {
+                    // **鎖の終わりに線を 1 本引く。**同じ形の札が続くだけだと、出力補正も鎖の最後の段に見える。
+                    // 線には字を添えない。見出しを付けると Section の名前と同じものに見え、
+                    // 「なぜ最後だけ Section が名前で出ているのか」と読まれる（Section は自分の札で名前を出す）。
+                    // 何の札かは札の名前（Output Correction）が言う。
+                    // 線は組の上下の線（ETGroupRule）と同じもの。最後の行が組の下線をもう引いているときは
+                    // 重ねない（鎖の中の「線は 1 本にする」と同じ）。
+                    if visible.last?.block != .bottom {
+                        ETGroupRule()
+                    }
+                    OutputCorrectionRow(oc: OutputCorrection.shared, detail: correctionDetail,
+                                        open: { presentSheet(.outputCorrection) })
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 5)
+                }
+                // 左の一覧の出力補正の行から飛ぶ先。見えているかも左へ知らせる（行の地の色）。
+                .id(Self.correctionRowID)
+                .modifier(ETLiveRowModifier(id: Self.correctionRowID, split: split, viewport: viewport))
+                // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
+                // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
+                // 線の所も同じ口で受ける（線と札の間で落とすと何も起きない、を作らない）。
+                // 測る矩形も線ごと。末尾の帯（tailHeight）が線のぶんも引くように。
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    guard let type = items.first else { return false }
+                    return addDropped(type, at: nil)
+                }
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(Self.chainSpace))
+                } action: { measured(Self.correctionRowID, $0) }
+                .onDisappear { unmeasured(Self.correctionRowID) }
+            }
+
+            // **最後の行より下の余白も受ける。**鎖が空でも敷く（空のときは「No effects」と
+            // 出力補正の行の下がここになる。背面の口には届かないので、敷かないと受ける所が無い）。
             // 行にしか落とし所が無いと、鎖の下の空いている所へ落としたときに
             // どこにも入らず、掴んだものが戻っていく。「一番下へ足す」の
             // つもりで落としているので、末尾へ足す。
@@ -1050,7 +1114,7 @@ struct PipelineView: View {
         // 2列の両脇の余白もここへ落ちる。
         // **ただし ScrollView の中身の上で放したものはここへ来ない。**背面は中身の祖先ではなく
         // 後ろに居る兄弟なので、空の鎖（行も末尾の帯も無かった）では何も受けなかった。
-        // 中身の上の落とし所は、行・空の表示・末尾の帯がそれぞれ持つ。
+        // 中身の上の落とし所は、行・空の表示・出力補正・末尾の帯がそれぞれ持つ。
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -1927,7 +1991,8 @@ private struct PipelineToolbar: ToolbarContent {
             // **iPhone（1 列）には置かない。**右に 1 つ増えると中央の LiveStatusStrip が
             // 押し出されて重なる。iPhone ではリモート中は中央の札から、切れているときは
             // 設定画面の Remote の面から開く。
-            if pickerAsPopover {
+            // 店の版では出さない（ETFeatures.remoteControl）。
+            if pickerAsPopover && ETFeatures.remoteControl {
                 RemoteToolbarButton { present(.remote) }
             }
             Button("Presets", systemImage: "square.stack") { present(.presets) }
@@ -1963,6 +2028,9 @@ private struct PipelineToolbar: ToolbarContent {
             Menu {
                 Button("Settings", systemImage: "gearshape") { present(.settings) }
                 Button("Routing", systemImage: "arrow.triangle.branch") { present(.routing) }
+                // **出力補正と Build with ChatGPT… はここに置かない。**持ち主のシートに置く
+                // （「…のメニューに置くのは変」）。出力補正は Presets のシートの Output Correction の行、
+                // 鎖を組ませる依頼はエフェクト一覧の Effects の面の頭（と空の鎖の表示）。
                 Divider()
                 // 上流に鎖を空にする操作は無く、既定を組む所を
                 // 「Initialize default plugins」と呼んでいる（js/app.js:1061）。
@@ -2089,19 +2157,35 @@ enum ETPresentation {
 /// 拡張が繋がっていない間だけ、鎖の一番上に出る。
 /// 2本構成は普通ではないので、黙っていると詰まる。
 private struct ConnectBanner: View {
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12・ETProtocolMigration）。
+    let restartNeeded: Bool
     let openTips: () -> Void
+
+    /// **上げた人は 1 回再起動しないと繋がらない**（#2・#12）。その間は帯ごと「再起動が要る」に替える。
+    /// No audio yet のままだと、選び直せば繋がると読まれる（選んでも戻される）。題で言い切り、赤で出す。
+    /// 音が続いたら AudioIO が消す。端末の呼び名は UIDevice.model（iPad / iPhone。訳されない）。
+    private var title: String {
+        restartNeeded ? "\(UIDevice.current.model) Restart Required" : "No audio yet"
+    }
+
+    private var instruction: String {
+        restartNeeded
+            ? "Restart once after this update, then pick EffectDeck in Control Center."
+            : "Pick EffectDeck as the output in Control Center."
+    }
 
     var body: some View {
         Card {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "airplayaudio")
+                Image(systemName: restartNeeded ? "exclamationmark.triangle.fill" : "airplayaudio")
                     .font(.system(size: 20))
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(restartNeeded ? AnyShapeStyle(Color.red) : AnyShapeStyle(.tint))
                     .frame(width: 26)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("No audio yet")
+                    Text(title)
                         .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(restartNeeded ? Color.red : Color.primary)
                     // **やることをそのまま書く。**「送る」では、どこで何を
                     // 押せばよいのか画面から読めない。選ぶ場所を名指しする。
                     //
@@ -2117,7 +2201,7 @@ private struct ConnectBanner: View {
                     //
                     // **鳴らしてから選ぶ順は書かない**（#1 の訂正）。止めている間に選んでも
                     // 基本的に戻されない。一時停止が原因と確かめた失敗は無い。
-                    Text("Pick EffectDeck as the output in Control Center.")
+                    Text(instruction)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2245,6 +2329,79 @@ private struct EmptyChainRow: View {
                 .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// 出力補正の 1 行。**エフェクトのカードの頭と同じ形にする**（左に電源、名前と小さい行、右端に印）。
+/// 前は札の枠・iOS のスイッチ・開閉の 3 つの作法が 1 行に混ざり、大事な「どの出力先にどの補正か」が
+/// 小さな灰色の字だった。鎖の札の仲間に見えるように、電源・字の大きさ・間隔・切のときの沈み方を
+/// EffectCardView の頭（header）に揃える。
+///
+/// **高さも頭と同じにする。**前は縦の余白を名前のボタンの中にだけ入れていたので、行の高さが
+/// 「34pt の印 + 20」で決まり、「44pt の電源 + 20」の頭より 10pt 低かった。余白は頭と同じく
+/// 行（HStack）の外側に付け、行ぜんぶを押し所にする（頭の onTapGesture と同じ作り）。
+///
+/// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。電源以外のどこを押しても出力補正のシートを開く。
+/// 紐付けが無くても出す（小さい行が None）。
+private struct OutputCorrectionRow: View {
+    /// 入切だけを読む。小さい行の字は detail で受け取る。
+    @ObservedObject var oc: OutputCorrection
+    /// 「プリセット名 · 出力先」（PipelineView.correctionDetail）。
+    let detail: String
+    let open: () -> Void
+
+    var body: some View {
+        Card {
+            // 値はすべて EffectCardView.header の写し（間隔 6・字 16/11・行間 1・Spacer 4・
+            // 余白 左 2 / 右 4 / 上下 10）。片方だけ変えると、並んだ札で電源と名前の位置がずれる。
+            HStack(spacing: 6) {
+                // エフェクトのカードと同じ電源。切ると補正が外れる（出力先ごとではなく層ぜんぶ）。
+                Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
+                    .toggleStyle(.power)
+                    .labelsHidden()
+                    .accessibilityLabel("Output Correction")
+
+                VStack(alignment: .leading, spacing: 1) {
+                    // **大きい字は何の札か、小さい行が中身。**エフェクトのカードは名前（RS Reverb）が大きく、
+                    // 種別が小さい。ここも札の名前（Output Correction）を大きく出し、何を掛けているか
+                    // （プリセット名）とどの出力先かを小さい行に「 · 」でつなぐ（Section の札と同じ組み立て）。
+                    // 線の上に見出しは置かない（PipelineView の呼び出し側の頭を参照）。
+                    Text("Output Correction")
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    // 絵は付けない。カードのこの行は字だけなので、絵があると高さと字の頭がずれる。
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                // 名前と小さい行を 1 つのボタンとして読ませる。押したときの動きは下の onTapGesture と同じ。
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { open() }
+
+                Spacer(minLength: 4)
+
+                // カードの ⋯ と同じ位置・大きさ（34pt）。**灰色にしない。**カードの開閉の印は
+                // 畳んでいる間、灰色の右向きの山形なので、同じ色だと「開くと中身が出る」と読める。
+                // こちらは別の画面へ進む印。
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 34, height: 34)
+                    .accessibilityHidden(true)
+            }
+            .padding(.leading, 2)
+            .padding(.trailing, 4)
+            .padding(.vertical, 10)
+            // 電源の外は全部、シートを開く押し所。電源は中のボタンが先に受けるので、ここへは来ない
+            // （カードの頭の電源と開閉が同じ関係で共存している）。
+            .contentShape(Rectangle())
+            .onTapGesture(perform: open)
+        }
+        // 切のときはバイパスしたエフェクトのカードと同じだけ沈める。
+        .opacity(oc.isOn ? 1 : 0.55)
     }
 }
 

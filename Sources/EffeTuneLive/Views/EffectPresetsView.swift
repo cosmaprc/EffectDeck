@@ -39,9 +39,8 @@ struct EffectPresetsView: View {
     /// 適用したあと印を付け直すので、渡された写しではなく鎖から引く。
     /// 出している間に鎖が動いて別のエフェクトになっていたら nil。
     private var node: EffeTuneDSP.Node? {
-        guard dsp.chain.indices.contains(index),
-              dsp.chain[index].spec.type == spec.type else { return nil }
-        return dsp.chain[index]
+        guard let node = dsp.node(at: index), node.spec.type == spec.type else { return nil }
+        return node
     }
 
     /// 出荷時プリセットを上流の並びのまま束ねる。

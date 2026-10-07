@@ -43,6 +43,9 @@ struct SettingsView: View {
         }
     }
 
+    /// 並べる面。Remote は店の版では出さない（ETFeatures.remoteControl）。
+    private static let panes = Pane.allCases.filter { $0 != .remote || ETFeatures.remoteControl }
+
     @State private var pane: Pane = .audio
 
     var body: some View {
@@ -78,7 +81,7 @@ struct SettingsView: View {
                 // ここは当たらない（SettingsRows.swift の頭）。
                 ToolbarItem(placement: .principal) {
                     Picker("", selection: $pane) {
-                        ForEach(Pane.allCases) { Text($0.label).tag($0) }
+                        ForEach(Self.panes) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()

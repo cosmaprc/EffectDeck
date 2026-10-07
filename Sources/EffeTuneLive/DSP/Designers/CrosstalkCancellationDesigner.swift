@@ -124,11 +124,11 @@ final class CrosstalkCancellationController: ObservableObject {
     /// 送り込んだ後の publish のやり直しもここでやる。
     func apply(chainIndex: Int, config: Config, sources: Sources, force: Bool = false) {
         let dsp = EffeTuneDSP.shared
-        guard dsp.chain.indices.contains(chainIndex) else {
+        guard dsp.nodes.indices.contains(chainIndex) else {
             phase = .failed("This effect is no longer in the chain.")
             return
         }
-        let node = dsp.chain[chainIndex]
+        let node = dsp.nodes[chainIndex]
         guard node.spec.type == "CrosstalkCancellationPlugin", node.instance != 0 else {
             phase = .failed("This effect does not take a crosstalk filter.")
             return
@@ -284,8 +284,8 @@ final class CrosstalkCancellationController: ObservableObject {
     /// 送り込む直前に入れておけば同じ begin で効く。
     private func pushFilterDelay(_ config: Config, instance: UInt32) {
         let dsp = EffeTuneDSP.shared
-        guard let index = dsp.chain.firstIndex(where: { $0.instance == instance }),
-              let slot = paramOffset(named: "filterDelaySamples", in: dsp.chain[index].spec) else {
+        guard let index = dsp.nodes.firstIndex(where: { $0.instance == instance }),
+              let slot = paramOffset(named: "filterDelaySamples", in: dsp.nodes[index].spec) else {
             return
         }
         dsp.setValue(Float(config.filterDelaySamples), at: index, offset: slot)
@@ -297,7 +297,7 @@ final class CrosstalkCancellationController: ObservableObject {
     /// JS も同じ所で refreshDspPipelineForLatencyChange を呼んでいる。
     private func republish(instance: UInt32) {
         let dsp = EffeTuneDSP.shared
-        guard let index = dsp.chain.firstIndex(where: { $0.instance == instance }) else { return }
+        guard let index = dsp.nodes.firstIndex(where: { $0.instance == instance }) else { return }
         dsp.setRouting(at: index)
     }
 

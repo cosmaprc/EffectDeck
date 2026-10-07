@@ -301,12 +301,12 @@ struct EffectPickerView: View {
                 }
             }
             .onAppear { if current.isEmpty { current = firstCategory(for: pane) } }
-            // 押し込んだ先は List の中でなく、ここ（根の画面）に置く。List の行は遅れて作られる。
-            .navigationDestination(for: PresetRoute.self) { _ in systemPresetList }
             // PC の鎖を編集し始めたら Plugins の面から出す（面の選択肢から消えるため）。
             .onChange(of: remote.isRemote) { _, isRemote in
                 if isRemote && pane == .plugins { pane = .effects }
             }
+            // 押し込んだ先は List の中でなく、ここ（根の画面）に置く。List の行は遅れて作られる。
+            .navigationDestination(for: PresetRoute.self) { _ in systemPresetList }
             .onChange(of: pane) { _, selected in
                 // 面が替わったら押し込んだ画面から根へ戻す（path の注記）。
                 path = []

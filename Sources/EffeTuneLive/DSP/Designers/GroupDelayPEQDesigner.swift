@@ -384,7 +384,7 @@ final class GroupDelayPEQDesigner: ObservableObject {
 
     /// 鎖での位置。並べ替えで添字がずれるので、instance で引き直してから使う。
     private var currentNodeIndex: Int? {
-        let chain = EffeTuneDSP.shared.chain
+        let chain = EffeTuneDSP.shared.nodes
         if let index = nodeIndex, chain.indices.contains(index),
            chain[index].instance == instance {
             return index

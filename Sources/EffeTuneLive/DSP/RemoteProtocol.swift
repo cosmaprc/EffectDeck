@@ -9,6 +9,7 @@
 //    - v2: state の出どころ（origin / seq）で追うか捨てるか、プリセットと IR の足し合わせの決まり、
 //      PC の変更を値だけで当てられるか（ETRemoteFollow）
 //    - telemetry: PC のアナライザの枠を読み、手元の段の tapId に付け替える（ETRemoteTelemetry）
+//    - つながっているか（ETRemoteStatus・ETRemoteIndicator）と、PC が生きているかの見回り（ETRemoteHeartbeat）
 //
 //  ---------------------------------------------------------------------------
 //  **外部の段（AU / JSFX）は、符号化する前に振り分ける。**
@@ -762,7 +763,95 @@ struct ETRemoteIntent: Equatable {
     }
 }
 
-/// 最後につないだ PC の EffeTune の名前と版。つながっていないあいだの PC の行に出す。
+// MARK: - つながっているか（控えとは別）
+
+/// つなぎの「いま」。**Connected は hello の返事（state）を受けてから、切れる・応答が途絶えるまでだけ。**
+/// ETRemoteIntent（控えと「つなぎたいか」）は起動をまたいで残るが、これは残さない（起動は disconnected から）。
+enum ETRemoteStatus: Equatable {
+    case disconnected
+    /// ソケットを開いた・hello の返事を待っている・つなぎ直しを待っている
+    case connecting
+    /// hello の返事を受けた。応答が途絶えたら（ETRemoteHeartbeat）error へ落ちる
+    case connected
+    case error(String)
+
+    var label: String {
+        switch self {
+        case .disconnected:   return "Disconnected"
+        case .connecting:     return "Connecting"
+        case .connected:      return "Connected"
+        case .error(let why): return "Error: \(why)"
+        }
+    }
+
+    var isLive: Bool { self == .connected }
+}
+
+/// ツールバーのアイコンの見た目。**塗るのは本当につながっているあいだだけ。**
+/// 前は控えの「つなぎたい」で塗っていた。それは起動をまたいで残るので、PC の EffeTune が
+/// 居なくても起動した瞬間から青く、つながっているように見えた。
+enum ETRemoteIndicator: Equatable {
+    /// つなぎたくない。塗らない・脈を打たない
+    case off
+    /// つなぎたいが、つながっていない（つなぎ中・つなぎ直し待ち・応答なし）。脈を打つ。塗らない
+    case connecting
+    /// つながっている。青く塗る
+    case live
+
+    init(wantsConnection: Bool, status: ETRemoteStatus) {
+        if status.isLive {
+            self = .live
+        } else {
+            self = wantsConnection ? .connecting : .off
+        }
+    }
+}
+
+/// つないでいるあいだ、PC が生きているかを見る。
+///
+/// URLSession の WebSocket は、黙って消えた相手（PC が眠った・Wi-Fi が切り替わった・電源を落とした）を
+/// 自分では見つけない。受け待ちは TCP が諦めるまで返らず、そのあいだ Connected のまま PC の鎖を出し続ける。
+/// 開けない相手（居ない IP）も TCP が諦めるまで Connecting のまま。
+/// そこで interval ごとに ping を送り、deadline のあいだ何も聞こえなければ切れたとみなす。
+/// PC（Node の ws）は ping に自動で pong を返す。受けたメッセージも全部「聞こえた」に入れる。
+///
+/// **見回りそのものが止まっていたら数えない。**背景で止められていたあいだは聞こえなくて当たり前なので、
+/// 戻ったら聞き直す（そこから deadline）。
+struct ETRemoteHeartbeat: Equatable {
+    static let interval: TimeInterval = 5
+    /// IR の大きな枠（4 MiB）を送っているあいだは pong がその後ろに並ぶ。遅い Wi-Fi でも届く長さ。
+    static let deadline: TimeInterval = 20
+
+    enum Action: Equatable {
+        case ping
+        case dead
+    }
+
+    private(set) var lastHeard: Date
+    private(set) var lastTick: Date
+
+    init(now: Date) {
+        lastHeard = now
+        lastTick = now
+    }
+
+    mutating func heard(at now: Date) {
+        if now > lastHeard { lastHeard = now }
+    }
+
+    /// interval ごとに呼ぶ。
+    mutating func tick(at now: Date) -> Action {
+        defer { lastTick = now }
+        if now.timeIntervalSince(lastTick) > Self.deadline {
+            // 見回りが止まっていた（背景）。止まっていたあいだは数えずに聞き直す。
+            lastHeard = now
+            return .ping
+        }
+        return now.timeIntervalSince(lastHeard) > Self.deadline ? .dead : .ping
+    }
+}
+
+/// 最後につないだ PC の EffeTune の名前と版。切断中の Connect のボタンにホスト名を出す。
 struct ETRemoteLastHost: Codable, Equatable {
     var name: String
     var label: String

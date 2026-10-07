@@ -72,6 +72,78 @@ final class EffeTuneDSP: ObservableObject {
     var maximumFrames: UInt32 { maxFrames }
     private var kernelIndex: [String: UInt32] = [:]
 
+    /// et_engine_prepare を呼んだ回数。retire が prepare をまたいだかを見るのに使う。
+    /// Engine::prepare は destroyAllInstances を通るので、またいだ後の番号は使い回されうる。
+    private(set) var prepareGeneration = 0
+
+    // MARK: - 出力補正（Output Correction）
+
+    /// いまの出力先の補正。**chain（使う人の鎖）とは別の並び**で、エンジンへは chain の後ろに付けて渡す。
+    /// 入れ替えるのは OutputCorrection（出力先が替わる・入切・紐付けやプリセットの変更・リモートの出入り）だけ。
+    /// プリセット・共有・バックアップ・iCloud・pipeline.last・リモートの退避は chain しか見ないので、
+    /// ここに入っているものは載らない。
+    @Published private(set) var correction: [Node] = []
+
+    /// エンジンへ渡す並び。main の後ろに補正。**slot はこの並びの位置。**
+    /// main の slot は chain の添字と同じなので、段ごとの口（setValue など）の呼び手はそのまま通る。
+    var nodes: [Node] { chain + correction }
+
+    /// その slot の段。範囲の外なら nil。
+    func node(at slot: Int) -> Node? {
+        guard let at = locate(slot) else { return nil }
+        switch at.part {
+        case .main: return chain[at.local]
+        case .correction: return correction[at.local]
+        }
+    }
+
+    /// その段の slot。どちらにも居なければ nil。
+    func slot(of id: UUID) -> Int? {
+        if let i = chain.firstIndex(where: { $0.id == id }) { return i }
+        if let i = correction.firstIndex(where: { $0.id == id }) { return chain.count + i }
+        return nil
+    }
+
+    /// slot を部分と部分の中の位置へ。数え方は ETChainSlots（OutputCorrectionTests）。
+    private func locate(_ slot: Int) -> (part: ETChainPart, local: Int)? {
+        ETChainSlots.locate(slot, mainCount: chain.count, correctionCount: correction.count)
+    }
+
+    /// slot が在るか。nodes を作らずに見る（setValue はつまみを動かすたびに来る）。
+    private func contains(slot: Int) -> Bool {
+        slot >= 0 && slot < chain.count + correction.count
+    }
+
+    /// slot で段を読み書きする。**範囲は呼び手が contains(slot:) で見てから。**
+    private subscript(slot slot: Int) -> Node {
+        get {
+            slot < chain.count ? chain[slot] : correction[slot - chain.count]
+        }
+        set {
+            if slot < chain.count {
+                chain[slot] = newValue
+            } else {
+                correction[slot - chain.count] = newValue
+            }
+        }
+    }
+
+    /// その部分の並び（読むだけ）。
+    private func partNodes(_ part: ETChainPart) -> [Node] {
+        switch part {
+        case .main: return chain
+        case .correction: return correction
+        }
+    }
+
+    /// その部分の並びを書き換える。
+    private func withPart<R>(_ part: ETChainPart, _ body: (inout [Node]) -> R) -> R {
+        switch part {
+        case .main: return body(&chain)
+        case .correction: return body(&correction)
+        }
+    }
+
     /// 利用できるエフェクト。カーネルとして登録されているものだけ。
     private(set) var available: [ETEffect] = []
 
@@ -116,6 +188,8 @@ final class EffeTuneDSP: ObservableObject {
         // 探りの番号も一緒に死ぬので、控えを捨てて作り直させる。
         probes.removeAll()
 
+        // ここから先の instance は前の世代と番号が重なりうる（retire が見る）。
+        prepareGeneration &+= 1
         // テレメトリの輪を確保しないと、可視化の値が一切出てこない。
         let st = et_engine_prepare(engine, Float(sampleRate), maxChannels, maxFrames,
                                    Self.telemetryRingBytes)
@@ -133,6 +207,10 @@ final class EffeTuneDSP: ObservableObject {
         rebuildAll()
         // 何も無ければ、前回の鎖か既定を組む。
         restore()
+        // **restore() の後に呼ぶ。**chain が空のうちに補正を入れて publish すると、
+        // persist() が pipeline.last へ [] を書く（rebuildAll の頭と同じ話）。
+        // 補正がもう入っていれば（組み直し）何もしない。
+        OutputCorrection.shared.dspPrepared()
     }
 
     func reset() {
@@ -153,15 +231,16 @@ final class EffeTuneDSP: ObservableObject {
     /// 送り直すと sequence が 0 から数え直しになるので、枠の番号は単調と思わないこと。
     @discardableResult
     func resetState(at index: Int) -> Bool {
-        guard engine != 0, ready, chain.indices.contains(index) else { return false }
-        let instance = chain[index].instance
+        guard engine != 0, ready, contains(slot: index) else { return false }
+        let instance = self[slot: index].instance
         guard instance != 0 else { return false }
         var status = Int32(ET_ERR_STATE)
         AssetUpload.holdOffAudioThread {
             status = Int32(et_instance_reset(engine, instance))
         }
         if status != Int32(ET_OK) {
-            log.error("et_instance_reset が \(status) を返した \(self.chain[index].spec.type, privacy: .public)")
+            let type = self[slot: index].spec.type
+            log.error("et_instance_reset が \(status) を返した \(type, privacy: .public)")
         }
         return status == Int32(ET_OK)
     }
@@ -301,11 +380,16 @@ final class EffeTuneDSP: ObservableObject {
         }
     }
 
+    /// 消す。位置は **slot**（main と補正のどちらも指せる）。
     func remove(at offsets: IndexSet) {
-        let doomed = offsets.map { chain[$0].instance }.filter { $0 != 0 }
-        let external = offsets.compactMap { chain[$0].isExternal
-            ? chain[$0].externalInstanceID : nil }
-        chain.remove(atOffsets: offsets)
+        let parts = ETChainSlots.split(offsets, mainCount: chain.count)
+        let mainOffsets = parts.main.filteredIndexSet { chain.indices.contains($0) }
+        let correctionOffsets = parts.correction.filteredIndexSet { correction.indices.contains($0) }
+        let gone = mainOffsets.map { chain[$0] } + correctionOffsets.map { correction[$0] }
+        let doomed = gone.map(\.instance).filter { $0 != 0 }
+        let external = gone.filter(\.isExternal).map(\.externalInstanceID)
+        if !mainOffsets.isEmpty { chain.remove(atOffsets: mainOffsets) }
+        if !correctionOffsets.isEmpty { correction.remove(atOffsets: correctionOffsets) }
         publish()
         for id in external { removeExternal(instanceID: id) }
         retire(doomed)
@@ -331,8 +415,7 @@ final class EffeTuneDSP: ObservableObject {
                 carried.insert(member)
             }
         }
-        let grabbed = Set(source.compactMap { chain.indices.contains($0) ? chain[$0].id : nil })
-            .subtracting(carried)
+        let grabbed = moved.subtracting(carried)
 
         chain.move(fromOffsets: source, toOffset: destination)
         publish()
@@ -350,12 +433,20 @@ final class EffeTuneDSP: ObservableObject {
     /// いまは推理しない。**自分が置いた rootReset だけを見る。**
     /// 要る・要らないは並びの形だけで決まる（ETRootResetRule.keep）。
     /// 普通の Section は名前が空でも一切触らない。
+    ///
+    /// main と補正は別々に見る。補正は main の後ろに独立して付く並びなので、
+    /// main の最後の組が補正の頭まで続いているとは数えない（ETPipelineAnalysis.merged と同じ）。
     func normalizeRootResets() {
-        let keep = ETRootResetRule.keep(roles: chain.map(\.role))
-        let dead = IndexSet(chain.indices.filter { !keep[$0] })
-        guard !dead.isEmpty else { return }
-        chain.remove(atOffsets: dead)
-        publish()
+        var changed = false
+        for part in [ETChainPart.main, .correction] {
+            let list = partNodes(part)
+            let keep = ETRootResetRule.keep(roles: list.map(\.role))
+            let dead = IndexSet(list.indices.filter { !keep[$0] })
+            guard !dead.isEmpty else { continue }
+            withPart(part) { $0.remove(atOffsets: dead) }
+            changed = true
+        }
+        if changed { publish() }
     }
 
     /// **その段を組から出す。**直前に rootReset を挿す。
@@ -366,16 +457,19 @@ final class EffeTuneDSP: ObservableObject {
     ///
     /// - 既に root に居るなら何もしない
     /// - 直前が既に rootReset なら何もしない
+    /// - 位置は slot。印はその段の居る部分（main か補正）の中だけで決めて挿す
     @discardableResult
     func leaveSection(at index: Int) -> Bool {
+        guard let place = locate(index) else { return false }
+        let list = partNodes(place.part)
         // **判断は純粋関数が持つ。**ここは並びを渡して答えを受けるだけ。
         // 模型の外から素の並びだけで試せるようにしてある（PipelineRulesTests）。
-        guard let at = ETRootResetRule.insertion(roles: chain.map(\.role),
-                                                 enabled: chain.map(\.enabled),
-                                                 at: index) else { return false }
+        guard let at = ETRootResetRule.insertion(roles: list.map(\.role),
+                                                 enabled: list.map(\.enabled),
+                                                 at: place.local) else { return false }
         var marker = Node(spec: ETSection.spec, values: [])
         marker.isRootReset = true
-        chain.insert(marker, at: at)
+        withPart(place.part) { $0.insert(marker, at: at) }
         publish()
         return true
     }
@@ -401,8 +495,8 @@ final class EffeTuneDSP: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool, at index: Int) {
-        guard chain.indices.contains(index) else { return }
-        chain[index].enabled = enabled
+        guard contains(slot: index) else { return }
+        self[slot: index].enabled = enabled
         publish()
     }
 
@@ -436,12 +530,20 @@ final class EffeTuneDSP: ObservableObject {
         // 同じファイルを入れ直しても段は戻るが値は戻らない。
         // 生きていれば host は読み込んだ state から始めて上書きしていくので、
         // 普通の段の結果は変わらない。
-        for index in chain.indices where chain[index].isExternal {
-            chain[index].externalState = externalState(for: chain[index])
-                ?? chain[index].externalState
-        }
+        refreshExternalStates(.main)
         PipelineStore.saveLast(chain)
         persistExpanded()
+    }
+
+    /// 外の host（AU・JSFX）の生きた state をその部分の並びへ写す。読めなければ前の値を残す。
+    private func refreshExternalStates(_ part: ETChainPart) {
+        guard partNodes(part).contains(where: \.isExternal) else { return }
+        withPart(part) { list in
+            for index in list.indices where list[index].isExternal {
+                list[index].externalState = externalState(for: list[index])
+                    ?? list[index].externalState
+            }
+        }
     }
 
     /// PoC: PC の鎖を編集する前に、手元の鎖を退避する形（RemoteMirror）。
@@ -572,7 +674,8 @@ final class EffeTuneDSP: ObservableObject {
     /// `.task` が走らず、開くまで素通しのままになる（実機で確認）。
     /// 音の側の話なので、鎖が戻った時点でここがやる。
     func reloadAssets() {
-        for i in chain.indices where !chain[i].irId.isEmpty {
+        let all = nodes
+        for i in all.indices where !all[i].irId.isEmpty {
             reloadAsset(at: i)
         }
         // 組み直しは ETIRLoader.load が送るたびにやっている
@@ -582,7 +685,8 @@ final class EffeTuneDSP: ObservableObject {
     /// 鍵が `ids` に入っている段だけ入れ直す。PC から IR が届いたとき（RemoteMirror）。
     /// 鳴っている最中に、届いた IR と関係ない段まで組み直さない。
     func reloadAssets(ids: Set<String>) {
-        for i in chain.indices where !chain[i].irId.isEmpty && ids.contains(chain[i].irId) {
+        let all = nodes
+        for i in all.indices where !all[i].irId.isEmpty && ids.contains(all[i].irId) {
             reloadAsset(at: i)
         }
     }
@@ -595,8 +699,8 @@ final class EffeTuneDSP: ObservableObject {
     /// （ETChainEditing.assetLineAfterReload）。
     @discardableResult
     func reloadAsset(at index: Int) -> Bool {
-        guard chain.indices.contains(index) else { return false }
-        let node = chain[index]
+        guard contains(slot: index) else { return false }
+        let node = self[slot: index]
         guard !node.irId.isEmpty, node.instance != 0 else { return false }
         let width = Self.routedChannels(of: node)
         let line = ETIRLoader.reload(irId: node.irId,
@@ -659,11 +763,11 @@ final class EffeTuneDSP: ObservableObject {
     /// （engine.cpp:706）。値を渡しただけでは帯の Fx も、並列に走る段との
     /// 位置合わせも古いままになる。
     private func settleAfterParams(at index: Int, changed offset: Int, before: UInt32) {
-        guard chain.indices.contains(index) else { return }
-        if Self.assetConfigOffsets(of: chain[index]).contains(offset) {
+        guard contains(slot: index) else { return }
+        if Self.assetConfigOffsets(of: self[slot: index]).contains(offset) {
             // 送り直すと ETIRLoader.load の中で組み直される。
             reloadAsset(at: index)
-        } else if instanceLatency(of: chain[index]) != before {
+        } else if instanceLatency(of: self[slot: index]) != before {
             republish(reason: "遅延が変わった")
         }
     }
@@ -744,6 +848,8 @@ final class EffeTuneDSP: ObservableObject {
     /// 鎖をまるごと入れ替える。共有リンクの取り込みで使う。
     ///
     /// プリセットはこちらを通さない。上流は足す側なので addPreset(named:items:at:) を使う。
+    ///
+    /// 入れ替えるのは main だけ。出力補正（correction）には触らない。
     func replaceChain(with items: [PipelineStore.Loaded]) {
         guard ready else { return }
         let doomed = chain.map(\.instance).filter { $0 != 0 }
@@ -765,6 +871,38 @@ final class EffeTuneDSP: ObservableObject {
         // 値だけで設計できる型（Bass Management の Linear）も同じ。
         ETAssetReattach.loaded(chain)
         retire(doomed)
+    }
+
+    /// 出力補正をまるごと入れ替える（空なら外すだけ）。呼ぶのは OutputCorrection だけ。
+    ///
+    /// 順は replaceChain と同じ。前の段の番号を控え、外の host を先に外してから作り直し、
+    /// publish() を通したあとで retire() へ渡す。main には触らない。
+    /// 入れた段は畳んで出す（開閉は端末に残さない）。
+    func loadCorrection(_ items: [PipelineStore.Loaded]) {
+        guard ready else { return }
+        let doomed = correction.map(\.instance).filter { $0 != 0 }
+        let external = correction.filter(\.isExternal).map(\.externalInstanceID)
+        let old = Set(correction.map(\.id))
+        restoring = true
+        expanded.subtract(old)
+        restoring = false
+        collapsedFully.subtract(old)
+        correction.removeAll()
+        // replaceChain と同じく、作り直す前に外す。同じプリセットを入れ直すことがある。
+        for id in external { removeExternal(instanceID: id) }
+        for item in items { append(item, to: .correction) }
+        publish()
+        // 入れ直した IR と、値だけで設計できる型（replaceChain と同じ）。
+        for i in correction.indices where !correction[i].irId.isEmpty {
+            reloadAsset(at: chain.count + i)
+        }
+        ETAssetReattach.loaded(correction)
+        retire(doomed)
+    }
+
+    /// 出力補正を外す。
+    func unloadCorrection() {
+        loadCorrection([])
     }
 
     /// いま並んでいるのが既定そのもの（Level Meter 1 本）か。
@@ -807,13 +945,13 @@ final class EffeTuneDSP: ObservableObject {
 
     /// 1 本足すだけ。publish はしない（呼び手がまとめて 1 回だけ呼ぶ）。
     @discardableResult
-    private func append(_ item: PipelineStore.Loaded) -> Bool {
+    private func append(_ item: PipelineStore.Loaded, to part: ETChainPart = .main) -> Bool {
         var node = Node(spec: item.spec, values: item.values)
         // 自分で置いた終端（PipelineStore.parseが印から戻す）。leaveSectionが挿すものと同じで、
         // instanceは持たない。isSectionが偽なのでinstantiateへ渡すと失敗して落ちる。
         if item.isRootReset {
             node.isRootReset = true
-            chain.append(node)
+            withPart(part) { $0.append(node) }
             return true
         }
         node.enabled = item.enabled
@@ -827,9 +965,10 @@ final class EffeTuneDSP: ObservableObject {
         node.externalID = item.externalID.isEmpty ? nil : item.externalID
         if node.isExternal {
             // 空か、既に鎖に居る外部の段と同じ身元なら新しく作る（ETChainEditing.externalInstanceID）。
+            // host は main と補正で共通なので、両方の身元を避ける。
             node.externalInstanceID = ETChainEditing.externalInstanceID(
                 requested: item.externalInstanceID,
-                taken: Set(chain.filter(\.isExternal).map(\.externalInstanceID)))
+                taken: Set((chain + correction).filter(\.isExternal).map(\.externalInstanceID)))
             node.externalState = item.externalState
             guard let index = try? ETAUExternalBridge.shared.reserve(
                 instanceID: node.externalInstanceID) else { return false }
@@ -837,11 +976,11 @@ final class EffeTuneDSP: ObservableObject {
             restoreExternal(node)
         }
         if node.isExternal {
-            chain.append(node)
+            withPart(part) { $0.append(node) }
             return true
         }
         guard instantiate(&node) else { return false }
-        chain.append(node)
+        withPart(part) { $0.append(node) }
         return true
     }
 
@@ -856,15 +995,15 @@ final class EffeTuneDSP: ObservableObject {
     /// **音には伝えない。** 素材そのものは ETIRLoader が送り込んでいて、
     /// ここに書くのは「次に開いたときどれを入れ直すか」の印。
     func setIRId(_ id: String, at index: Int) {
-        guard chain.indices.contains(index), chain[index].irId != id else { return }
-        chain[index].irId = id
+        guard contains(slot: index), self[slot: index].irId != id else { return }
+        self[slot: index].irId = id
         persist()
     }
 
     func externalStateDidChange(instanceID: String) {
-        guard chain.contains(where: {
-            $0.isExternal && $0.externalInstanceID == instanceID
-        }) else { return }
+        guard chain.contains(where: { $0.isExternal && $0.externalInstanceID == instanceID })
+            || correction.contains(where: { $0.isExternal && $0.externalInstanceID == instanceID })
+        else { return }
         // Capturing fullStateForDocument can archive a sizeable object. Parameter
         // observers fire continuously while a native AU knob is dragged, so let
         // the existing debounce capture it once in persist() instead.
@@ -881,17 +1020,17 @@ final class EffeTuneDSP: ObservableObject {
     /// spec.type（"External:<id>"）は古いまま残るが、保存の形には書かれず、読むときに
     /// externalIDから作り直す（PipelineForm.parse）。
     func externalComponentDidChange(instanceID: String, to componentID: String) {
-        guard let index = chain.firstIndex(where: {
+        guard let index = nodes.firstIndex(where: {
             $0.isExternal && $0.externalInstanceID == instanceID
-        }), chain[index].externalID != componentID else { return }
-        chain[index].externalID = componentID
+        }), self[slot: index].externalID != componentID else { return }
+        self[slot: index].externalID = componentID
         persistSoon()
     }
 
     /// Section の名前を変える。DSP には伝えない（section.js の `cm` は音に効かない）。
     func setSectionName(_ name: String, at index: Int) {
-        guard chain.indices.contains(index), chain[index].isSection else { return }
-        chain[index].sectionName = name
+        guard contains(slot: index), self[slot: index].isSection else { return }
+        self[slot: index].sectionName = name
         persist()
     }
 
@@ -901,8 +1040,8 @@ final class EffeTuneDSP: ObservableObject {
     /// DSP へは渡さない（descriptor にも instance にも席が無い）が、端末には残す。
     /// 残さないと、アプリを開き直したときに既定へ戻る。
     func setDisplay(_ raw: String, key: String, at index: Int) {
-        guard chain.indices.contains(index), chain[index].display[key] != raw else { return }
-        chain[index].display[key] = raw
+        guard contains(slot: index), self[slot: index].display[key] != raw else { return }
+        self[slot: index].display[key] = raw
         persistSoon()
     }
 
@@ -912,14 +1051,14 @@ final class EffeTuneDSP: ObservableObject {
     /// 画面は .etSaved で現れたときにしか display を読まないので、変わったら作り直させる
     /// （Node.resetCount。resetParams と同じ）。
     func applyDisplay(from params: [String: Any], at index: Int) {
-        guard chain.indices.contains(index) else { return }
-        let incoming = ETDisplayParam.read(params, type: chain[index].spec.type)
+        guard contains(slot: index) else { return }
+        let incoming = ETDisplayParam.read(params, type: self[slot: index].spec.type)
         guard !incoming.isEmpty else { return }
-        var display = chain[index].display
+        var display = self[slot: index].display
         for (key, value) in incoming { display[key] = value }
-        guard display != chain[index].display else { return }
-        chain[index].display = display
-        chain[index].resetCount &+= 1
+        guard display != self[slot: index].display else { return }
+        self[slot: index].display = display
+        self[slot: index].resetCount &+= 1
         persistSoon()
     }
 
@@ -929,9 +1068,9 @@ final class EffeTuneDSP: ObservableObject {
     /// （DSP/DesignParams.swift）。書き手はdesignerの置き場で、settingsが変わるたびに来る。
     /// 位置ではなくidで引くのは、置き場が段をidで持っていて、並べ替えを跨ぐため。
     func setDesign(_ design: [String: String], nodeID: UUID) {
-        guard let index = chain.firstIndex(where: { $0.id == nodeID }),
-              chain[index].design != design else { return }
-        chain[index].design = design
+        guard let index = slot(of: nodeID),
+              self[slot: index].design != design else { return }
+        self[slot: index].design = design
         persistSoon()
     }
 
@@ -942,17 +1081,17 @@ final class EffeTuneDSP: ObservableObject {
     /// 上流も 150ms 待ってからやり直す（ir_reverb.js:273-279 の `_queuePreparation('host', 150)`）。
     /// つまみを引きずっている間は来るたびに前の待ちを捨てるので、送り直すのは止めた後の 1 回だけ。
     func setIRPreparation(_ raw: String, key: String, at index: Int) {
-        guard chain.indices.contains(index), chain[index].design[key] != raw else { return }
-        chain[index].design[key] = raw
+        guard contains(slot: index), self[slot: index].design[key] != raw else { return }
+        self[slot: index].design[key] = raw
         persistSoon()
-        let id = chain[index].id
+        let id = self[slot: index].id
         pendingIRPreparation[id]?.cancel()
         pendingIRPreparation[id] = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled, let self else { return }
             self.pendingIRPreparation[id] = nil
             // 待っている間に並べ替え・削除があっても、id で引き直す。
-            guard let i = self.chain.firstIndex(where: { $0.id == id }) else { return }
+            guard let i = self.slot(of: id) else { return }
             self.reloadAsset(at: i)
         }
     }
@@ -962,13 +1101,14 @@ final class EffeTuneDSP: ObservableObject {
 
     /// パラメータを 1 つ変える。offset は ETParam.offset（配列なら +i）。
     func setValue(_ value: Float, at index: Int, offset: Int) {
-        guard chain.indices.contains(index),
-              chain[index].values.indices.contains(offset) else { return }
-        chain[index].values[offset] = value
-        let before = instanceLatency(of: chain[index])
-        pushParams(chain[index])
+        guard contains(slot: index),
+              self[slot: index].values.indices.contains(offset) else { return }
+        self[slot: index].values[offset] = value
+        let before = instanceLatency(of: self[slot: index])
+        pushParams(self[slot: index])
         settleAfterParams(at: index, changed: offset, before: before)
-        RemoteMirror.shared.paramsChanged(at: index)
+        // PC へ写すのは main の段だけ（リモートの位置は main の添字。補正はリモートの間は外してある）。
+        if index < chain.count { RemoteMirror.shared.paramsChanged(at: index) }
         // publish() は通さない。descriptor に載るのは並びと入切と鎖の形だけで、
         // 値は pushParams が instance へ直に渡している。
         // ただし端末には残す。残さないと、次に鎖を足す/消す/動かすまで
@@ -1007,84 +1147,84 @@ final class EffeTuneDSP: ObservableObject {
     /// その場で送り込まれ（遅延だけの違いはすぐ送り直す）、帯域も違えば続けて本当の設計が
     /// もう1度送り込まれた。送り込むたびに鎖全体が一瞬素通しになる（AssetUploadのholdOffAudioThread）。
     func setValues(_ values: [Float], at index: Int, design params: [String: Any] = [:]) {
-        guard chain.indices.contains(index),
-              values.count == chain[index].values.count else { return }
-        let before = instanceLatency(of: chain[index])
-        let changed = Set(values.indices.filter { values[$0] != chain[index].values[$0] })
-        let design = ETDesignParam.applying(params, to: chain[index].design,
-                                            type: chain[index].spec.type)
-        let redesign = design != chain[index].design
-        chain[index].values = values
-        if redesign { chain[index].design = design }
-        pushParams(chain[index])
+        guard contains(slot: index),
+              values.count == self[slot: index].values.count else { return }
+        let before = instanceLatency(of: self[slot: index])
+        let changed = Set(values.indices.filter { values[$0] != self[slot: index].values[$0] })
+        let design = ETDesignParam.applying(params, to: self[slot: index].design,
+                                            type: self[slot: index].spec.type)
+        let redesign = design != self[slot: index].design
+        self[slot: index].values = values
+        if redesign { self[slot: index].design = design }
+        pushParams(self[slot: index])
         // IR Reverb の下ごしらえ（dc / co / dt / tr）は材料の側にあるので、変われば送り直す。
-        let preparationChanged = redesign && chain[index].spec.type == ETDesignParam.irReverb
+        let preparationChanged = redesign && self[slot: index].spec.type == ETDesignParam.irReverb
         if !changed.isEmpty || preparationChanged {
             if preparationChanged
-                || !Self.assetConfigOffsets(of: chain[index]).isDisjoint(with: changed) {
+                || !Self.assetConfigOffsets(of: self[slot: index]).isDisjoint(with: changed) {
                 // 送り直すと ETIRLoader.load の中で組み直される。
                 reloadAsset(at: index)
-            } else if instanceLatency(of: chain[index]) != before {
+            } else if instanceLatency(of: self[slot: index]) != before {
                 republish(reason: "遅延が変わった")
             }
         }
         // 畳んだカードにはビューが無いので、ここで呼ばないと誰も呼ばない。
         if !changed.isEmpty || redesign {
-            ETAssetReattach.paramsChanged(chain[index])
+            ETAssetReattach.paramsChanged(self[slot: index])
         }
-        RemoteMirror.shared.paramsChanged(at: index)
+        if index < chain.count { RemoteMirror.shared.paramsChanged(at: index) }
         // setValue と同じ理由で publish() は通さず、端末にだけ残す。
         persistSoon()
     }
 
     func resetParams(at index: Int) {
-        guard chain.indices.contains(index) else { return }
-        let before = instanceLatency(of: chain[index])
-        chain[index].values = chain[index].spec.defaults
+        guard contains(slot: index) else { return }
+        let before = instanceLatency(of: self[slot: index])
+        self[slot: index].values = self[slot: index].spec.defaults
         // 上流の Reset は constructor の値へ戻すので、足した直後と同じ既定を掛ける。
-        applyConstructorValues(&chain[index])
+        applyConstructorValues(&self[slot: index])
         // designerの材料も既定へ戻す。上流のResetはgetParameters()を丸ごと写した既定を
         // setParametersへ渡す（pipeline-item-builder.js:392-410）ので、帯域やタップ数も戻る。
-        chain[index].design = [:]
+        self[slot: index].design = [:]
         // 待っている IR の下ごしらえのやり直しも捨てる（下で IR ごと外す）。
-        pendingIRPreparation[chain[index].id]?.cancel()
-        pendingIRPreparation[chain[index].id] = nil
+        pendingIRPreparation[self[slot: index].id]?.cancel()
+        pendingIRPreparation[self[slot: index].id] = nil
         // 表示の設定も同じ既定に入っている（plugin-manager.js:41-48 は getParameters() から
         // type / id / enabled / バスだけを除く）。空にすれば各画面は自分の既定で描く。
         // 画面は .etSaved で現れたときにしか読まないので、作り直させる（Node.resetCount）。
-        chain[index].display = [:]
-        chain[index].resetCount &+= 1
-        pushParams(chain[index])
+        self[slot: index].display = [:]
+        self[slot: index].resetCount &+= 1
+        pushParams(self[slot: index])
         // IR Reverb は ir も既定（''、ir_reverb.js:28）へ戻るので、素材を外して素通しにする。
         // 入れ直すと Reset の後も同じ IR が鳴り続ける。
-        let unloaded = !chain[index].irId.isEmpty
+        let unloaded = !self[slot: index].irId.isEmpty
         if unloaded {
-            chain[index].irId = ""
-            assetInfo[chain[index].id] = nil
-            AssetUpload.clear(engine: engine, instance: chain[index].instance)
+            self[slot: index].irId = ""
+            assetInfo[self[slot: index].id] = nil
+            AssetUpload.clear(engine: engine, instance: self[slot: index].instance)
         }
         // 経路と測定は鎖の外の置き場にある。上流はどちらも既定に入っているので戻す。
-        switch chain[index].spec.type {
+        switch self[slot: index].spec.type {
         case "MatrixPlugin":
             // mx は足した時の対角（matrix.js:105-111）。
-            MatrixRouting.shared.reset(chain[index], engine: engine)
+            MatrixRouting.shared.reset(self[slot: index], engine: engine)
         case "CrosstalkCancellationPlugin":
             // ll / lr / rl / rr は空、設計の指示は初期値（crosstalk_cancellation.js:46-55）。
-            CrosstalkStore.shared.reset(node: chain[index])
+            CrosstalkStore.shared.reset(node: self[slot: index])
         case "RoomEqPlugin":
             // 測定の割り当て（ms0-15）は空、設計の設定は初期値（room_eq.js:880-914）。
-            RoomEQStore.shared.reset(node: chain[index])
+            RoomEQStore.shared.reset(node: self[slot: index])
         default:
             break
         }
         // 素材を外すとカーネルがその段を有効と数えなくなるので組み直す
         // （入れたときも ETIRLoader.load が組み直している）。
-        if unloaded || instanceLatency(of: chain[index]) != before {
+        if unloaded || instanceLatency(of: self[slot: index]) != before {
             republish(reason: unloaded ? "IRを外した" : "遅延が変わった")
         }
         // setValues と同じ。値から材料を引く designer に、戻した値を読ませる。
-        ETAssetReattach.paramsChanged(chain[index])
-        RemoteMirror.shared.paramsChanged(at: index)
+        ETAssetReattach.paramsChanged(self[slot: index])
+        if index < chain.count { RemoteMirror.shared.paramsChanged(at: index) }
         persistSoon()
     }
 
@@ -1159,8 +1299,10 @@ final class EffeTuneDSP: ObservableObject {
     /// restore() で PipelineStore.hasSaved が true になり、既定の Level Meter を
     /// 置く枝（loadLast が [] を返すので第一の枝は外れる）へ二度と入らない。
     /// 初回起動から鎖が空のまま＝ノード 0 本＝applied 0 になっていた。
+    ///
+    /// 出力補正の段も同じく作り直す（OutputCorrection.dspPrepared は入っていれば何もしない）。
     private func rebuildAll() {
-        guard ready, !chain.isEmpty else { return }
+        guard ready, !(chain.isEmpty && correction.isEmpty) else { return }
         var failed: [String] = []
         for i in chain.indices {
             chain[i].instance = 0
@@ -1168,8 +1310,14 @@ final class EffeTuneDSP: ObservableObject {
             if chain[i].isExternal { continue }
             if !instantiate(&chain[i]) { failed.append(chain[i].spec.type) }
         }
+        for i in correction.indices {
+            correction[i].instance = 0
+            correction[i].tapId = 0
+            if correction[i].isExternal { continue }
+            if !instantiate(&correction[i]) { failed.append(correction[i].spec.type) }
+        }
         if !failed.isEmpty {
-            let total = chain.count
+            let total = chain.count + correction.count
             log.error("rebuild で instance を作れなかった \(failed.count)/\(total): \(failed.joined(separator: ","), privacy: .public)")
         }
         publish()
@@ -1246,7 +1394,7 @@ final class EffeTuneDSP: ObservableObject {
 
     /// その段の図に重ねる音の tap。まだ無ければ nil。
     func probeTaps(at index: Int) -> ProbeTaps? {
-        guard chain.indices.contains(index), let pair = probes[chain[index].id] else { return nil }
+        guard let n = self.node(at: index), let pair = probes[n.id] else { return nil }
         return ProbeTaps(before: pair.before.tapId, after: pair.after.tapId)
     }
 
@@ -1262,7 +1410,8 @@ final class EffeTuneDSP: ObservableObject {
 
         // バスを分けている段は、engine.cpp:978-990 が出口で足し込む＝他の音と混ざる。
         // 「その段に入る音」「その段から出た音」と呼べるのは入口と出口が同じバスのときだけ。
-        let candidates = chain.filter {
+        let all = nodes
+        let candidates = all.filter {
             Self.probedTypes.contains($0.spec.type)
                 && $0.instance != 0
                 && $0.inputBus == $0.outputBus
@@ -1271,7 +1420,7 @@ final class EffeTuneDSP: ObservableObject {
         // ET_PIPE_MAX_NODES（ETPipeline.h:30、64）を越えた分を黙って切る
         // （ETPipeline.c:299）。探りは段 1 つに 2 本足すので、残りの枠に収まる数だけ、
         // 鎖の前から順に付ける。
-        let placed = chain.filter { $0.instance != 0 || $0.isExternal }.count
+        let placed = all.filter { $0.instance != 0 || $0.isExternal }.count
         let budget = max(0, (Int(ET_PIPE_MAX_NODES) - placed) / 2)
         let want = Set(candidates.prefix(budget))
 
@@ -1349,18 +1498,33 @@ final class EffeTuneDSP: ObservableObject {
         // **答えを出すのは ETPipelineAnalysis だけ。**ここは書き戻すだけで、
         // 数え方をここにも持たない（持つと二重管理になる。前は ETSection.gates が
         // 名前と型から数えていて、rootReset を Section と区別できなかった。もう消してある）。
+        // main と補正の両方へ書く。答えは部分ごとに出したものを合わせてあるので、
+        // main の終わりの OFF Section が補正の段を止めることはない。
         let a = analysis
         for i in chain.indices {
             let gate = chain[i].role == .effect ? a.gate(of: chain[i].id) : 1
             if chain[i].sectionGate != gate { chain[i].sectionGate = gate }
         }
+        for i in correction.indices {
+            let gate = correction[i].role == .effect ? a.gate(of: correction[i].id) : 1
+            if correction[i].sectionGate != gate { correction[i].sectionGate = gate }
+        }
     }
 
     /// いまの鎖の所属と gate。**派生値なので持ち回らない。**
+    ///
+    /// main と出力補正は別々に走らせて合わせる（ETPipelineAnalysis.merged）。
+    /// 補正は main の後ろに独立して付く層で、main の組に入らない。
     var analysis: ETPipelineAnalysis {
-        ETPipelineAnalysis.analyze(roles: chain.map(\.role),
-                                   ids: chain.map(\.id),
-                                   enabled: chain.map(\.enabled))
+        let main = Self.analyze(chain)
+        guard !correction.isEmpty else { return main }
+        return ETPipelineAnalysis.merged([main, Self.analyze(correction)])
+    }
+
+    private static func analyze(_ list: [Node]) -> ETPipelineAnalysis {
+        ETPipelineAnalysis.analyze(roles: list.map(\.role),
+                                   ids: list.map(\.id),
+                                   enabled: list.map(\.enabled))
     }
 
     /// 有効なものだけを並べて音のスレッドへ渡す。
@@ -1379,15 +1543,25 @@ final class EffeTuneDSP: ObservableObject {
         // 分けないと Section を 1 本置くたびに dead が 1 増えて、取りこぼしと見分けが付かない。
         // 探り（enabled 2）は人が置いた段ではないので、どの数にも入れない
         // （入れると PEQ 1 枚ごとに dead が 2 減り、active が 2 増える）。
+        // dead と sections は main と補正を合わせて数える（descriptor は両方から作る）。
+        let all = self.nodes
         let placed = nodes.filter { $0.enabled != 2 }
-        let sections = chain.filter(\.isSection).count
-        let dead = chain.count - sections - placed.count
+        let sections = all.filter(\.isSection).count
+        let dead = all.count - sections - placed.count
         let active = placed.filter { $0.enabled != 0 && $0.sectionGate != 0 }.count
         let gated = placed.filter { $0.enabled != 0 && $0.sectionGate == 0 }.count
-        let pub = "publish nodes=\(nodes.count) chain=\(chain.count) sections=\(sections) dead=\(dead) active=\(active) gated=\(gated) taps=\(chain.map { String($0.tapId) }.joined(separator: ",")) types=\(chain.map(\.spec.type).joined(separator: ","))"
+        let pub = "publish nodes=\(nodes.count) chain=\(chain.count) oc=\(correction.count) sections=\(sections) dead=\(dead) active=\(active) gated=\(gated) taps=\(all.map { String($0.tapId) }.joined(separator: ",")) types=\(all.map(\.spec.type).joined(separator: ","))"
         log.notice("\(pub, privacy: .public)")
         ETLogTap.record(pub)
         if ETConsoleLog.on { print(pub) }
+        // 枠（ET_PIPE_MAX_NODES）は main と補正で共有。越えた分は ETPipeline_Publish が黙って
+        // 切り、補正は後ろなので先に切れる。止めずに記すだけ。
+        if nodes.count > Int(ET_PIPE_MAX_NODES) {
+            let over = "publish over limit n=\(nodes.count) max=\(ET_PIPE_MAX_NODES) （補正が切れる）"
+            log.notice("\(over, privacy: .public)")
+            ETLogTap.record(over)
+            if ETConsoleLog.on { print(over) }
+        }
         persist()
     }
 
@@ -1395,7 +1569,8 @@ final class EffeTuneDSP: ObservableObject {
     /// （探りは相手の直前・enabled 2、上流が受けない Ch の段は切）。
     /// ここは C の ETPipeNode へ写すだけで、publish と republish が同じものを出す。
     private func pipeNodes() -> [ETPipeNode] {
-        ETChainEditing.descriptors(chain: chain,
+        // main の後ろに補正。境の印は要らない（engine は段ごとの sectionGate しか読まない）。
+        ETChainEditing.descriptors(chain: chain + correction,
                                    probes: probes.mapValues(\.before.instance),
                                    afterProbes: probes.mapValues(\.after.instance)).map { d in
             ETPipeNode(instance: d.instance,
@@ -1415,32 +1590,32 @@ final class EffeTuneDSP: ObservableObject {
     /// この直後の publish() が applySectionGates() で引き直す。
     func setRouting(at index: Int, inputBus: UInt8? = nil, outputBus: UInt8? = nil,
                     channelSpec: Int8? = nil, sectionGate: UInt8? = nil) {
-        guard chain.indices.contains(index) else { return }
-        let previousChannels = Self.routedChannels(of: chain[index])
-        let previousExternalChannels = Self.externalChannels(of: chain[index])
-        let previousBypass = Self.isChannelBypassed(chain[index])
-        if let v = inputBus    { chain[index].inputBus = v }
-        if let v = outputBus   { chain[index].outputBus = v }
-        if let v = channelSpec { chain[index].channelSpec = v }
-        if let v = sectionGate { chain[index].sectionGate = v }
+        guard contains(slot: index) else { return }
+        let previousChannels = Self.routedChannels(of: self[slot: index])
+        let previousExternalChannels = Self.externalChannels(of: self[slot: index])
+        let previousBypass = Self.isChannelBypassed(self[slot: index])
+        if let v = inputBus    { self[slot: index].inputBus = v }
+        if let v = outputBus   { self[slot: index].outputBus = v }
+        if let v = channelSpec { self[slot: index].channelSpec = v }
+        if let v = sectionGate { self[slot: index].sectionGate = v }
         publish()
         // 処理幅が変わると、幅を含めて設計する資産（FIR Crossover、Bass Management）は
         // 送り直しが要る。Routing は別の画面から変えるので、カードのビューが居るとは限らない。
         // 幅が同じでも外れる・戻るときは designer に知らせる（Bass Management は All 以外で外れる）。
-        if !chain[index].isExternal,
-           Self.routedChannels(of: chain[index]) != previousChannels
-            || Self.isChannelBypassed(chain[index]) != previousBypass {
-            ETAssetReattach.paramsChanged(chain[index])
+        if !self[slot: index].isExternal,
+           Self.routedChannels(of: self[slot: index]) != previousChannels
+            || Self.isChannelBypassed(self[slot: index]) != previousBypass {
+            ETAssetReattach.paramsChanged(self[slot: index])
         }
-        if chain[index].isExternal {
-            let channels = Self.externalChannels(of: chain[index])
+        if self[slot: index].isExternal {
+            let channels = Self.externalChannels(of: self[slot: index])
             if channels != previousExternalChannels {
-                if chain[index].externalID?.hasPrefix("jsfx:") == true {
+                if self[slot: index].externalID?.hasPrefix("jsfx:") == true {
                     ETJSFXHost.shared.setChannels(channels,
-                                                  instanceID: chain[index].externalInstanceID)
+                                                  instanceID: self[slot: index].externalInstanceID)
                 } else {
                     ETAUHost.shared.setChannels(channels,
-                                                instanceID: chain[index].externalInstanceID)
+                                                instanceID: self[slot: index].externalInstanceID)
                 }
                 AudioIO.shared.rebuildForExternalProcessor()
             }
@@ -1489,6 +1664,7 @@ final class EffeTuneDSP: ObservableObject {
         guard !instances.isEmpty, engine != 0 else { return }
         let engine = self.engine
         let mark = ETPipeline_ProcessCount()
+        let generation = prepareGeneration
         Task.detached(priority: .utility) {
             // 音のスレッドが 2 周するのを待つ。鳴っていなければ待っても進まないので、
             // 0.5 秒で諦めて壊す（鳴っていない＝誰も読んでいない）。
@@ -1526,6 +1702,12 @@ final class EffeTuneDSP: ObservableObject {
             // 呼び直す。待ち切ると、そのブロックが終わるまで画面が止まる。
             while true {
                 let done = await MainActor.run { () -> Bool in
+                    // Engine::prepare の destroyAllInstances が既に壊しており、番号が使い回されうる。
+                    // ここで壊すと、組み直した後の生きた instance を消してしまう。
+                    if EffeTuneDSP.shared.prepareGeneration != generation {
+                        EffeTuneDSP.shared.republish(reason: "prepareをまたいだので壊さない")
+                        return true
+                    }
                     let ok = instances.withUnsafeBufferPointer {
                         ETPipeline_DestroyInstances(engine, $0.baseAddress, UInt32($0.count))
                     } != 0

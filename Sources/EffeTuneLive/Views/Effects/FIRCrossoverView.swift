@@ -119,7 +119,7 @@ private struct FIRCrossoverBody: View {
     /// 何度呼んでもよい。attach は同じ Target なら何もしない
     /// （FIRCrossoverDesigner.attach）。
     private func connect() {
-        FIRCrossoverDesigners.shared.prune(keeping: dsp.chain.map(\.id))
+        FIRCrossoverDesigners.shared.prune(keeping: dsp.nodes.map(\.id))
         FIRCrossoverDesigners.shared.sync(node: node)
     }
 
@@ -351,7 +351,7 @@ final class FIRCrossoverDesigners {
         let instance = node.instance
         designer.parameterWriter = { values in
             let shared = EffeTuneDSP.shared
-            guard let at = shared.chain.firstIndex(where: { $0.instance == instance }) else {
+            guard let at = shared.nodes.firstIndex(where: { $0.instance == instance }) else {
                 return
             }
             for (offset, value) in values.enumerated() {

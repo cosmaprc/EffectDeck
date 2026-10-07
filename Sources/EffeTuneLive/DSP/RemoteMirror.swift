@@ -37,6 +37,11 @@
 //  Disconnect しなければ、起動のたびに控えた PC へつなぎ直す（Preferences.remoteWantsConnection）。
 //  遷移は ETRemoteIntent（RemoteProtocol.swift）。ここはそれを Preferences へ書いて apply() を呼ぶだけ。
 //
+//  **控え（intent）とつながっているか（status・isRemote）は別。**控えの「つなぎたい」は起動をまたいで残るが、
+//  Connected は hello の返事を受けてから、切れる・応答が途絶えるまでだけ。PC が黙って消えても（眠った・
+//  Wi-Fi が替わった）URLSession は気づかないので、ping で見回って切る（ETRemoteHeartbeat）。
+//  hello に返事が無いときも Connecting で止めずに切ってつなぎ直す。
+//
 //  ---------------------------------------------------------------------------
 //  **何を送るか（メッセージの一覧は remote-v1 と v2）**
 //    hello       つないだ直後に 1 回。返事の state で PC の鎖を入れ、Connected にする
@@ -86,26 +91,20 @@ final class RemoteMirror: ObservableObject {
 
     static let shared = RemoteMirror()
 
-    enum Status: Equatable {
-        case disconnected
-        case connecting
-        case connected
-        case error(String)
+    typealias Status = ETRemoteStatus
 
-        var label: String {
-            switch self {
-            case .disconnected:   return "Disconnected"
-            case .connecting:     return "Connecting"
-            case .connected:      return "Connected"
-            case .error(let why): return "Error: \(why)"
-            }
-        }
-    }
-
+    /// **つながっているか（live）。**hello の返事を受けたら connected、切れた・応答が途絶えたら（ETRemoteHeartbeat）
+    /// error。起動は disconnected から始まり、控えの「つなぎたい」（intent）からは決めない。
+    /// 「Connected」と言う・アイコンを塗る（ETRemoteIndicator）のはこれだけを見る。
     @Published private(set) var status: Status = .disconnected
     /// つないだ直後の足し合わせの進み（"Syncing 3/7"）。済んだら nil。
     @Published private(set) var progress: String?
     /// PC の鎖を編集しているか。**手元の鎖は退避してあり、persist() は端末へ書かない。**
+    /// 立つのは hello の返事を受けて PC の鎖を入れたとき（enterRemote）、下りるのは接続を落としたとき（leaveRemote）。
+    /// **控え（intent）ではなく、いまのつなぎに付いていく。**「リモート中」で振る舞いを変える所
+    /// （persist と iCloud の門・Plugins を隠す・出力補正を外す・出力先の切り替えを見送る・帯と中央の札）は
+    /// 全部これを見る。画面に出ているのが PC の鎖のあいだだけ、の話なので。
+    /// 控えで振ると、PC が居ないのに手元の編集が端末にも iCloud にも残らず、Plugins も補正も消えたままになる。
     @Published private(set) var isRemote = false
 
     /// Status の行に出す字。
@@ -124,7 +123,8 @@ final class RemoteMirror: ObservableObject {
     }
     /// 最後のつなぎで 4401 を受けた。読み直す（pair）か、つながれば戻す。
     @Published private(set) var tokenRejected = false
-    /// 最後につないだ PC の EffeTune の名前と版。つながっていないあいだの PC の行に出す。
+    /// 最後につないだ PC の EffeTune の名前と版。切断中の Connect のボタンにホスト名を出す。
+    /// 版は出さない（つながっていないのに並べると、つながっているように読める）。
     /// つないだら書き換え、別の PC を読んだ・Forget したら消す。
     @Published private(set) var lastHost: ETRemoteLastHost? = RemoteMirror.loadLastHost()
     /// PC の測定値を映している段の tapId。ETRemoteMeasurementDim はここに入った段を沈めない。
@@ -139,6 +139,9 @@ final class RemoteMirror: ObservableObject {
     private var seq = 0
     private var backoff: TimeInterval = 1
     private var reconnectTask: Task<Void, Never>?
+    /// PC が生きているかの見回り（ETRemoteHeartbeat）。ソケットを開いてから落とすまで。
+    private var heartbeat: ETRemoteHeartbeat?
+    private var heartbeatTask: Task<Void, Never>?
 
     /// 最後に PC へ送った鎖と、手元の番号 → PC の番号の対応。
     private var sentForm: [[String: Any]]?
@@ -249,7 +252,10 @@ final class RemoteMirror: ObservableObject {
     /// Disconnect していなければ（つなぎたいが残っていて控えもあれば）、控えた PC へつなぐ。
     func start() {
         // 編集中に落ちた。pipeline.last は手元の鎖のままだが、書き切る前だった分も含めて退避から戻す。
+        // **閉じた版（ETFeatures.remoteControl）でも戻す。**ベータで編集中に落ちて店の版へ上げた人の手元の鎖。
         pendingRestore = UserDefaults.standard.data(forKey: Self.stashKey) != nil
+        // 閉じた版では控えに触らず、つながない（上流が API を出して開けたら、控えからそのままつなぎ直せる）。
+        guard ETFeatures.remoteControl else { return }
         transition { $0.launch() }
         apply()
     }
@@ -324,7 +330,8 @@ final class RemoteMirror: ObservableObject {
     /// 接続を落として、つなぎたいなら張り直す。つなぎたくなければ Disconnected。
     private func apply() {
         disconnect()
-        guard intent.wantsConnection else {
+        // 閉じた版では入口が無いので来ないが、来てもつながない。
+        guard ETFeatures.remoteControl, intent.wantsConnection else {
             status = .disconnected
             return
         }
@@ -391,6 +398,8 @@ final class RemoteMirror: ObservableObject {
         task = t
         t.resume()
         listen(t, generation: gen)
+        // 開けない相手（居ない IP）も、つないだ後で黙った相手も、TCP が諦めるまで何も返らない。見回りで切る。
+        startHeartbeat(t, generation: gen)
 
         // hello の返事（state）が PC の鎖。それを入れて編集を始める。
         // 送りの順は保たれる。open を待たずに積んでよい（URLSession が開いてから流す）。
@@ -398,7 +407,12 @@ final class RemoteMirror: ObservableObject {
             guard let self else { return }
             let state = await self.request(ETRemoteHello.message(info: Bundle.main.infoDictionary),
                                            reply: "state", timeout: 20)
-            guard gen == self.generation, let state else { return }
+            guard gen == self.generation else { return }
+            // 返事が来ない（開いたが EffeTune のリモートではない・止まっている）。Connecting のまま待たせない。
+            guard let state else {
+                self.lost(reason: "hello に返事が無い")
+                return
+            }
             self.status = .connected
             self.tokenRejected = false
             self.backoff = 1
@@ -415,6 +429,9 @@ final class RemoteMirror: ObservableObject {
         generation += 1
         reconnectTask?.cancel()
         reconnectTask = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        heartbeat = nil
         flushTask?.cancel()
         flushTask = nil
         followTask?.cancel()
@@ -465,6 +482,7 @@ final class RemoteMirror: ObservableObject {
                 do {
                     let message = try await t.receive()
                     guard gen == self.generation else { return }
+                    self.heartbeat?.heard(at: Date())
                     self.handle(message)
                 } catch {
                     self.failed(t, generation: gen, error: error)
@@ -490,6 +508,45 @@ final class RemoteMirror: ObservableObject {
         log.notice("remote: 切れた code=\(code) \(error.localizedDescription, privacy: .public)")
         status = .error("Can't connect")
         scheduleReconnect()
+    }
+
+    /// 応答が途絶えた・hello に返事が無い。ソケットは開いたままかもしれないが、もう話せないので切ってつなぎ直す。
+    private func lost(reason: String) {
+        disconnect()
+        log.notice("remote: 応答が無い \(reason, privacy: .public)")
+        status = .error("Can't connect")
+        scheduleReconnect()
+    }
+
+    // MARK: 見回り
+
+    private func startHeartbeat(_ t: URLSessionWebSocketTask, generation gen: Int) {
+        heartbeat = ETRemoteHeartbeat(now: Date())
+        heartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(ETRemoteHeartbeat.interval * 1_000_000_000))
+                guard let self, !Task.isCancelled, gen == self.generation, var beat = self.heartbeat else { return }
+                let action = beat.tick(at: Date())
+                self.heartbeat = beat
+                switch action {
+                case .ping: self.ping(t, generation: gen)
+                case .dead:
+                    self.lost(reason: "見回りに \(Int(ETRemoteHeartbeat.deadline)) 秒返事が無い")
+                    return
+                }
+            }
+        }
+    }
+
+    /// PC（ws）は ping に自動で pong を返す。返ってきたら聞こえたことにする。失敗は receive 側が拾う。
+    private func ping(_ t: URLSessionWebSocketTask, generation gen: Int) {
+        t.sendPing { [weak self] error in
+            guard error == nil else { return }
+            Task { @MainActor [weak self] in
+                guard let self, gen == self.generation else { return }
+                self.heartbeat?.heard(at: Date())
+            }
+        }
     }
 
     /// 1, 2, 4 … 15 秒。Disconnect するまで続ける。つながったら 1 秒へ戻す。
@@ -529,6 +586,10 @@ final class RemoteMirror: ObservableObject {
         }
         UserDefaults.standard.set(data, forKey: Self.stashKey)
         UserDefaults.standard.set(dsp.bypass, forKey: Self.stashBypassKey)
+        // 出力補正は手元の出力先の話なので、PC の鎖を編集している間は外す。
+        // **isRemote を立てる前に呼ぶ。**外すときの publish → persist() → chainChanged が
+        // isRemote を見て手元の鎖を PC へ送らないように。
+        OutputCorrection.shared.setRemote(true)
         // 先に立てる。入れ替えの persist() が端末へ書かないように。
         isRemote = true
         adopt(state, rebuild: true)
@@ -547,6 +608,14 @@ final class RemoteMirror: ObservableObject {
         restoreStash()
         applyingRemote = false
         isRemote = false
+        // 編集中に iCloud から降りてきた鎖は、adoptSeededChain が isRemote で素通りしている。
+        // 戻した手元の鎖が既定（Level Meter 1 本）のままならここで入れる。入れないと、次の setRemote(false) の
+        // persist() が既定の鎖を pipeline.last と iCloud へ書き、降りてきたばかりの鎖を消す
+        // （降りてきた時点で pipeline.last が埋まり hasSaved が真なので、shouldPersist では止まらない）。
+        // 手元の鎖が既定でなければ（isDefaultChain が偽）、降りてきた鎖が無ければ（loadLast が空）何もしない。
+        EffeTuneDSP.shared.adoptSeededChain()
+        // いまの出力先の補正を戻す。isRemote を下ろした後なので、入れ直しの persist() は PC へ送らない。
+        OutputCorrection.shared.setRemote(false)
     }
 
     /// 退避した鎖を画面へ戻して、退避を消す。いまの鎖と同じなら作り直さない。
@@ -814,6 +883,8 @@ final class RemoteMirror: ObservableObject {
     func setAppActive(_ on: Bool) {
         guard appActive != on else { return }
         appActive = on
+        // 前に戻った。背景のあいだに PC が消えていたら、次の見回りを待たずに確かめ始める。
+        if on, let t = task { ping(t, generation: generation) }
         updateTelemetry()
     }
 

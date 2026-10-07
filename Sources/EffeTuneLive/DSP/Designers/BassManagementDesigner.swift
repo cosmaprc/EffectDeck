@@ -263,7 +263,7 @@ final class BassManagementDesigner: ObservableObject {
 
         // 設計しているあいだに段が消えていれば送らない。instance の番号は engine が
         // 使い回すので、消えた段の番号へ送ると別のエフェクトの資産枠に届きうる。
-        guard EffeTuneDSP.shared.chain.contains(where: {
+        guard EffeTuneDSP.shared.nodes.contains(where: {
             $0.instance == target.instance && $0.spec.type == BassManagementDesigners.type
         }) else {
             pendingKey = nil
@@ -444,8 +444,8 @@ final class BassManagementDesigners {
     /// 鎖から id で引き直す。鎖に居なければ何もしない。
     func sync(node: EffeTuneDSP.Node) {
         let dsp = EffeTuneDSP.shared
-        prune(keeping: dsp.chain.map(\.id))
-        guard let current = dsp.chain.first(where: { $0.id == node.id }),
+        prune(keeping: dsp.nodes.map(\.id))
+        guard let current = dsp.nodes.first(where: { $0.id == node.id }),
               current.spec.type == Self.type,
               let layout = BassManagementSettings.Layout(params: current.spec.params) else { return }
         designer(for: current.id).update(

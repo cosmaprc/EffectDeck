@@ -302,11 +302,11 @@ final class BandFIRPEQDesigner: ObservableObject {
     /// 作り直しのときに同じ値が出るようにする。
     private func pushKernelParameters(filterDelaySamples: Int) {
         let dsp = EffeTuneDSP.shared
-        guard let index = dsp.chain.firstIndex(where: { $0.instance == instance }) else {
+        guard let index = dsp.nodes.firstIndex(where: { $0.instance == instance }) else {
             pushKernelParametersDirectly(filterDelaySamples: filterDelaySamples)
             return
         }
-        let spec = dsp.chain[index].spec
+        let spec = dsp.nodes[index].spec
         let latencyOffset = spec.params.first { $0.name == "latencyMode" }?.offset ?? 0
         let delayOffset = spec.params.first { $0.name == "filterDelaySamples" }?.offset ?? 1
         dsp.setValue(settings.latency.parameterIndex, at: index, offset: latencyOffset)
@@ -349,7 +349,7 @@ final class BandFIRPEQDesigner: ObservableObject {
     // MARK: チャンネル
 
     private func processingChannels() -> Int {
-        let spec = EffeTuneDSP.shared.chain.first { $0.instance == instance }?.channelSpec ?? -1
+        let spec = EffeTuneDSP.shared.nodes.first { $0.instance == instance }?.channelSpec ?? -1
         return Self.processingChannels(channelSpec: spec, engineChannels: outputChannelCount)
     }
 

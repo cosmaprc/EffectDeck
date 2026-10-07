@@ -79,6 +79,20 @@ struct ETPipelineAnalysis {
         return out
     }
 
+    /// 別々に走らせた複数の結果を 1 つにする（main と出力補正）。
+    ///
+    /// 鍵は Node.id で、部分をまたいで重ならない。それぞれの走りは自分の並びの中だけで
+    /// 完結しているので、main の終わりの OFF Section が補正を止めることも、
+    /// 補正の Section が main の段を引き込むこともない。
+    static func merged(_ parts: [ETPipelineAnalysis]) -> ETPipelineAnalysis {
+        var out = ETPipelineAnalysis()
+        for p in parts {
+            out.state.merge(p.state) { _, new in new }
+            out.members.merge(p.members) { _, new in new }
+        }
+        return out
+    }
+
     func owner(of id: UUID) -> UUID? { state[id]?.owner }
     func gate(of id: UUID) -> UInt8 { state[id]?.gate ?? 1 }
     func members(of section: UUID) -> [UUID] { members[section] ?? [] }

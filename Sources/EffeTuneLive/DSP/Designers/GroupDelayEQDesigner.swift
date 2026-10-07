@@ -416,7 +416,7 @@ final class GroupDelayEQDesigner: ObservableObject {
     }
 
     private func chainIndex(for instance: UInt32) -> Int? {
-        EffeTuneDSP.shared.chain.firstIndex { $0.instance == instance }
+        EffeTuneDSP.shared.nodes.firstIndex { $0.instance == instance }
     }
 
     /// 鎖の中身は変えずに publish だけやり直す。
@@ -431,7 +431,7 @@ final class GroupDelayEQDesigner: ObservableObject {
     /// ir-plugin-contract.js:26-39 の selectedIrChannelCount を、
     /// こちらの channelSpec（ETPipeline.h の値）へ読み替えたもの。
     private func processingChannels() -> UInt32 {
-        let spec = chainIndex(for: instance).map { EffeTuneDSP.shared.chain[$0].channelSpec } ?? -1
+        let spec = chainIndex(for: instance).map { EffeTuneDSP.shared.nodes[$0].channelSpec } ?? -1
         switch spec {
         case -2:                       // All
             return engineChannels

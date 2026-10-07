@@ -154,7 +154,7 @@ final class BandFIRPEQDesignerStore {
 
     /// 鎖から消えた段を捨てる。instance は段と一緒に破棄されるので、資産を外す手当ては要らない。
     private func prune() {
-        let live = Set(EffeTuneDSP.shared.chain.map(\.id))
+        let live = Set(EffeTuneDSP.shared.nodes.map(\.id))
         entries = entries.filter { live.contains($0.key) }
     }
 }

@@ -1,63 +1,36 @@
-Everything new since 2026.09.20, the version on the App Store.
+日本語版は英語版の下にあります。
+The Japanese version follows below.
 
-If EffectDeck does not show up in the output list after switching between
-this build and the App Store version, restart the iPhone.
+This beta has everything that is in progress, including features that are not in the App Store version yet. The layout is still being adjusted, so some screens may change between builds. Feedback on the layout is welcome.
 
-JSFX
-The big one. EffectDeck now hosts JSFX, the script format REAPER uses, so an
-effect can be a text file you wrote or downloaded rather than something we
-shipped.
-- Import a .jsfx from Files or the share sheet. Files are judged by what is
-  inside them, not by the extension, so a .txt holding a script is taken.
-- Sliders come through with their real ranges and curves (linear, log, sqr),
-  enums and hidden sliders. Values are typed in plainly, never as 1e-05.
-- Scripts that draw (@gfx) get their canvas, full screen, Retina, touch and
-  keyboard, and gfx_showmenu.
-- State (@serialize) is saved with the preset and comes back with it.
-- A script that reports latency (PDC) has it compensated in the chain.
-- A script that overruns its time budget is bypassed automatically, and the
-  card says by how much. Re-enable puts it back.
-- Imported scripts can be deleted again.
-- Settings has Adaptive and Pixel Perfect for how a canvas is sized.
-Three sample scripts are bundled with this beta so there is something to try
-without hunting for one. They do not ship in the App Store version.
+After updating from an earlier build, restart your iPhone or iPad once, then pick EffectDeck again in Control Center.
 
-Graphs
-- Full-screen spectrogram.
-- The spectrogram grid is drawn over the image instead of under it, and the
-  colours were corrected.
-- FIR PEQ points can be dragged, and it has the same band header as the other
-  band strips.
-- The 1/60 hairlines and the Note Spectrogram background were fixed.
+Output Correction: In Presets > Output Correction, choose one of your presets for each pair of headphones or speaker. Turn it on at the bottom of the chain. It is applied after the chain, switches by itself when the output changes, and never changes the chain. Please try switching outputs during playback.
 
-The chain
-- Reordering compares a card's edge with its neighbour's centre, so a tall card
-  swaps after a short move and cards no longer flip back and forth.
-- Hold a card with one finger and scroll with another.
-- Sections were rebuilt. The terminator is its own thing now, an unnamed
-  section collapses, and a section imported from EffeTune is read as written
-  rather than guessed at.
-- Collapsed cards, numeric entry and display settings all survive a round trip.
-- Search covers every pane.
+Third-party AUv3 plug-ins now appear under Plugins. Please add one, open its interface, then save the chain and open it again to check the plug-in and its settings come back.
 
-Presets and files
-- Audio files can be sent in from the share sheet.
-- Pasted links are taken on import.
+EffeTune Remote Control (the Remote Control button in the toolbar) needs an EffeTune desktop build with the LAN remote API. No released version of EffeTune has it yet, so it can only be tried with an EffeTune you build yourself.
 
-Power
-- The audio path costs much less while nothing is playing.
-- While no app is routed in, the bridge polls far less often: the receiver
-  woke 1000 times a second and now wakes 50, the sender 500 and now 5.
-- EffectDeck no longer tells the system the device is gone every time
-  discovery stops.
+Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level deeper, at the end of Presets. Import JSFX is at the top of Plugins.
 
-Settings
-- Reporting a problem prefills the diagnostics and the end of the log (up to
-  about 4,000 characters). Attach log shares the whole log.
-- Twitter (@ainemut) was added as a lighter way to report something.
+Effects can now be dropped onto the margins, between cards, below the last card and onto an empty chain. Please check that a drop lands where you expect.
 
-Known
-- YouTube and Spotify can refuse to hand audio over. That is iOS deciding a
-  video track exists, and nothing EffectDeck sets changes it. Stopping the
-  video, or quitting the app, releases it. See issues #3 and #4.
-- Battery while left routed overnight is still being measured. Issue #5.
+If something looks or sounds wrong, use Settings → About → Report a problem, and include your device, the output you were using and what you were playing.
+
+日本語
+
+このベータには、App Store版にまだ入っていない機能も含め、作業中のものが全部入っています。画面の配置はまだ調整中なので、ビルドごとに変わることがあります。配置についての意見も歓迎です。
+
+前のビルドから更新したときは、iPhoneかiPadを1回再起動してから、コントロールセンターでEffectDeckを選び直してください。
+
+Output Correction：Presets > Output Correctionで、ヘッドホンやスピーカーごとに自分のプリセットを1つ選びます。チェーンの一番下でオンにしてください。チェーンの後ろに掛かり、出力先が変わると自動で切り替わります。チェーン自体は変わりません。再生しながら出力先を切り替えて試してみてください。
+
+他社のAUv3プラグインがPluginsに出るようになりました。1つ追加して画面を開き、チェーンを保存してから開き直して、プラグインと設定が戻るか確かめてください。
+
+EffeTuneのRemote Control（ツールバーのRemote Controlボタン）は、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないので、自分でビルドしたEffeTuneでないと試せません。
+
+Available EffectsはEffects・Plugins・Presetsの3つのタブになりました。System PresetsはPresetsの最後、1段下にあります。Import JSFXはPluginsの一番上です。
+
+エフェクトを余白、カードの間、最後のカードの下、空のチェーンにドロップできるようになりました。思った位置に入るか確かめてください。
+
+見た目や音がおかしいときは、Settings → About → Report a problemから、端末・使っていた出力先・再生していたものを添えて送ってください。
