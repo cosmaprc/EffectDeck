@@ -133,6 +133,26 @@ turn it into a chain:
 - Say which lines you could not turn into the chain (`GraphicEQ`, `Include`,
   `Convolution`, `Delay`, and so on) instead of dropping them silently.
 
+**Other parametric EQ formats work the same way.** EffectDeck only imports the
+chain you write, so the source format does not matter: a Wavelet, Peace,
+Poweramp or Qudelix export, a Roon or foobar2000 preset, or a filter table on a
+web page. Read each filter's type, frequency, gain and Q and map them as above.
+A `GraphicEQ` curve is not a list of filters; use the same source's parametric
+version instead (AutoEq always has one).
+
+**When the user names headphones or earphones instead of giving a file,**
+fetch the correction yourself:
+
+- Look the model up in [AutoEq](https://github.com/jaakkopasanen/AutoEq)
+  (`results/INDEX.md` lists every model with its measurement source) and open
+  its `ParametricEQ.txt` (the raw file). Other published corrections for the
+  model (oratory1990's lists, for example) are fine too.
+- If there are several measurements of the model, pick one and say which
+  source you used. If the model is not there, or you cannot open the page, say
+  so and ask the user for the file. Never write the filters from memory.
+- A correction chain holds the correction only: the `15Band PEQ` stages and
+  the `Volume` for the preamp. Do not add other effects to it.
+
 ## Audio Units
 
 Never put an Audio Unit in the JSON; a chain cannot load one. If an AUv3
@@ -173,6 +193,7 @@ breaks it and you cannot fix it.
 - [ ] no Section unless the user asked for groups or the parts really need separate switches
 - [ ] every `{"jsfx":…}` names the `desc:` of a script the user has imported
 - [ ] the reply carries the whole chain
+- [ ] a correction chain holds only the correction and ends with the Output Correction steps
 
 ## Handing the chain over
 
@@ -203,3 +224,10 @@ from pieces.
     stacked-squares button at the top right) and tap **Import from
     clipboard**.
 - Then one short line per stage: why it is there and what to adjust.
+- **For a correction chain** (headphones or a speaker, from AutoEq or an
+  Equalizer APO file), end with these steps, in two or three short lines: save
+  the imported chain as a preset (**Presets** → **Save current chain**, named
+  after the headphones), then tap the **Output Correction** row at the bottom
+  of the chain, choose the output and pick that preset. The correction then
+  follows that output by itself and runs after the main chain, so the main
+  chain stays free for other effects.
