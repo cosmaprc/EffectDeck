@@ -1083,17 +1083,29 @@ struct EffectPickerView: View {
     }
 
     /// プリセット 1 件の行。押すと入り、つまんで鎖へ落とすこともできる。
-    private func presetRow(name: String, payload: String,
+    /// `kind` は検索のときだけ渡す（User Preset / System Preset）。効果と混ざって並ぶので、
+    /// 効果の行のジャンルの札（row の showCategory）と同じ札で、何の行かを示す。
+    private func presetRow(name: String, payload: String, kind: String? = nil,
                            load: @escaping () -> [PipelineStore.Loaded]) -> some View {
         Button {
             searching = false
             Task { @MainActor in onPickPreset(name, load()) }
         } label: {
-            Text(name)
-                .font(.system(size: 15))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                Text(name)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                if let kind {
+                    Text(kind)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: .capsule)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .onDrag {
             dismissAfterDragBegins()
@@ -1197,12 +1209,12 @@ struct EffectPickerView: View {
                     case .jsfx(let j):   jsfxRow(j)
                     case .user(let n):
                         presetRow(name: ETUserPresetName.leaf(n),
-                                  payload: "preset:user:" + n) {
+                                  payload: "preset:user:" + n, kind: "User Preset") {
                             PresetStore.shared.load(n)
                         }
                     case .system(let p):
                         presetRow(name: p.name,
-                                  payload: "preset:system:" + p.name) {
+                                  payload: "preset:system:" + p.name, kind: "System Preset") {
                             ETShareLink.parse(p.json, catalog: ETCatalog)
                         }
                     }
