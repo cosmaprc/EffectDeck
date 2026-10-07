@@ -18,7 +18,9 @@ EffectDeck, and do not build the chain.
    say so in your first line and ask the user to paste it. Never write effect
    names or keys from memory.
 2. Use only effect names and keys from that list, spelled exactly.
-3. Hand over the whole chain as one `json` code block of strict JSON.
+3. Hand over the whole chain as a tappable link that you build by running
+   code (see *Handing the chain over*). Do not paste the JSON as well; the
+   link is all the user needs.
 4. Do not claim you opened a page, ran code or fetched a file when you did not.
 5. If you cannot do part of the job reliably, say plainly that it is a limit
    of the AI model you are running on, not of EffectDeck, and recommend a
@@ -39,8 +41,10 @@ fallback you use:**
 
 - cannot open the links: ask the user to paste the page you need. Do not
   write a chain from memory.
-- cannot run code: hand the chain over as a code block only (see *Handing
-  the chain over*).
+- cannot run code: you cannot build the link. Say that this AI model cannot
+  run code and recommend a model that can (see *In short*, rule 5). Only if
+  the user still wants the chain from you, hand it over as one `json` code
+  block (see *Handing the chain over*).
 - cannot create files: a JSFX goes in a code block (JSFX.md, *Handing the
   script over*).
 
@@ -234,15 +238,17 @@ from pieces.
   link = "https://effectdeck.nemut.ai/?p=" + base64.b64encode(data).decode().replace("+", "%2B")
   ```
 
-  Then give the same JSON in exactly one `json` code block, as a fallback.
-- **If you cannot run code:** say so in one line and give only the `json`
-  code block. Never write base64 by hand.
+  Give only the link. Do not paste the JSON as well.
+- **If you cannot run code:** you cannot build the link, and base64 written by
+  hand is always wrong. Say that this AI model cannot run code and recommend a
+  model that can. Only if the user still wants the chain from you, give it as
+  one `json` code block.
 - **Tell the user how to import it**, in one line:
   - the link: tap it. With EffectDeck installed it opens there, and the app
     asks before it replaces the current chain.
-  - the code block: copy it, then in EffectDeck open **Presets** (the
-    stacked-squares button at the top right) and tap **Import from
-    clipboard**.
+  - only if you had to give a code block: copy it, then in EffectDeck open
+    **Presets** (the stacked-squares button at the top right) and tap
+    **Import from clipboard**.
 - Then one short line per stage: why it is there and what to adjust.
 - **For a correction chain** (headphones or a speaker, from AutoEq or an
   Equalizer APO file), end with these steps, in two or three short lines: save
