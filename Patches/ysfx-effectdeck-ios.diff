@@ -3,6 +3,10 @@ EffectDeck が ysfx 5c3452f に当てる差分（Scripts/setup.sh が当てる�
   f9d7b1b3f, 0e7e5bfd0  LICE_ScaledBlit の桁あふれと負の元座標。WDL_NOT_NORMALLY は素の比較にした
                         （この版の lice.cpp は wdltypes.h を読まない。n<0 は起きない分岐）
   f31b13bfc             引数の数を間違えた tan(x,y) で関数表の外を読む
+EffectDeck が足したもの（上流に無い）:
+  GLUE_MEGABUF_NO_IMMEDIATE  portable の x[]（megabuf）に __NSEEL_RAMAlloc を書き込まない。即値の席が無い命令に
+                        EEL_GLUE_set_immediate をかけて命令の後ろを潰し、命令列の最後だと先にインラインにした
+                        関数の中身の頭を壊していた（上流 WDL d30c30b でも同じ）
 diff --git a/sources/ysfx.cpp b/sources/ysfx.cpp
 index 740d1dd..f802bd2 100644
 --- a/sources/ysfx.cpp
@@ -1078,10 +1082,20 @@ index 7991721..8939246 100644
        }
        if (l>0)
 diff --git a/thirdparty/WDL/source/WDL/eel2/glue_port.h b/thirdparty/WDL/source/WDL/eel2/glue_port.h
-index e7d06f3..926cd67 100644
+index e7d06f3..1ee0f2c 100644
 --- a/thirdparty/WDL/source/WDL/eel2/glue_port.h
 +++ b/thirdparty/WDL/source/WDL/eel2/glue_port.h
-@@ -802,12 +802,14 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
+@@ -426,6 +426,9 @@ BC_DECLASM_N(2pdd,CFUNC_2PDD,1)
+ BC_DECLASM_N(2pdds,CFUNC_2PDDS,1)
+ 
+ BC_DECLASM_N2(megabuf,MEGABUF,0)
++// megabuf には即値の席が無い（ブロックの表は rt から読む）。nseel-compiler.c はこれを見て
++// __NSEEL_RAMAlloc を書き込まない。
++#define GLUE_MEGABUF_NO_IMMEDIATE
+ BC_DECLASM_N2(gmegabuf,GMEGABUF,2)
+ 
+ BC_DECLASM_N_EXPORT(generic1parm,GENERIC1PARM,2)
+@@ -802,12 +805,14 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
  
          }
        break;
@@ -1098,7 +1112,7 @@ index e7d06f3..926cd67 100644
          fp_rewind(1);
        break;
        case EEL_BC_SQR:
-@@ -844,7 +846,8 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
+@@ -844,7 +849,8 @@ static void GLUE_CALL_CODE(INT_PTR bp, INT_PTR cp, INT_PTR rt)
        case EEL_BC_INVSQRT:
          {
            float y = (float)fp_top;
@@ -1109,7 +1123,7 @@ index e7d06f3..926cd67 100644
            fp_top  = y * ( 1.5F - ( (fp_top * 0.5) * y * y ) );
          }
 diff --git a/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c b/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
-index 5dee9a7..e120b72 100644
+index 5dee9a7..de941eb 100644
 --- a/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
 +++ b/thirdparty/WDL/source/WDL/eel2/nseel-compiler.c
 @@ -672,7 +672,11 @@ functionType *nseel_getFunctionByName(compileContext *ctx, const char *name, int
@@ -1134,7 +1148,22 @@ index 5dee9a7..e120b72 100644
      }
    }
    if (ctx->last_error_string[0]) lstrcatn(ctx->last_error_string, ", ", sizeof(ctx->last_error_string));
-@@ -2106,8 +2110,9 @@ start_over: // when an opcode changed substantially in optimization, goto here t
+@@ -1720,8 +1724,14 @@ static void *nseel_getBuiltinFunctionAddress(compileContext *ctx,
+ 
+     case FN_MEMORY:
+       {
++#ifndef GLUE_MEGABUF_NO_IMMEDIATE
+         static void *replptrs[4]={&__NSEEL_RAMAlloc,};      
+         *replList = replptrs;
++#endif
++        // portable（glue_port.h）の megabuf には即値の席が無い。席の無い命令に EEL_GLUE_set_immediate を
++        // かけると、命令の後ろの 8 バイト（0 でなければ最大 5 バイト先）に __NSEEL_RAMAlloc を書く。
++        // 命令列の最後の x[] だと書き先は確保した塊の外で、先に作ったインライン関数の中身の頭を潰し、
++        // 同じ節で 2 回目からその関数を写した所が壊れていた（Tools/jsfx-bench/diff/megabuf_tail.jsfx）。
+         *abiInfo = BIF_LASTPARMONSTACK|BIF_FPSTACKUSE(1)|BIF_CLEARDENORMAL;
+         #ifdef GLUE_MEM_NEEDS_PPROC
+           *pProc = NSEEL_PProc_RAM;
+@@ -2106,8 +2116,9 @@ start_over: // when an opcode changed substantially in optimization, goto here t
                  RESTART_DIRECTVALUE(ret);
                }
              break;
@@ -1146,7 +1175,7 @@ index 5dee9a7..e120b72 100644
              case FN_POW:      RESTART_DIRECTVALUE(pow(op->parms.parms[0]->parms.dv.directValue, op->parms.parms[1]->parms.dv.directValue));
              case FN_DIVIDE:   RESTART_DIRECTVALUE(op->parms.parms[0]->parms.dv.directValue / op->parms.parms[1]->parms.dv.directValue);
              case FN_MULTIPLY: RESTART_DIRECTVALUE(op->parms.parms[0]->parms.dv.directValue * op->parms.parms[1]->parms.dv.directValue);
-@@ -2783,7 +2788,7 @@ unsigned char *compileCodeBlockWithRet(compileContext *ctx, opcodeRec *rec, int
+@@ -2783,7 +2794,7 @@ unsigned char *compileCodeBlockWithRet(compileContext *ctx, opcodeRec *rec, int
      p+=GLUE_FUNC_LEAVE_SIZE;
    #endif
    memcpy(p,&GLUE_RET,sizeof(GLUE_RET)); p+=sizeof(GLUE_RET);
@@ -1155,7 +1184,7 @@ index 5dee9a7..e120b72 100644
    __clear_cache(newblock2,p);
  #endif
    
-@@ -5130,7 +5135,7 @@ had_error:
+@@ -5130,7 +5141,7 @@ had_error:
        memcpy(writeptr,&GLUE_RET,sizeof(GLUE_RET)); writeptr += sizeof(GLUE_RET);
        ctx->l_stats[1]=size;
        handle->code_size = (int) (writeptr - (unsigned char *)handle->code);
@@ -1164,7 +1193,7 @@ index 5dee9a7..e120b72 100644
        __clear_cache(handle->code,writeptr);
  #endif
      }
-@@ -5708,7 +5713,7 @@ opcodeRec *nseel_createFunctionByName(compileContext *ctx, const char *name, int
+@@ -5708,7 +5719,7 @@ opcodeRec *nseel_createFunctionByName(compileContext *ctx, const char *name, int
        return o;
      }
      f++;

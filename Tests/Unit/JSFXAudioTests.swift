@@ -90,6 +90,19 @@ final class JSFXAudioTests: XCTestCase {
         }
     }
 
+    /// 命令列の最後の `x[]` が、先にインラインにした関数の中身を潰さない（Patches の
+    /// GLUE_MEGABUF_NO_IMMEDIATE）。壊れるかはヒープの使い残ししだいなので、落ちる版でも通ることはある。
+    /// 0.25 + 6 * 0.01 + 8 * 0.001 = 0.318。
+    func testMegabufAtTheEndKeepsInlinedFunctions() throws {
+        let host = try JSFX.load("megabuf_tail")
+        var planar = JSFX.signal(channels: 2, frames: frames)
+        XCTAssertEqual(host.process(&planar, channels: 2, frames: frames), 0)
+        let left = JSFX.channel(0, of: planar, frames: frames)
+        for offset in 0..<Int(frames) {
+            XCTAssertEqual(left[left.startIndex + offset], 0.318, accuracy: 1e-5, "frame \(offset)")
+        }
+    }
+
     /// A12/A13。**宣言していないチャンネルは素通りする**（ysfx が memcpy で送る）。
     /// 64ch まで通しても、上の 62 本は触られない。
     func testChannelsAboveThePinCountPassThrough() throws {
