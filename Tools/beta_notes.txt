@@ -11,3 +11,19 @@ Available Effects now has three tabs: Effects, Plugins and Presets. System Prese
 Effects can now be dropped onto the margins, between cards, below the last card and onto an empty chain. Please check that a drop lands where you expect.
 
 If something looks or sounds wrong, use Settings → About → Report a problem, and include your device, the output you were using and what you were playing.
+
+日本語
+
+このベータには、App Store版にまだ入っていない機能も含め、作業中のものが全部入っています。画面の配置はまだ調整中なので、ビルドごとに変わることがあります。配置についての意見も歓迎です。
+
+Output Correction：Presets > Output Correctionで、ヘッドホンやスピーカーごとに自分のプリセットを1つ選びます。チェーンの一番下でオンにしてください。チェーンの後ろに掛かり、出力先が変わると自動で切り替わります。チェーン自体は変わりません。再生しながら出力先を切り替えて試してみてください。
+
+他社のAUv3プラグインがPluginsに出るようになりました。1つ追加して画面を開き、チェーンを保存してから開き直して、プラグインと設定が戻るか確かめてください。
+
+EffeTuneのRemote Control（ツールバーのRemote Controlボタン）は、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないので、ほとんどの方は試せません。EffeTune側で公開されたらすぐ試せるように入れてあります。
+
+Available EffectsはEffects・Plugins・Presetsの3つのタブになりました。System PresetsはPresetsの最後、1段下にあります。Import JSFXはPluginsの一番上です。
+
+エフェクトを余白、カードの間、最後のカードの下、空のチェーンにドロップできるようになりました。思った位置に入るか確かめてください。
+
+見た目や音がおかしいときは、Settings → About → Report a problemから、端末・使っていた出力先・再生していたものを添えて送ってください。
