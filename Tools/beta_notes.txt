@@ -1,40 +1,54 @@
 日本語版は英語版の下にあります。
 The Japanese version follows below.
 
-This beta has everything that is in progress, including features that are not in the App Store version yet. The layout is still being adjusted, so some screens may change between builds. Feedback on the layout is welcome.
+This beta includes all work in progress, including features not yet in the App Store version. The layout is still being adjusted and may change between builds.
 
-After updating from an earlier build, restart your iPhone or iPad once, then pick EffectDeck again in Control Center. Until you do, the main screen shows a red Restart Required, and Help opens the issue about it. Please tell us if it still shows after a restart, or if EffectDeck is missing from Control Center.
+If you updated from an earlier build, restart your iPhone or iPad once, then select EffectDeck again in Control Center. Until you restart, EffectDeck appears in Control Center but does not connect, and the main screen shows a red Restart Required notice. Help opens the issue about it. Please report it if the notice remains after a restart.
 
-JSFX runs about 1.3 to 1.4 times faster on iPhone, and the sound is bit for bit the same. Please try your heaviest scripts and tell us if anything sounds different or a card is bypassed for overrunning. Two JSFX crashes are fixed: x[] inside a function used more than once, and file_rewind or file_riff on a handle that is not open.
+New
 
-Output Correction: In Presets > Output Correction, choose one of your presets for each pair of headphones or speaker. Turn it on at the bottom of the chain. It is applied after the chain, switches by itself when the output changes, and never changes the chain. Please try switching outputs during playback.
+Output Correction: from the Output Correction row at the bottom of the chain, choose one of your presets for each pair of headphones or speaker. Turn it on with the row's power button. It is applied after the chain, switches automatically when the output changes, and does not modify the chain. Please check it while switching outputs during playback.
 
-Third-party AUv3 plug-ins now appear under Plugins. Please add one, open its interface, then save the chain and open it again to check the plug-in and its settings come back.
+EffeTune Remote Control (the Remote Control button in the toolbar) requires an EffeTune desktop build with the LAN remote API. No released version of EffeTune includes it yet, so for now it can only be tested with an EffeTune you build yourself.
 
-EffeTune Remote Control (the Remote Control button in the toolbar) needs an EffeTune desktop build with the LAN remote API. No released version of EffeTune has it yet, so it can only be tried with an EffeTune you build yourself. It now says Connected only while the PC really answers, and lets go of a PC that goes silent.
+Fixes
 
-Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level deeper, at the end of Presets. Import JSFX is at the top of Plugins.
+- Third-party AUv3 plug-ins did not appear under Plugins. Please add one, open its interface, save the chain and reopen it, and check that the plug-in and its settings are restored.
+- Remote Control showed Connected even when the PC was not responding. It now shows Connected only while the PC responds, and disconnects when responses stop.
+- Dropping below the last card failed after Reset chain or deleting a card.
 
-Effects can now be dropped onto the margins, between cards, below the last card and onto an empty chain. On iPad, dropping below the last row of the left list or onto the Output Correction row adds the effect to the end of the chain. Please check that a drop lands where you expect.
+Other
 
-If something looks or sounds wrong, use Settings → About → Report a problem, and include your device, the output you were using and what you were playing.
+- JSFX scripts run about 1.3 to 1.4 times faster on iPhone, with bit-identical output. Please check heavy scripts for any change in sound or bypassing due to overruns.
+- JSFX: fixed a crash or incorrect values when a function using x[] was called more than once, and a crash from file_rewind or file_riff on a handle that is not open.
+- Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level below the end of Presets, and Import JSFX is at the top of Plugins.
+- Effects can be dropped onto the margins, between cards, below the last card and onto an empty chain. On iPad, dropping below the last row of the left list or onto the Output Correction row adds the effect to the end of the chain. Please check that drops land where expected.
+
+If anything looks or sounds wrong, please use Settings → About → Report a problem and include your device, the output in use and what was playing.
 
 日本語
 
-このベータには、App Store版にまだ入っていない機能も含め、作業中のものが全部入っています。画面の配置はまだ調整中なので、ビルドごとに変わることがあります。配置についての意見も歓迎です。
+本ベータ版には、App Store版に未搭載の機能を含む、開発中の内容をすべて収録しています。画面の配置は調整中のため、ビルドごとに変更される場合があります。
 
-前のビルドから更新したときは、iPhoneかiPadを1回再起動してから、コントロールセンターでEffectDeckを選び直してください。再起動するまでは、メイン画面に赤いRestart Requiredが出て、Helpを押すとその件のIssueが開きます。再起動してもまだ出るとき、コントロールセンターにEffectDeckが出ないときは教えてください。
+以前のビルドから更新した場合は、iPhoneまたはiPadを1回再起動したうえで、コントロールセンターでEffectDeckを選択し直してください。再起動するまでは、コントロールセンターに表示されても接続できず、メイン画面に赤い「Restart Required」が表示されます。Helpを押すと本件のIssueが開きます。再起動後も解消しない場合はご報告ください。
 
-JSFXはiPhoneで約1.3〜1.4倍速くなりました。音はビット単位で同じです。重いスクリプトを試して、音が変わっていないか、時間切れでバイパスされるカードが出ないかを教えてください。JSFXの落ちる不具合も2つ直しました。1つは2回以上呼ばれる関数の中でx[]を使ったとき、もう1つは開いていないハンドルにfile_rewindやfile_riffを使ったときです。
+【新機能】
 
-Output Correction：Presets > Output Correctionで、ヘッドホンやスピーカーごとに自分のプリセットを1つ選びます。チェーンの一番下でオンにしてください。チェーンの後ろに掛かり、出力先が変わると自動で切り替わります。チェーン自体は変わりません。再生しながら出力先を切り替えて試してみてください。
+Output Correction：チェーン最下部のOutput Correctionの行から、ヘッドホンやスピーカーごとにユーザープリセットを1つ選択します。有効にするには、行の電源ボタンをオンにしてください。チェーンの後段に適用され、出力先の切り替えに合わせて自動で切り替わります。チェーン自体は変更されません。再生中に出力先を切り替えて動作をご確認ください。
 
-他社のAUv3プラグインがPluginsに出るようになりました。1つ追加して画面を開き、チェーンを保存してから開き直して、プラグインと設定が戻るか確かめてください。
+EffeTuneのRemote Control（ツールバーのRemote Controlボタン）には、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないため、現時点ではご自身でビルドしたEffeTuneでのみ動作を確認できます。
 
-EffeTuneのRemote Control（ツールバーのRemote Controlボタン）は、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないので、自分でビルドしたEffeTuneでないと試せません。PCが実際に答えているあいだだけConnectedと表示し、黙ったPCは切り離します。
+【不具合の修正】
 
-Available EffectsはEffects・Plugins・Presetsの3つのタブになりました。System PresetsはPresetsの最後、1段下にあります。Import JSFXはPluginsの一番上です。
+・他社製のAUv3プラグインがPluginsに表示されない不具合を修正しました。プラグインを追加して画面を開き、チェーンを保存してから開き直したときに、プラグインと設定が復元されるかをご確認ください。
+・Remote Controlで、PCが応答していない場合でも「Connected」と表示される不具合を修正しました。PCから応答がある間のみ表示し、応答が途絶えた場合は切断します。
+・Reset chainやカードの削除の後に、最後のカードの下へドロップできなくなる不具合を修正しました。
 
-エフェクトを余白、カードの間、最後のカードの下、空のチェーンにドロップできるようになりました。iPadでは、左の一覧の最後の行より下やOutput Correctionの行にドロップすると、チェーンの末尾に入ります。思った位置に入るか確かめてください。
+【その他】
 
-見た目や音がおかしいときは、Settings → About → Report a problemから、端末・使っていた出力先・再生していたものを添えて送ってください。
+・JSFXの処理がiPhoneで約1.3〜1.4倍高速になりました。出力はビット単位で従来と同一です。負荷の高いスクリプトで、音の変化や、処理時間の超過によるバイパスが発生しないかをご確認ください。
+・JSFXで、x[]を使用する関数を2回以上呼び出すと強制終了する、または値が不正になる不具合と、開いていないハンドルに対してfile_rewindまたはfile_riffを使用すると強制終了する不具合を修正しました。
+・Available EffectsをEffects・Plugins・Presetsの3つのタブ構成にしました。System PresetsはPresetsの末尾から1段下の階層、Import JSFXはPluginsの先頭にあります。
+・エフェクトを、余白、カードの間、最後のカードの下、空のチェーンにドロップできるようにしました。iPadでは、左の一覧の最後の行より下、またはOutput Correctionの行にドロップすると、チェーンの末尾に追加されます。意図した位置に追加されるかをご確認ください。
+
+表示や音に問題がある場合は、Settings → About → Report a problemから、ご使用の端末、出力先、再生していた内容を添えてご報告ください。

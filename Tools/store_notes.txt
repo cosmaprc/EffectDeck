@@ -1,23 +1,19 @@
-Restart your iPhone or iPad once after this update (the device, not the app). iOS reads the name of EffectDeck's audio device only at boot, and this update changes it. Until you restart, EffectDeck may not appear in Control Center, and the main screen says Restart Required. Only this update needs it. A fresh install does not.
+Restart your iPhone or iPad once after this update (the device, not the app). Until you do, EffectDeck shows up in Control Center but won't connect, and the main screen shows Restart Required. Only this update requires it. A fresh install does not.
 
-New since 2026.10.04.
+New since 2026.10.04
 
-Output Correction
-- Pick a preset for each pair of headphones or speaker. It is applied after the chain, switches by itself when the output changes, and never changes the chain.
-- Open it from the Output Correction row below the chain, or from Presets. The row has the on/off switch.
+New
+- Output Correction: assign one of your presets to each pair of headphones or speaker. It is applied after the chain, switches automatically when the output changes, and never modifies the chain. Choose it from the Output Correction row below the chain.
 
-Plug-ins and lists
-- Third-party AUv3 plug-ins appear under Plugins. The list updates when you install one or come back to the app.
+Fixes
+- Third-party AUv3 plug-ins did not appear under Plugins.
+- Dropping below the last card failed after Reset chain or deleting a card.
+
+Other
+- JSFX scripts run about 1.3 to 1.4 times faster on iPhone, with bit-identical output.
+- JSFX: fixed a crash or incorrect values when a function using x[] was called more than once, and a crash from file_rewind or file_riff on a handle that is not open.
 - Available Effects has three tabs: Effects, Plugins and Presets. Import JSFX is at the top of Plugins, and System Presets are at the end of Presets.
-
-The chain
 - Effects can be dropped beside and between cards, below the last card, onto an empty chain, and, on iPad, onto the left list.
-- Dropping below the last card works again after Reset chain or deleting a card.
-
-JSFX
-- Scripts run about 1.3 to 1.4 times faster on iPhone. The sound is bit for bit the same.
-- A script using x[] inside a function that appears more than once could give wrong values or crash. Fixed.
-- file_rewind or file_riff on a handle that is not open no longer closes the app.
 
 Previous updates (2026.10.04):
 

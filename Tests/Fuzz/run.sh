@@ -188,7 +188,7 @@ if [ "$exec_needed" = 1 ]; then
   find "$ysfx.new" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
     -exec sed -i 's/\r$//' {} +
   # 当たっているかの目印は Scripts/setup.sh と同じ（パッチの今の版が初めて足したもの）。
-  if ! grep -q effectdeck_file_retptr "$ysfx.new/sources/ysfx_api_file.cpp"; then
+  if ! grep -q effectdeck_exec_select "$ysfx.new/thirdparty/WDL/source/WDL/eel2/ns-eel.h"; then
     # patch(1) は CI の swift の image に無いことがあるので git apply で当てる。写しの上の
     # ディレクトリにリポジトリを探しに行かせない（GIT_CEILING_DIRECTORIES）。
     sed 's/\r$//' "$repo/Patches/ysfx-effectdeck-ios.diff" \
@@ -369,9 +369,14 @@ for t in "${selected[@]}"; do
   # （EEL2 は loop を 1048576 周で切るが、入れ子は切れない。アプリでは締切と見張りが受け持つ）。
   # 落ち・ASan / UBSan・メモリの上限（-rss_limit_mb、1 回の確保は -malloc_limit_mb の既定＝同じ値）は止まる。
   fuzz_only=()
-  if [ "$t" = jsfxexec ]; then fuzz_only=(-fork=1 -ignore_timeouts=1 -ignore_ooms=0 -ignore_crashes=0); fi
+  if [ "$t" = jsfxexec ]; then
+    fuzz_only=(-fork="${FUZZ_FORK:-1}" -ignore_timeouts=1 -ignore_ooms=0 -ignore_crashes=0)
+  fi
 
   echo "== $t" | tee "$log"
+  # -fork の子が UBSan・ASan で止まると、子は crash-* を書くが終了値が -error_exitcode と違い、親は落ちと
+  # 数えずに先へ進むことがある。回す前後の crash-* を比べ、増えていたら落ちとする。
+  crashes_before=$(find "$artifacts" -maxdepth 1 -name 'crash-*' 2>/dev/null | sort || true)
   set +e
   if [ -n "$repro" ]; then
     "${cmd[@]}" "${args[@]}" "${passthrough[@]}" "$repro" 2>&1 | tee -a "$log"
@@ -384,6 +389,21 @@ for t in "${selected[@]}"; do
   fi
   status=${PIPESTATUS[0]}
   set -e
+  if [ -z "$repro" ] && [ "$build_only" != 1 ]; then
+    new_crashes=$(comm -13 <(printf '%s\n' "$crashes_before") \
+      <(find "$artifacts" -maxdepth 1 -name 'crash-*' 2>/dev/null | sort) | grep -v '^$' || true)
+    if [ -n "$new_crashes" ]; then
+      echo "== $t: new crash inputs (the fork parent did not stop):" | tee -a "$log"
+      printf '%s\n' "$new_crashes" | tee -a "$log"
+      [ "$status" != 0 ] || status=1
+    fi
+    # -fork で時間切れを無視していても、最後の子が時間切れだと親はその終了値（-timeout_exitcode の既定 70）で
+    # 終わる。新しい crash-* が無ければ落ちではない。
+    if [ "$status" = 70 ] && [ ${#fuzz_only[@]} -gt 0 ] && [ -z "$new_crashes" ]; then
+      echo "== $t: exit 70 = the last fork job timed out (timeouts are ignored); not a failure" | tee -a "$log"
+      status=0
+    fi
+  fi
   execs=$(grep -Eo "stat::number_of_executed_units: *[0-9]+" "$log" | grep -Eo "[0-9]+$" | tail -1 || true)
   cov=$(grep -Eo "cov: [0-9]+" "$log" | tail -1 || true)
   # -fork の親は stat:: を出さず、"#<回数>: cov: … job: …" の行で合計を出す（落ちたときに
