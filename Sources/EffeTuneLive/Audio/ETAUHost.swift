@@ -372,8 +372,8 @@ final class ETAUHost: ObservableObject {
 
     /// 画面をCoreAudioKitに頼むか。nilは読み込み中。
     ///
-    /// **AppleのAU（AUDelayなど）には頼まない。**カードのパラメータ行で出す（ExternalProcessorView）。
-    /// iOS 27のシミュレータでは、CoreAudioKitがAUDelayに付けるAUDelayViewControllerが
+    /// **シミュレータでは、AppleのAU（AUDelayなど）には頼まない。**カードのパラメータ行で出す
+    /// （ExternalProcessorView。実機では頼む: usesParameterRows）。iOS 27のシミュレータでは、CoreAudioKitがAUDelayに付けるAUDelayViewControllerが
     /// viewDidLoadで落ちる。自分の資源の画像（DelayModeNormal / DelayModeInverted）が引けず、
     /// nilがNSNullになってUISegmentedControl(items:)へ渡り、字として読まれる
     /// （2026-09-28のクラッシュレポート。こちらはviewを読んだだけ）。
@@ -384,9 +384,15 @@ final class ETAUHost: ObservableObject {
         return instance.unit?.providesUserInterface ?? false
     }
 
-    /// CoreAudioKitの画面を使わず、パラメータ行で出すAU。
+    /// CoreAudioKitの画面を使わず、パラメータ行で出すAU。**シミュレータの Apple の AU だけ。**
+    /// 落ちたのは iOS 27 のシミュレータで、実機では Apple の AU も自分の画面で動く
+    /// （d850d29 で実機まで止めてしまい、利用者が使っていた AUDelay などの画面が出なくなっていた）。
     private static func usesParameterRows(_ entry: Entry) -> Bool {
+        #if targetEnvironment(simulator)
         entry.description.componentManufacturer == kAudioUnitManufacturer_Apple
+        #else
+        false
+        #endif
     }
 
     func parameters(instanceID: String) -> [AUParameter] {
