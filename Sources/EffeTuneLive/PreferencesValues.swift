@@ -131,6 +131,17 @@ enum PreferencesValues {
         static let awake = "pref.awake"
         static let syncVisualsToAudio = "pref.syncVisualsToAudio"
         static let jsfxCanvasMode = "pref.jsfxCanvasMode"
+        /// 前の版の「Remote Control を入れる」。remoteConnect へ移した（remoteWantsConnection）。読むだけ。
+        static let remoteEnabled = "pref.remoteEnabled"
+        static let remoteConnect = "pref.remoteConnect"
+        static let remoteAddress = "pref.remoteAddress"
+        static let remoteMirrorAnalyzers = "pref.remoteMirrorAnalyzers"
+    }
+
+    /// 起動でつなぎ直すか。新しい鍵があればそれ、無ければ前の版の remoteEnabled を引き継ぐ
+    /// （入れてあった → つなぎ直す、切ってあった・何も無い → つながない）。
+    static func remoteWantsConnection(stored: Any?, legacy: Any?) -> Bool {
+        (stored as? Bool) ?? (legacy as? Bool) ?? false
     }
 
     /// 無音と見なす大きさの範囲。EffeTune の power-policy.js が持っている

@@ -1,7 +1,7 @@
 //  SettingsView.swift
 //  右上の ⋯ から出す 1 枚。EffeTune も設定は右上に置いてある。
 //
-//  **画面は 1 枚。押して進むのは 1 段だけ（Licenses・Report a problem・Known limitations）。**
+//  **画面は 1 枚。押して進むのは 1 段だけ（Remote Control・Licenses・Report a problem・Known limitations）。**
 //  以前はシート（Settings）→ Status →（戻って）About → Licenses → 本文 と、
 //  シートの中で 3 回潜っていた。Status も About も読むだけの画面で、
 //  行数が足りないものを画面に昇格させた結果そうなっていた。
@@ -32,11 +32,12 @@ struct SettingsView: View {
     /// 下位画面へ押し出すと、よく見る Status まで 1 タップ遠くなる。
     /// バーの真ん中でセグメントを切り替える形なら、どちらも起きない。
     enum Pane: String, CaseIterable, Identifiable {
-        case audio, about
+        case audio, remote, about
         var id: String { rawValue }
         var label: String {
             switch self {
             case .audio:  return "Audio"
+            case .remote: return "Remote"
             case .about:  return "About"
             }
         }
@@ -62,6 +63,10 @@ struct SettingsView: View {
                     // 出力先なので、探しに来るのはこの面。報告に貼る値でもあるが、
                     // 貼る前に読むのは音の話として読む。畳んであるので 1 行で済む。
                     DetailsSection(io: io, dsp: dsp, prefs: prefs)
+                case .remote:
+                    // PC の EffeTune を操る設定（ツールバーのシートと同じ節）。音の設定ではないので
+                    // Audio に混ぜず、面を分ける。面の名前は Remote（EffeTune では何の面か読めない）。
+                    RemoteSections()
                 case .about:
                     about
                 }

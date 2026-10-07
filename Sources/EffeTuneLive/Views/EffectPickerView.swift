@@ -35,6 +35,8 @@ struct EffectPickerView: View {
     @StateObject private var dsp = EffeTuneDSP.shared
     @StateObject private var au = ETAUHost.shared
     @StateObject private var jsfx = ETJSFXHost.shared
+    /// PC の鎖を編集しているあいだは AU / JSFX を出さない。PC の EffeTune では鳴らせない。
+    @ObservedObject private var remote = RemoteMirror.shared
     @State private var query = ""
     /// 出している提示。**1 枚しか持たない**（上の .alert を読むこと）。
     private enum Alert: Equatable {
@@ -228,11 +230,11 @@ struct EffectPickerView: View {
                 out.append((.elsewhere, .effect(e)))
             }
         }
-        for a in au.entries {
+        for a in au.entries where !remote.isRemote {
             if let h = Self.hit(a.name, q) { out.append((h, .au(a))); continue }
             if a.manufacturer.lowercased().contains(q) { out.append((.elsewhere, .au(a))) }
         }
-        for j in jsfx.entries {
+        for j in jsfx.entries where !remote.isRemote {
             if let h = Self.hit(j.name, q) { out.append((h, .jsfx(j))); continue }
             if j.author.lowercased().contains(q) { out.append((.elsewhere, .jsfx(j))) }
         }
@@ -273,7 +275,9 @@ struct EffectPickerView: View {
                         // 探し方が違う。同じ一覧に混ぜると、効果を探しに来た人が
                         // プリセットまで流し見ることになる。
                         Picker("", selection: $pane) {
-                            ForEach(Pane.allCases) { Text($0.label).tag($0) }
+                            ForEach(Pane.allCases.filter { !(remote.isRemote && $0 == .plugins) }) {
+                                Text($0.label).tag($0)
+                            }
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
@@ -299,6 +303,10 @@ struct EffectPickerView: View {
             .onAppear { if current.isEmpty { current = firstCategory(for: pane) } }
             // 押し込んだ先は List の中でなく、ここ（根の画面）に置く。List の行は遅れて作られる。
             .navigationDestination(for: PresetRoute.self) { _ in systemPresetList }
+            // PC の鎖を編集し始めたら Plugins の面から出す（面の選択肢から消えるため）。
+            .onChange(of: remote.isRemote) { _, isRemote in
+                if isRemote && pane == .plugins { pane = .effects }
+            }
             .onChange(of: pane) { _, selected in
                 // 面が替わったら押し込んだ画面から根へ戻す（path の注記）。
                 path = []

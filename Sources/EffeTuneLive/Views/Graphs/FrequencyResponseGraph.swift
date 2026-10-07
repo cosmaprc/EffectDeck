@@ -218,11 +218,14 @@ struct FrequencyResponseGraph: View {
                     // （SpectrumOverlayLayer の頭）。
                     // Telemetry を観測するのはこの層の中だけ。ここより外で観測すると
                     // 30Hz で body が回り、掴んでいる印と下のつまみが固まる。
+                    // PoC: PC の鎖を編集しているあいだは PC の前後の枠が来ている段だけ出す（ETRemoteOverlayGate）。
                     if let spectrumTap {
-                        SpectrumOverlayLayer(tapId: spectrumTap,
-                                             beforeTapId: spectrumBeforeTap,
-                                             mode: spectrumMode?.wrappedValue ?? .after,
-                                             plot: plot)
+                        ETRemoteOverlayGate(tap: spectrumTap) {
+                            SpectrumOverlayLayer(tapId: spectrumTap,
+                                                 beforeTapId: spectrumBeforeTap,
+                                                 mode: spectrumMode?.wrappedValue ?? .after,
+                                                 plot: plot)
+                        }
                     }
 
                     // 指を受ける面。印より下に置く（印は当たり判定を持たない）。
@@ -247,9 +250,9 @@ struct FrequencyResponseGraph: View {
     /// After ⇄ Compare の札。**畳んだ図には出さない**（押せない図に押せそうな札を残さない）。
     /// 入口の探りが無い図（FIR PEQ など）も比べる相手が無いので出さない。
     private var spectrumToggle: AnyView? {
-        guard !graphOnly, spectrumTap != nil, spectrumBeforeTap != nil,
+        guard !graphOnly, let tap = spectrumTap, spectrumBeforeTap != nil,
               let spectrumMode else { return nil }
-        return AnyView(SpectrumOverlayToggle(mode: spectrumMode))
+        return AnyView(ETRemoteOverlayGate(tap: tap) { SpectrumOverlayToggle(mode: spectrumMode) })
     }
 
     // MARK: 掴む
