@@ -113,9 +113,9 @@ file only if it finds `desc:` or one of `@init` `@slider` `@block` `@sample`
 
 **`author:` is the user's name**, because the user is the author of the effect
 they asked for. EffectDeck lists imported scripts under their author. Use the
-name the user goes by if you know it; otherwise ask for it when you ask what
-effect they want. Never write yourself, ChatGPT, OpenAI or EffectDeck as the
-author.
+name the user goes by if you know it. If you do not, **do not ask for it**;
+write `author:User` and keep it. Never write yourself, ChatGPT, OpenAI or
+EffectDeck as the author.
 
 ### The file itself
 
@@ -159,7 +159,7 @@ it; the user only needs the script. Mention a point only if the script still
 breaks it and you cannot fix it.
 
 - [ ] `desc:` is the first non-comment line
-- [ ] `author:` is the user's name, not yours
+- [ ] `author:` is the user's name, or `User` if you do not know it; never yours
 - [ ] after a fix, `desc:` and `author:` are exactly as before; a new effect
       has a specific `desc:` of its own
 - [ ] no line begins with `import`, `filename:`, or `data:`
