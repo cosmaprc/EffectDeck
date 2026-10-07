@@ -2159,26 +2159,31 @@ private struct ConnectBanner: View {
     let restartNeeded: Bool
     let openTips: () -> Void
 
-    /// **上げた人は 1 回再起動しないと繋がらない**（#2・#12）。選び方は知っているので、
-    /// その間は選び方の代わりに再起動を言う。音が続いたら AudioIO が消す。
-    /// 端末の呼び名は UIDevice.model（iPad / iPhone。訳されない）。
+    /// **上げた人は 1 回再起動しないと繋がらない**（#2・#12）。その間は帯ごと「再起動が要る」に替える。
+    /// No audio yet のままだと、選び直せば繋がると読まれる（選んでも戻される）。題で言い切り、赤で出す。
+    /// 音が続いたら AudioIO が消す。端末の呼び名は UIDevice.model（iPad / iPhone。訳されない）。
+    private var title: String {
+        restartNeeded ? "\(UIDevice.current.model) Restart Required" : "No audio yet"
+    }
+
     private var instruction: String {
         restartNeeded
-            ? "Restart your \(UIDevice.current.model) once after this update, then pick EffectDeck again."
+            ? "Restart once after this update, then pick EffectDeck in Control Center."
             : "Pick EffectDeck as the output in Control Center."
     }
 
     var body: some View {
         Card {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "airplayaudio")
+                Image(systemName: restartNeeded ? "exclamationmark.triangle.fill" : "airplayaudio")
                     .font(.system(size: 20))
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(restartNeeded ? AnyShapeStyle(Color.red) : AnyShapeStyle(.tint))
                     .frame(width: 26)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("No audio yet")
+                    Text(title)
                         .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(restartNeeded ? Color.red : Color.primary)
                     // **やることをそのまま書く。**「送る」では、どこで何を
                     // 押せばよいのか画面から読めない。選ぶ場所を名指しする。
                     //
