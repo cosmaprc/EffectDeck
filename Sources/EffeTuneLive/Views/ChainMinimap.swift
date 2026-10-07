@@ -10,6 +10,7 @@
 //    - ピッカーからつまんだものは行の間へ落とせる（onInsert）
 //    - 頭の電源はカードの電源と同じもの。別の入切を持たない
 //    - Level Meterの行だけ、クリップしたときに行の右端へOVERLOADの札を出す（カードと同じ決め方）
+//    - 一番下に出力補正の行（右の鎖の下の行と同じもの）。鎖の項目ではないので、掴めず、間にも落とせない
 //
 //  行の並びは右と同じrowsから作る（PipelineView.minimapItems）。
 //  onMoveの数え方がそのままmove(_:to:)の数え方になる。
@@ -43,6 +44,8 @@ struct ChainMinimap: View {
     let items: [ETMinimapItem]
     let dsp: EffeTuneDSP
     let viewport: ETChainViewport
+    /// 右の出力補正の行の身元。nilなら出さない（PCの鎖を編集している間。右も出していない）。
+    let correction: UUID?
     /// 画面の行番号で動かす。ListのonMoveと同じ数え方。
     let move: (IndexSet, Int) -> Void
     /// ピッカーから運ばれた文字列と、差し込む鎖の位置（nilなら末尾）。
@@ -67,6 +70,11 @@ struct ChainMinimap: View {
                         let payload = text as String
                         Task { @MainActor in insert(payload, at) }
                     }
+                }
+                // **ForEachの外に置く。**onMove・onInsertの数え方に入れない（動かせず、ここへは落とせない）。
+                if let correction {
+                    ETMinimapCorrectionRow(id: correction, viewport: viewport)
+                        .id(ETMinimapID(id: correction))
                 }
             }
             .listStyle(.sidebar)
@@ -177,6 +185,44 @@ private struct ETMinimapRow: View {
         // 地の色は行いっぱいに敷かれて、続く行と繋がって1本の帯になる。
         .listRowInsets(EdgeInsets())
         .listRowBackground(viewport.onScreen.contains(item.id)
+                           ? Color.accentColor.opacity(0.14) : nil)
+    }
+}
+
+/// 出力補正の行。エフェクトの行と同じ形（電源と名前）。電源は右の行の電源と同じもの。
+/// 押すと右の出力補正の行へ飛ぶ（エフェクトの行と同じ。シートは右の行から開く）。
+private struct ETMinimapCorrectionRow: View {
+    let id: UUID
+    let viewport: ETChainViewport
+
+    @ObservedObject private var oc = OutputCorrection.shared
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Toggle("Output Correction", isOn: Binding(get: { oc.isOn }, set: { oc.setOn($0) }))
+                .toggleStyle(.power)
+                .labelsHidden()
+                .accessibilityLabel("Output Correction")
+
+            Button {
+                viewport.request(id)
+            } label: {
+                Text("Output Correction")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+            }
+        }
+        // 値はETMinimapRowの写し（字下げなしの行）。
+        .padding(.leading, 6)
+        .padding(.trailing, 14)
+        .frame(height: ETMinimapRow.height)
+        .opacity(oc.isOn ? 1 : 0.55)
+        .moveDisabled(true)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(viewport.onScreen.contains(id)
                            ? Color.accentColor.opacity(0.14) : nil)
     }
 }

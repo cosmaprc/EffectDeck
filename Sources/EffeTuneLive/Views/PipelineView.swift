@@ -114,10 +114,11 @@ struct PipelineView: View {
     /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
     @State private var isRemote = false
     @State private var processingRate: Double = 48000
-    /// いまの出力先と、それに紐付けたプリセット。紐付けが無ければ nil で、鎖の下の出力補正の行を出さない。
-    /// **OutputCorrection を丸ごと観測しない。**この画面は大きいので、行を出すかどうかと
-    /// 行の字に要る値だけを写す（io と同じやり方）。入切は行が自分で観測する。
-    @State private var correctionBound: ETOutputCorrectionBinding?
+    /// 鎖の下の出力補正の行の小さい行。「プリセット名 · 出力先」。紐付けが無ければ「None · 出力先」、
+    /// 出力先がまだ落ち着いていなければ「None」（シートの行と同じ None）。
+    /// **OutputCorrection を丸ごと観測しない。**この画面は大きいので、行の字に要る値だけを写す
+    /// （io と同じやり方）。入切は行が自分で観測する。
+    @State private var correctionDetail = "None"
 
     // MARK: - 並べ方（1列/2列）
     //
@@ -391,12 +392,11 @@ struct PipelineView: View {
         .onReceive(io.$processingRate) { processingRate = $0 }
         // @Published の publisher は書き換わる前に新しい値を流すので、oc の側は読まず流れてきた値で組む。
         .onReceive(OutputCorrection.shared.$device.combineLatest(OutputCorrection.shared.$bindings)) { device, bindings in
-            var next: ETOutputCorrectionBinding?
-            if let d = device, let b = bindings.first(where: { $0.key == d.key }) {
-                // 名前と種類はいまの出力先のもの（紐付けに残っているのは最後に見た名前）。
-                next = ETOutputCorrectionBinding(key: d.key, name: d.name, kind: d.kind, preset: b.preset)
-            }
-            if correctionBound != next { correctionBound = next }
+            // 出力先の名前はいまの出力先のもの（紐付けに残っているのは最後に見た名前）。
+            let preset = device.flatMap { d in bindings.first(where: { $0.key == d.key })?.preset }
+                .map(ETUserPresetName.leaf) ?? "None"
+            let next = device.map { "\(preset) · \($0.name)" } ?? preset
+            if correctionDetail != next { correctionDetail = next }
         }
         // 並べ方を切り替える。片付けは前の並べ方が出ているうちに済ませる。
         .onChange(of: wantsSplit) { _, now in flip(to: now) }
@@ -470,6 +470,7 @@ struct PipelineView: View {
     private func split(_ visible: [Row]) -> some View {
         NavigationSplitView(columnVisibility: $columns) {
             ChainMinimap(items: minimapItems(visible), dsp: dsp, viewport: viewport,
+                         correction: isRemote ? nil : Self.correctionRowID,
                          move: { move($0, to: $1) },
                          insert: { _ = addDropped($0, at: $1) })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
@@ -1025,10 +1026,9 @@ struct PipelineView: View {
 
             // 出力補正。main の後ろに固定で付く 1 行。どのプリセットを使うかは専用のシートで選ぶ（押すと開く）。
             // Presets は開かない。あちらは行を押すと鎖ごと読み込むので、補正を選ぶつもりで鎖を置き換えてしまう。
-            // **いまの出力先に紐付けがあるときだけ出す。**無いときに出しても None と入切しか無い行になる。
-            // 紐付けは Presets の Output Correction の行から始める（⋯ には置かない。⋯ は鎖全体の操作の口）。
+            // **紐付けが無くても出す（None）。**出さないと、補正があることも、どこから選ぶかも分からない。
             // PC の鎖を編集している間は出さない（補正も外してある）。
-            if !isRemote, let bound = correctionBound {
+            if !isRemote {
                 VStack(spacing: 0) {
                     // **鎖の終わりに線を 1 本引く。**同じ形の札が続くだけだと、出力補正も鎖の最後の段に見える。
                     // 線には字を添えない。見出しを付けると Section の名前と同じものに見え、
@@ -1039,11 +1039,14 @@ struct PipelineView: View {
                     if visible.last?.block != .bottom {
                         ETGroupRule()
                     }
-                    OutputCorrectionRow(oc: OutputCorrection.shared, bound: bound,
+                    OutputCorrectionRow(oc: OutputCorrection.shared, detail: correctionDetail,
                                         open: { presentSheet(.outputCorrection) })
                         .padding(.horizontal, 14)
                         .padding(.vertical, 5)
                 }
+                // 左の一覧の出力補正の行から飛ぶ先。見えているかも左へ知らせる（行の地の色）。
+                .id(Self.correctionRowID)
+                .modifier(ETLiveRowModifier(id: Self.correctionRowID, split: split, viewport: viewport))
                 // **出力補正の行に落としたものは鎖の末尾へ。**補正の中身には入れない
                 // （補正は出力先ごとのプリセットの参照で、ここでは変えない）。行の下の帯と同じ nil。
                 // 線の所も同じ口で受ける（線と札の間で落とすと何も起きない、を作らない）。
@@ -2317,12 +2320,12 @@ private struct EmptyChainRow: View {
 /// 行（HStack）の外側に付け、行ぜんぶを押し所にする（頭の onTapGesture と同じ作り）。
 ///
 /// 鎖の項目ではないので、掴めず、消せず、中身もここでは変えない。電源以外のどこを押しても出力補正のシートを開く。
-/// 出すのはいまの出力先に紐付けがあるときだけ（PipelineView が決めて bound を渡す）。
+/// 紐付けが無くても出す（小さい行が None）。
 private struct OutputCorrectionRow: View {
-    /// 入切だけを読む。紐付けは bound で受け取る。
+    /// 入切だけを読む。小さい行の字は detail で受け取る。
     @ObservedObject var oc: OutputCorrection
-    /// いまの出力先と、紐付けたプリセット（保存してあるまま。`フォルダ/名前`）。
-    let bound: ETOutputCorrectionBinding
+    /// 「プリセット名 · 出力先」（PipelineView.correctionDetail）。
+    let detail: String
     let open: () -> Void
 
     var body: some View {
@@ -2346,7 +2349,7 @@ private struct OutputCorrectionRow: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     // 絵は付けない。カードのこの行は字だけなので、絵があると高さと字の頭がずれる。
-                    Text("\(ETUserPresetName.leaf(bound.preset)) · \(bound.name)")
+                    Text(detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

@@ -3,7 +3,7 @@
 //    - 鎖の下の出力補正の行から: 専用のシート（OutputCorrectionView。NavigationStack と Done を足す）
 //    - Presets のシートの Output Correction の行から: Presets の NavigationStack の中へ押して進む
 //      （OutputCorrectionList をそのまま。NavigationStack を入れ子にせず、Done も付けない。戻るのは < で）
-//  紐付けがまだ無いと鎖の下の行が出ないので、最初の紐付けは Presets から始める。
+//  鎖の下の行は紐付けが無くても出る（None）ので、最初の紐付けはどちらからでも始められる。
 //  前はツールバーの ⋯ にも口を置いていたが、「…のメニューに置くのは変」で外した。
 //  補正の中身はユーザープリセットなので、プリセットを扱うシートの中に口があるのが自然。
 //
