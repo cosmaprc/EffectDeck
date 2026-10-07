@@ -4,6 +4,10 @@ Guideline 5 (China): ChatGPT and OpenAI are no longer mentioned in the metadata
 or screenshots. On the China mainland storefront (StoreKit countryCode CHN)
 the app hides both ChatGPT entries described below.
 
+This update: after updating from an earlier version, the main screen shows a
+red Restart Required band until the device restarts once. A fresh install does
+not. EffeTune Remote Control is off.
+
 What it is
 EffectDeck can host JSFX, the single-file audio effect script format used by
 REAPER. A JSFX script is a plain text file that the user brings
@@ -11,10 +15,10 @@ into the app. It becomes an effect in the user's audio chain, with its own
 sliders and, if it draws, a canvas inside the app.
 
 Where scripts come from
-Only from the user. Scripts are imported by the user through:
-- Available Effects > Plugins > Import JSFX > From Files (document picker)
+Only from the user, through:
+- Available Effects > Plugins > Import JSFX > From Files
 - Available Effects > Plugins > Import JSFX > From Link (a URL the user types or
-  pastes; the field is pre-filled from the clipboard)
+  pastes)
 - Available Effects > Plugins > Import JSFX > From Clipboard (script text the
   user copied)
 - Open in from another app, or the EffectDeck share-sheet extension (a file, a
@@ -51,15 +55,14 @@ How scripts run
   networking functions.
 - Limits: source up to 1 MB, saved state up to 16 MB, bounded memory. A script
   that repeatedly runs past its real-time deadline is bypassed automatically.
-- Scripts cannot change or add features of the app itself. They are content
-  processed by a fixed interpreter shipped in the binary.
+- Scripts cannot change or add app features. They are content for a fixed
+  interpreter in the binary.
 
-Relevant guidelines: 2.5.2 (software is self-contained; the interpreter ships in
-the binary and user-supplied scripts do not change the app's features) and 4.7
-(plug-ins).
+Relevant guidelines: 2.5.2 (the interpreter ships in the binary; scripts do not
+change the app's features) and 4.7 (plug-ins).
 
 How to test
-1. Tap Add Effect (the + button), switch to Plugins, and tap Import JSFX at the
+1. Tap Add Effect, switch to Plugins, and tap Import JSFX at the
    top of the list.
 2. Either:
    a. Choose From Link and enter
