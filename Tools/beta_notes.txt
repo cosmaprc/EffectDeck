@@ -7,7 +7,7 @@ Output Correction: In Presets > Output Correction, choose one of your presets fo
 
 Third-party AUv3 plug-ins now appear under Plugins. Please add one, open its interface, then save the chain and open it again to check the plug-in and its settings come back.
 
-EffeTune Remote Control (the Remote Control button in the toolbar) needs an EffeTune desktop build with the LAN remote API. No released version of EffeTune has it yet, so most testers will not be able to try it. It is included so it can be tested as soon as EffeTune ships it.
+EffeTune Remote Control (the Remote Control button in the toolbar) needs an EffeTune desktop build with the LAN remote API. No released version of EffeTune has it yet, so it can only be tried with an EffeTune you build yourself.
 
 Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level deeper, at the end of Presets. Import JSFX is at the top of Plugins.
 
@@ -23,7 +23,7 @@ Output Correction：Presets > Output Correctionで、ヘッドホンやスピー
 
 他社のAUv3プラグインがPluginsに出るようになりました。1つ追加して画面を開き、チェーンを保存してから開き直して、プラグインと設定が戻るか確かめてください。
 
-EffeTuneのRemote Control（ツールバーのRemote Controlボタン）は、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないので、ほとんどの方は試せません。EffeTune側で公開されたらすぐ試せるように入れてあります。
+EffeTuneのRemote Control（ツールバーのRemote Controlボタン）は、LANのリモートAPIに対応したデスクトップ版EffeTuneが必要です。対応版はまだ公開されていないので、自分でビルドしたEffeTuneでないと試せません。
 
 Available EffectsはEffects・Plugins・Presetsの3つのタブになりました。System PresetsはPresetsの最後、1段下にあります。Import JSFXはPluginsの一番上です。
 
