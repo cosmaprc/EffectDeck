@@ -3,6 +3,8 @@ The Japanese version follows below.
 
 This beta has everything that is in progress, including features that are not in the App Store version yet. The layout is still being adjusted, so some screens may change between builds. Feedback on the layout is welcome.
 
+After updating from an earlier build, restart your iPhone or iPad once, then pick EffectDeck again in Control Center.
+
 Output Correction: In Presets > Output Correction, choose one of your presets for each pair of headphones or speaker. Turn it on at the bottom of the chain. It is applied after the chain, switches by itself when the output changes, and never changes the chain. Please try switching outputs during playback.
 
 Third-party AUv3 plug-ins now appear under Plugins. Please add one, open its interface, then save the chain and open it again to check the plug-in and its settings come back.
@@ -18,6 +20,8 @@ If something looks or sounds wrong, use Settings → About → Report a problem,
 日本語
 
 このベータには、App Store版にまだ入っていない機能も含め、作業中のものが全部入っています。画面の配置はまだ調整中なので、ビルドごとに変わることがあります。配置についての意見も歓迎です。
+
+前のビルドから更新したときは、iPhoneかiPadを1回再起動してから、コントロールセンターでEffectDeckを選び直してください。
 
 Output Correction：Presets > Output Correctionで、ヘッドホンやスピーカーごとに自分のプリセットを1つ選びます。チェーンの一番下でオンにしてください。チェーンの後ろに掛かり、出力先が変わると自動で切り替わります。チェーン自体は変わりません。再生しながら出力先を切り替えて試してみてください。
 
