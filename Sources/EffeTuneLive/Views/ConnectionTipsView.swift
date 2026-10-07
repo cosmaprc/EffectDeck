@@ -173,12 +173,11 @@ private enum ETTips {
         // 日本語はオーナーの文面（2026-09-26）をそのまま使う。英語はそれに合わせて書いた。
         ETTip(issue: 1,
               en: .init(title: "Spotify tracks with Canvas enabled cannot connect to EffectDeck",
-                        act: "Update Spotify to the latest version. Tracks with a Canvas connect "
-                           + "on Spotify 9.1.86 or later.",
+                        act: "Update Spotify to the latest version.",
                         why: "On older versions of Spotify, iOS treats playback that includes a Canvas "
                            + "as video and refuses the connection to EffectDeck."),
               ja: .init(title: "SpotifyでCanvasが有効な曲を再生するとEffectDeckに接続できない",
-                        act: "Spotifyを最新版にアップデートしてください。9.1.86以降では、Canvasのある曲も接続できます。",
+                        act: "Spotifyを最新版にアップデートしてください。",
                         why: "古いバージョンのSpotifyでは、Canvasを含む再生がiOSで動画として扱われ、EffectDeckへの接続が拒否されます。")),
         ETTip(issue: 4,
               en: .init(title: "Spotify sometimes cannot connect to EffectDeck, even on tracks "
