@@ -1054,13 +1054,9 @@ struct EffectPickerView: View {
     /// `newEffects.isEmpty` を見る）。上流が新しいものを足したときに、
     /// その型をここへ並べる。**一度足したら、次の版で必ず外すこと。**
     /// いつまでも「New」と出ていると意味を失う。
-    /// いまは dsp 0.12.0（EffeTune 2.12.0）で足された 3 つ。
-    /// dsp 0.11.0 の 4 つ（Attack Tonal Balance / Bass Extender / Bass Management / Chroma Spiral）は外した。
-    static let newTypes = [
-        "AnalogMeterPlugin",
-        "RhythmAnalyzerPlugin",
-        "TonalBalanceEQPlugin",
-    ]
+    /// いまは空（節は出ない）。dsp 0.12.0 の 3 つ（Analog Meter / Rhythm Analyzer / Tonal Balance EQ）は
+    /// 2026.10.04 で出したので 2026.10.08 で外した。
+    static let newTypes: [String] = []
     static let newKey = "__new"
 
     private var newEffects: [ETEffect] {
