@@ -422,7 +422,7 @@ def make_app(parent, flavor="store", sign=False, app_bin=None, device_bin=None, 
         "CFBundleShortVersionString": "2026.09.22", "CFBundleVersion": "26",
         "EXAppExtensionAttributes": {"EXExtensionPointIdentifier": "com.apple.media-device-extension"},
         "UTExportedTypeDeclarations": [{"UTTypeIdentifier": "media-device-protocol.ai.nemut.effetune",
-                                        "UTTypeDescription": "48 kHz, 32-bit float",
+                                        "UTTypeDescription": "EffectDeck Audio",
                                         "UTTypeConformsTo": ["public.media-sharing-protocol"]}],
     }, device_info)
     share_plist = info({
