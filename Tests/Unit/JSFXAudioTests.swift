@@ -103,6 +103,20 @@ final class JSFXAudioTests: XCTestCase {
         }
     }
 
+    /// 開いていない file ハンドルの `file_rewind` / `file_riff` は、NULL でなく引数を返す
+    /// （Patches の effectdeck_file_retptr）。EEL は戻りの先を読むので、NULL だとアプリごと落ちる。
+    /// 直す前は fixture を読み込むだけで落ちる。x = 5 + 1、y = -2 + 1、z = q = 0 + 1 で
+    /// 0.6 - 0.01 + 0.001 + 0.0001 = 0.5911。
+    func testClosedFileHandlesReturnTheirArgument() throws {
+        let host = try JSFX.load("file_null")
+        var planar = JSFX.signal(channels: 2, frames: frames)
+        XCTAssertEqual(host.process(&planar, channels: 2, frames: frames), 0)
+        let left = JSFX.channel(0, of: planar, frames: frames)
+        for offset in 0..<Int(frames) {
+            XCTAssertEqual(left[left.startIndex + offset], 0.5911, accuracy: 1e-5, "frame \(offset)")
+        }
+    }
+
     /// A12/A13。**宣言していないチャンネルは素通りする**（ysfx が memcpy で送る）。
     /// 64ch まで通しても、上の 62 本は触られない。
     func testChannelsAboveThePinCountPassThrough() throws {
