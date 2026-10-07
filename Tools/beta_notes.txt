@@ -1,3 +1,6 @@
+日本語版は英語版の下にあります。
+The Japanese version follows below.
+
 This beta has everything that is in progress, including features that are not in the App Store version yet. The layout is still being adjusted, so some screens may change between builds. Feedback on the layout is welcome.
 
 Output Correction: In Presets > Output Correction, choose one of your presets for each pair of headphones or speaker. Turn it on at the bottom of the chain. It is applied after the chain, switches by itself when the output changes, and never changes the chain. Please try switching outputs during playback.
