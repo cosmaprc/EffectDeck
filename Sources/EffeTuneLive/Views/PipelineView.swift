@@ -2161,6 +2161,11 @@ private struct ConnectBanner: View {
     let restartNeeded: Bool
     let openTips: () -> Void
 
+    @Environment(\.openURL) private var openURL
+
+    /// 再起動が要る間の Help の行き先。経緯と、再起動しても繋がらないときの話は #12 にある。
+    private static let restartIssue = URL(string: "https://github.com/satomasahiro2005/EffectDeck/issues/12")!
+
     /// **上げた人は 1 回再起動しないと繋がらない**（#2・#12）。その間は帯ごと「再起動が要る」に替える。
     /// No audio yet のままだと、選び直せば繋がると読まれる（選んでも戻される）。題で言い切り、赤で出す。
     /// 音が続いたら AudioIO が消す。端末の呼び名は UIDevice.model（iPad / iPhone。訳されない）。
@@ -2215,14 +2220,16 @@ private struct ConnectBanner: View {
                 //
                 // 大きさは BypassBanner の Turn On に揃える（押せる面 44pt）。
                 // 主の操作ではないので bordered。
-                Button(action: openTips) {
+                Button {
+                    if restartNeeded { openURL(Self.restartIssue) } else { openTips() }
+                } label: {
                     Text("Help")
                         .font(.system(size: 13, weight: .semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.bordered)
-                .accessibilityLabel("Known limitations")
+                .accessibilityLabel(restartNeeded ? "Restart required, issue 12" : "Known limitations")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
