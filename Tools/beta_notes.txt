@@ -13,7 +13,8 @@ EffeTune Remote Control (the Remote Control button in the toolbar) requires an E
 
 Fixes
 
-- Third-party AUv3 plug-ins did not appear under Plugins. Please add one, open its interface, save the chain and reopen it, and check that the plug-in and its settings are restored.
+- Third-party AUv3 plug-ins did not appear under Plugins. Please check that a plug-in and its settings come back after saving and reopening the chain.
+- Apple Audio Units such as AUDelay showed only parameter controls instead of their own interface.
 - Remote Control showed Connected even when the PC was not responding. It now shows Connected only while the PC responds, and disconnects when responses stop.
 - Dropping below the last card failed after Reset chain or deleting a card.
 
@@ -22,7 +23,7 @@ Other
 - JSFX scripts run about 1.3 to 1.4 times faster on iPhone, with bit-identical output. Please check heavy scripts for any change in sound or bypassing due to overruns.
 - JSFX: fixed a crash or incorrect values when a function using x[] was called more than once, and a crash from file_rewind or file_riff on a handle that is not open.
 - Available Effects now has three tabs: Effects, Plugins and Presets. System Presets are one level below the end of Presets, and Import JSFX is at the top of Plugins.
-- Effects can be dropped onto the margins, between cards, below the last card and onto an empty chain. On iPad, dropping below the last row of the left list or onto the Output Correction row adds the effect to the end of the chain. Please check that drops land where expected.
+- Effects can be dropped onto the margins, between cards, below the last card and onto an empty chain. On iPad, dropping below the last row of the left list or onto the Output Correction row adds the effect to the end of the chain.
 
 If anything looks or sounds wrong, please use Settings → About → Report a problem and include your device, the output in use and what was playing.
 
@@ -40,7 +41,8 @@ EffeTuneのRemote Control（ツールバーのRemote Controlボタン）には�
 
 【不具合の修正】
 
-・他社製のAUv3プラグインがPluginsに表示されない不具合を修正しました。プラグインを追加して画面を開き、チェーンを保存してから開き直したときに、プラグインと設定が復元されるかをご確認ください。
+・他社製のAUv3プラグインがPluginsに表示されない不具合を修正しました。チェーンを保存して開き直したときに、プラグインと設定が復元されるかをご確認ください。
+・AUDelayなどApple製のAudio Unitで、専用の画面が表示されずパラメータの表示だけになっていた不具合を修正しました。
 ・Remote Controlで、PCが応答していない場合でも「Connected」と表示される不具合を修正しました。PCから応答がある間のみ表示し、応答が途絶えた場合は切断します。
 ・Reset chainやカードの削除の後に、最後のカードの下へドロップできなくなる不具合を修正しました。
 
@@ -49,6 +51,6 @@ EffeTuneのRemote Control（ツールバーのRemote Controlボタン）には�
 ・JSFXの処理がiPhoneで約1.3〜1.4倍高速になりました。出力はビット単位で従来と同一です。負荷の高いスクリプトで、音の変化や、処理時間の超過によるバイパスが発生しないかをご確認ください。
 ・JSFXで、x[]を使用する関数を2回以上呼び出すと強制終了する、または値が不正になる不具合と、開いていないハンドルに対してfile_rewindまたはfile_riffを使用すると強制終了する不具合を修正しました。
 ・Available EffectsをEffects・Plugins・Presetsの3つのタブ構成にしました。System PresetsはPresetsの末尾から1段下の階層、Import JSFXはPluginsの先頭にあります。
-・エフェクトを、余白、カードの間、最後のカードの下、空のチェーンにドロップできるようにしました。iPadでは、左の一覧の最後の行より下、またはOutput Correctionの行にドロップすると、チェーンの末尾に追加されます。意図した位置に追加されるかをご確認ください。
+・エフェクトを、余白、カードの間、最後のカードの下、空のチェーンにドロップできるようにしました。iPadでは、左の一覧の最後の行より下、またはOutput Correctionの行にドロップすると、チェーンの末尾に追加されます。
 
 表示や音に問題がある場合は、Settings → About → Report a problemから、ご使用の端末、出力先、再生していた内容を添えてご報告ください。

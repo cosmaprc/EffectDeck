@@ -7,6 +7,7 @@ New
 
 Fixes
 - Third-party AUv3 plug-ins did not appear under Plugins.
+- Apple Audio Units such as AUDelay showed only parameter controls instead of their own interface (since 2026.09.28).
 - Dropping below the last card failed after Reset chain or deleting a card.
 
 Other
