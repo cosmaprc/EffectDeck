@@ -863,7 +863,14 @@ struct EffectPickerView: View {
                     userSections
                     // **同梱のものへは標準の NavigationLink で進む。**一覧の一番下に置き、
                     // 自分のものを探す邪魔をしない。押し込んだ先でも行は同じ presetRow。
-                    NavigationLink("System Presets", value: PresetRoute.system)
+                    // **自分の節に入れる。**節の外に置くと、.plain では直前のフォルダの節の続きに見え、
+                    // System Presets がそのフォルダの中の 1 行に読める。字は User Presets の見出しと同じ
+                    // 段（headline）にして、群の名前と並ぶ高さだと分かるようにする。
+                    Section {
+                        NavigationLink(value: PresetRoute.system) {
+                            Text("System Presets").font(.headline)
+                        }
+                    }
                 }
                 .listStyle(.plain)
             }
