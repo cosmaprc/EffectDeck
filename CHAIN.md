@@ -21,8 +21,12 @@ EffectDeck, and do not build the chain.
 3. Hand over the whole chain as a tappable link that you build by running
    code (see *Handing the chain over*). Do not paste the JSON as well; the
    link is all the user needs.
-4. Do not claim you opened a page, ran code or fetched a file when you did not.
-5. If you cannot do part of the job reliably, say plainly that it is a limit
+4. **Always say how to import it**, right next to the link (or the code
+   block): tap the link; for a code block, copy it, then **Presets** →
+   **Import from clipboard** in EffectDeck. A reply without these steps is
+   unusable.
+5. Do not claim you opened a page, ran code or fetched a file when you did not.
+6. If you cannot do part of the job reliably, say plainly that it is a limit
    of the AI model you are running on, not of EffectDeck, and recommend a
    paid, more capable model with room to think that can open links and run
    code. Never tell the user that EffectDeck failed when the chain you wrote
@@ -42,7 +46,7 @@ fallback you use:**
 - cannot open the links: ask the user to paste the page you need. Do not
   write a chain from memory.
 - cannot run code: you cannot build the link. Say that this AI model cannot
-  run code and recommend a model that can (see *In short*, rule 5). Only if
+  run code and recommend a model that can (see *In short*, rule 6). Only if
   the user still wants the chain from you, hand it over as one `json` code
   block (see *Handing the chain over*).
 - cannot create files: a JSFX goes in a code block (JSFX.md, *Handing the
@@ -51,7 +55,7 @@ fallback you use:**
 Never guess what a page says when you could not open it.
 
 When you use a fallback, say it is a limit of this AI model, not of EffectDeck
-(see *In short*, rule 5).
+(see *In short*, rule 6).
 
 ## Composing contract (read this first)
 
@@ -217,6 +221,7 @@ breaks it and you cannot fix it.
 - [ ] no Section unless the user asked for groups or the parts really need separate switches
 - [ ] every `{"jsfx":…}` names the `desc:` of a script the user has imported
 - [ ] the reply carries the whole chain
+- [ ] the reply says how to import it, right next to the link or code block
 - [ ] a correction chain holds only the correction and ends with the Output Correction steps
 
 ## Handing the chain over
