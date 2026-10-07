@@ -111,6 +111,8 @@ struct PipelineView: View {
     /// ここへ届くのは本当に変わったときだけ。初期値は onAppear で合わせる。
     @State private var running = false
     @State private var hasPeer = false
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12）。帯の字を替える。
+    @State private var restartNeeded = false
     /// PC の鎖を編集しているか。No audio yet の代わりに Remote の帯を出す。
     @State private var isRemote = false
     @State private var processingRate: Double = 48000
@@ -321,6 +323,7 @@ struct PipelineView: View {
             // 写した値の初期合わせ。購読の初回配信に頼らない。
             running = io.running
             hasPeer = io.hasPeer || RemoteMirror.shared.isRemote
+            restartNeeded = io.restartNeeded
             isRemote = RemoteMirror.shared.isRemote
             processingRate = io.processingRate
         }
@@ -390,6 +393,7 @@ struct PipelineView: View {
             isRemote = remote
         }
         .onReceive(io.$processingRate) { processingRate = $0 }
+        .onReceive(io.$restartNeeded) { restartNeeded = $0 }
         // @Published の publisher は書き換わる前に新しい値を流すので、oc の側は読まず流れてきた値で組む。
         .onReceive(OutputCorrection.shared.$device.combineLatest(OutputCorrection.shared.$bindings)) { device, bindings in
             // 出力先の名前はいまの出力先のもの（紐付けに残っているのは最後に見た名前）。
@@ -877,7 +881,7 @@ struct PipelineView: View {
                     .padding(.top, 4)
                     .padding(.bottom, 8)
             } else if !hasPeer {
-                ConnectBanner(openTips: { presentSheet(.tips) })
+                ConnectBanner(restartNeeded: restartNeeded, openTips: { presentSheet(.tips) })
                     .padding(.horizontal, 14)
                     .padding(.top, 4)
                     .padding(.bottom, 8)
@@ -2151,7 +2155,18 @@ enum ETPresentation {
 /// 拡張が繋がっていない間だけ、鎖の一番上に出る。
 /// 2本構成は普通ではないので、黙っていると詰まる。
 private struct ConnectBanner: View {
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12・ETProtocolMigration）。
+    let restartNeeded: Bool
     let openTips: () -> Void
+
+    /// **上げた人は 1 回再起動しないと繋がらない**（#2・#12）。選び方は知っているので、
+    /// その間は選び方の代わりに再起動を言う。音が続いたら AudioIO が消す。
+    /// 端末の呼び名は UIDevice.model（iPad / iPhone。訳されない）。
+    private var instruction: String {
+        restartNeeded
+            ? "Restart your \(UIDevice.current.model) once after this update, then pick EffectDeck again."
+            : "Pick EffectDeck as the output in Control Center."
+    }
 
     var body: some View {
         Card {
@@ -2179,7 +2194,7 @@ private struct ConnectBanner: View {
                     //
                     // **鳴らしてから選ぶ順は書かない**（#1 の訂正）。止めている間に選んでも
                     // 基本的に戻されない。一時停止が原因と確かめた失敗は無い。
-                    Text("Pick EffectDeck as the output in Control Center.")
+                    Text(instruction)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

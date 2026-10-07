@@ -403,6 +403,9 @@ targets:
       - path: Sources/EffeTuneLive/Audio/OutputDevice.swift
       # 出力補正（Output Correction）の値だけの判断：slot の数え方・端末ごとのプリセットの紐付け・切り替えの段取り・共有の平らげ。Foundationだけ（OutputCorrectionTests）。
       - path: Sources/EffeTuneLive/DSP/OutputCorrectionCore.swift
+      # プロトコル名を替えた版へ上げた人にだけ再起動の案内を出し、音が続いたら消す（#12）。
+      # Foundationだけ（ProtocolMigrationTests）。入れ物はETKeyValueStorage（上で入れてある）。
+      - path: Sources/EffeTuneLive/Audio/ProtocolMigration.swift
       # FeedbackLoopTestsがET_NAME_STEMをSwiftの写しと照らすために読む。コンパイルはしない。
       - path: Sources/Shared/ETNames.h
         buildPhase: resources

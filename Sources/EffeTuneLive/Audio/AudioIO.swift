@@ -146,6 +146,11 @@ final class AudioIO: ObservableObject {
     @Published var pipelineLatency: Int = 0
     /// 無音で休んでいるか。
     @Published var resting = false
+    /// プロトコル名を替えた版へ上げてから、まだ繋がっていない（#12）。
+    /// 立っている間は No audio yet の帯が再起動を案内する。出し入れは ETProtocolMigration。
+    @Published private(set) var restartNeeded = ETProtocolMigration.isPending(storage: UserDefaults.standard)
+    /// 音が続いたかを見る。hasPeer だけで消さない理由は ETSustainedAudio の注記。
+    private var sustainedAudio = ETSustainedAudio()
 
     private var ticks = 0
 
@@ -717,6 +722,15 @@ final class AudioIO: ObservableObject {
 
         let nowReceived = ETLinkReceiver.shared.receivedFrames
         if received != nowReceived { received = nowReceived }
+
+        // 撮影用の音（ETMockSource）では消さない。見るのは拡張から来た音だけ。
+        if restartNeeded,
+           sustainedAudio.observe(peer: ETLinkReceiver.shared.hasPeer, received: nowReceived,
+                                  now: ProcessInfo.processInfo.systemUptime) {
+            log.notice("protocol migration: audio sustained, clearing restart notice")
+            ETProtocolMigration.clear(storage: UserDefaults.standard)
+            restartNeeded = false
+        }
 
         let nowBuffered = ETLinkReceiver.shared.bufferedFrames
         if bufferedFrames != nowBuffered { bufferedFrames = nowBuffered }
