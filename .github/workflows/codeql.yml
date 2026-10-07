@@ -70,7 +70,6 @@ jobs:
       # 当て方は Tests/Fuzz/run.sh と同じ（CR を落として git apply）。
       - name: ysfx にパッチを当てる（c-cpp だけ）
         if: matrix.language == 'c-cpp'
-        run: sed 's/
         run: tr -d '\r' < Patches/ysfx-effectdeck-ios.diff | git -C Vendor/ysfx apply -p1 -
       - name: CodeQL の準備
         uses: github/codeql-action/init@v4

@@ -156,10 +156,24 @@ if [ "$native_needed" = 1 ]; then
   mkdir -p "$work/native"
   gate="$work/native/jsfx_source_gate"
   # ysfx は宣言だけ使う（門は呼ばない）。未定義の参照はリンクで無視させる（jsfx_source_gate.cpp の頭）。
+  # **見出しはパッチを当てた写しを読む。**ETJSFXHost.cpp はパッチだけが足す宣言（ysfx_set_eel_exec_mode
+  # など）を使い、CI の Vendor/ysfx は当てていない。写して当てるのは見出しだけ（include/ と WDL の .h）。
+  gate_inc="$work/native/gate-inc"
+  rm -rf "$gate_inc"; mkdir -p "$gate_inc/thirdparty/WDL/source"
+  cp -R "$repo/Vendor/ysfx/include" "$gate_inc/"
+  cp -R "$repo/Vendor/ysfx/thirdparty/WDL/source/WDL" "$gate_inc/thirdparty/WDL/source/"
+  find "$gate_inc" -type f \( -name '*.h' -o -name '*.hpp' \) -exec sed -i 's/\r$//' {} +
+  if ! grep -q effectdeck_exec_select "$gate_inc/thirdparty/WDL/source/WDL/eel2/ns-eel.h"; then
+    sed 's/\r$//' "$repo/Patches/ysfx-effectdeck-ios.diff" \
+      | (cd "$gate_inc" && GIT_CEILING_DIRECTORIES="$(dirname "$gate_inc")" \
+           git apply -p1 --include='include/*' --include='thirdparty/WDL/source/WDL/*.h' \
+                         --include='thirdparty/WDL/source/WDL/*/*.h' -) >> "$build_log" 2>&1 \
+      || die "ysfx-effectdeck-ios.diff の見出しが写しに当たらない（Vendor/ysfx の版。Scripts/setup.sh を読むこと）"
+  fi
   set +e
   "$cxx" -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
-    -I "$repo/Sources/Shared" -I "$repo/Vendor/ysfx/include" \
-    -I "$repo/Vendor/ysfx/thirdparty/WDL/source" \
+    -I "$repo/Sources/Shared" -I "$gate_inc/include" \
+    -I "$gate_inc/thirdparty/WDL/source" \
     "$here/Native/jsfx_source_gate.cpp" -o "$gate" \
     -Wl,--unresolved-symbols=ignore-all 2>&1 | tee -a "$build_log"
   status=${PIPESTATUS[0]}
